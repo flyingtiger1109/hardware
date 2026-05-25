@@ -58,12 +58,29 @@ int ConfigManager::ParseJson(const std::string& json) {
             m_delphiServerHost = JsonHelper::GetString(delphiObj, "host");
         if (JsonHelper::HasKey(delphiObj, "port"))
             m_delphiServerPort = JsonHelper::GetInt(delphiObj, "port", 8080);
+        if (JsonHelper::HasKey(delphiObj, "auto_start"))
+            m_delphiAutoStart = JsonHelper::GetBool(delphiObj, "auto_start", true);
+        if (JsonHelper::HasKey(delphiObj, "executable"))
+            m_delphiExecutable = JsonHelper::GetString(delphiObj, "executable");
+        if (JsonHelper::HasKey(delphiObj, "start_wait_ms"))
+            m_delphiStartWaitMs = JsonHelper::GetInt(delphiObj, "start_wait_ms", 10000);
+        if (JsonHelper::HasKey(delphiObj, "ping_interval_ms"))
+            m_delphiPingIntervalMs = JsonHelper::GetInt(delphiObj, "ping_interval_ms", 300);
     }
     if (m_delphiServerHost.empty()) {
         m_delphiServerHost = "127.0.0.1";
     }
     if (m_delphiServerPort <= 0 || m_delphiServerPort > 65535) {
         m_delphiServerPort = 8080;
+    }
+    if (m_delphiExecutable.empty()) {
+        m_delphiExecutable = "HZCYKJTHardWare.exe";
+    }
+    if (m_delphiStartWaitMs <= 0) {
+        m_delphiStartWaitMs = 10000;
+    }
+    if (m_delphiPingIntervalMs <= 0) {
+        m_delphiPingIntervalMs = 300;
     }
 
     // terminal 配置
@@ -255,6 +272,10 @@ void ConfigManager::ApplyDefaults() {
 
     m_delphiServerHost = "127.0.0.1";
     m_delphiServerPort = 8080;
+    m_delphiAutoStart = true;
+    m_delphiExecutable = "HZCYKJTHardWare.exe";
+    m_delphiStartWaitMs = 10000;
+    m_delphiPingIntervalMs = 300;
 
     m_fixedTerminals.clear();
     m_fixedTerminals.push_back({1, "terminal_a", ""});
@@ -304,6 +325,10 @@ int ConfigManager::GetDelphiServerPort() const { return m_delphiServerPort; }
 std::string ConfigManager::GetDelphiServerUrl() const {
     return "http://" + m_delphiServerHost + ":" + std::to_string(m_delphiServerPort);
 }
+bool ConfigManager::GetDelphiAutoStart() const { return m_delphiAutoStart; }
+const std::string& ConfigManager::GetDelphiExecutable() const { return m_delphiExecutable; }
+int ConfigManager::GetDelphiStartWaitMs() const { return m_delphiStartWaitMs; }
+int ConfigManager::GetDelphiPingIntervalMs() const { return m_delphiPingIntervalMs; }
 const std::vector<TerminalDeviceConfig>& ConfigManager::GetFixedTerminals() const { return m_fixedTerminals; }
 const std::vector<TerminalDeviceConfig>& ConfigManager::GetAutoSubnetDevices() const { return m_autoSubnetDevices; }
 const std::string& ConfigManager::GetCallbackServerHost() const { return m_callbackServerHost; }

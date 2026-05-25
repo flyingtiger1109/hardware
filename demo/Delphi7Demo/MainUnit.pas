@@ -8,6 +8,7 @@ uses
 
 const
   WM_APPEND_APP_LOG = WM_USER + 101;
+  WM_AUTO_START_SERVER = WM_USER + 102;
 
 type
   TFormMain = class(TForm)
@@ -65,6 +66,7 @@ type
     procedure ApplyChineseCaptions;
     procedure AppendLogLine(const S: string);
     procedure WMAppendAppLog(var Msg: TMessage); message WM_APPEND_APP_LOG;
+    procedure WMAutoStartServer(var Msg: TMessage); message WM_AUTO_START_SERVER;
     procedure Log(const S: string);
   public
   end;
@@ -133,6 +135,11 @@ begin
   end;
 end;
 
+procedure TFormMain.WMAutoStartServer(var Msg: TMessage);
+begin
+  BtnStartServerClick(nil);
+end;
+
 procedure TFormMain.Log(const S: string);
 var
   LogMessage: PLogMessage;
@@ -155,7 +162,8 @@ begin
   MemoLog.Clear;
   FServer := nil;
   FSaveDir := '.\captures';
-  Log('[信息] [程序] 程序已启动，请点击“启动服务”。');
+  Log('[信息] [程序] 程序已启动，正在自动启动服务。');
+  PostMessage(Handle, WM_AUTO_START_SERVER, 0, 0);
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
@@ -178,7 +186,7 @@ begin
   FServer := TDelphiProxyServer.Create(PanelCamera, PanelFingerprint, PanelIris);
   FServer.SetLogProc(Log);
   FServer.Start;
-  Log('[信息] [服务] 服务已启动：http://127.0.0.1:8080');
+  Log('[信息] [服务] 正在启动服务，实际监听结果请查看后续日志。');
 end;
 
 procedure TFormMain.BtnStopServerClick(Sender: TObject);

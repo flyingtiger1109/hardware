@@ -158,7 +158,10 @@ bool HttpClient::Get(const std::string& url,
     responseBody.clear();
     responseStatusCode = 0;
 
-    if (!m_hSession) return false;
+    if (!m_hSession) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：WinHTTP session 未初始化，url=%s", url.c_str());
+        return false;
+    }
 
     CriticalSectionGuard guard(&m_cs);
 
@@ -174,13 +177,17 @@ bool HttpClient::Get(const std::string& url,
     urlComp.dwUrlPathLength = 1024;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：URL解析失败，url=%s，error=%lu", url.c_str(), GetLastError());
         return false;
     }
 
     int port = urlComp.nPort == 0 ? 80 : urlComp.nPort;
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
-    if (!hConnect) return false;
+    if (!hConnect) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：创建连接失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        return false;
+    }
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
 
@@ -188,6 +195,7 @@ bool HttpClient::Get(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：创建请求失败，url=%s，error=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -197,12 +205,14 @@ bool HttpClient::Get(const std::string& url,
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：发送请求失败，url=%s，error=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
+        LOG_ERROR("HttpClient", "HTTP GET失败：接收响应失败，url=%s，error=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -230,6 +240,9 @@ bool HttpClient::Get(const std::string& url,
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
+
+    LOG_DEBUG("HttpClient", "HTTP GET完成：url=%s，status=%d，response_size=%zu",
+              url.c_str(), responseStatusCode, responseBody.size());
 
     return true;
 }

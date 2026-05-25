@@ -1,7 +1,17 @@
 {
   "delphi_server": {
     "host": "127.0.0.1",
-    "port": 8080
+    "port": 8080,
+    "auto_start": true,
+    "executable": "HZCYKJTHardWare.exe",
+    "start_wait_ms": 10000,
+    "ping_interval_ms": 300
+  },
+  "terminal_callback_server": {
+    "listen_host": "0.0.0.0",
+    "public_host": "",
+    "port": 8081,
+    "path": "/terminal-callback"
   },
   "terminal": {
     "mode": "auto_subnet",

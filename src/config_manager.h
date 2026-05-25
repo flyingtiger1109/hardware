@@ -38,6 +38,10 @@ public:
     const std::string& GetDelphiServerHost() const;
     int GetDelphiServerPort() const;
     std::string GetDelphiServerUrl() const;
+    bool GetDelphiAutoStart() const;
+    const std::string& GetDelphiExecutable() const;
+    int GetDelphiStartWaitMs() const;
+    int GetDelphiPingIntervalMs() const;
 
     const std::vector<TerminalDeviceConfig>& GetFixedTerminals() const;
     const std::vector<TerminalDeviceConfig>& GetAutoSubnetDevices() const;
@@ -85,6 +89,10 @@ private:
 
     std::string m_delphiServerHost = "127.0.0.1";
     int m_delphiServerPort = 8080;
+    bool m_delphiAutoStart = true;
+    std::string m_delphiExecutable = "HZCYKJTHardWare.exe";
+    int m_delphiStartWaitMs = 10000;
+    int m_delphiPingIntervalMs = 300;
 
     std::vector<TerminalDeviceConfig> m_fixedTerminals;
     std::vector<TerminalDeviceConfig> m_autoSubnetDevices;

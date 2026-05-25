@@ -1,6 +1,6 @@
 ﻿# HZCYKJTHardWare Delphi 服务端示例
 
-本示例程序现在作为 DLL 的 Delphi 后端服务示例使用，监听 `127.0.0.1:8080`。
+本示例程序现在作为 DLL 的 Delphi 后端服务示例使用，DLL 通信监听地址由 `HZCYKJTHardWare.json` 的 `delphi_server.host/port` 配置。
 
 ## 角色
 
@@ -34,14 +34,22 @@
 
 ## 使用顺序
 
-1. 编译并启动本程序。
-2. 确认日志显示 `服务已启动：http://127.0.0.1:8080`。
-3. 启动 `demo\DelphiThirdPartyDemo` 或其他第三方 Demo。
-4. 第三方调用 DLL 的 `InitSdk`，DLL 会访问本程序 `/ping`。
+1. 将本程序、`HZCYKJTHardWare.dll` 与两者共用的 `HZCYKJTHardWare.json` 放在同一目录。
+2. 启动 `demo\DelphiThirdPartyDemo` 或其他第三方 Demo。
+3. 第三方调用 DLL 的 `InitSdk`；当 `delphi_server.auto_start=true` 时，DLL 会在 `/ping` 不可用时自动启动本程序。
+4. 确认日志显示 JSON 所配置的 DLL 通信服务和终端回调监听地址均启动成功。
 5. 调用抓拍、OCR、NFC、预览等接口验证转发链路。
+
+## 端口配置
+
+- `delphi_server.port`：本程序监听，DLL 访问本程序 `/ping` 和业务端点，默认 `8080`。
+- `terminal_callback_server.port`：本程序监听，终端回调本程序，默认 `8081`。
+- `callback_server.port`：DLL 监听，本程序向 DLL 回传异步结果，默认 `39091`。
+- `terminal.port`：本程序主动请求终端设备使用的目标端口，默认 `9098`，不是本机监听端口。
 
 ## 注意
 
 - 该示例使用 WinSock 实现最小 HTTP 服务，目的是兼容 Delphi 7 并演示协议。
+- `terminal_callback_server.public_host` 留空时，终端回调地址自动使用检测到的本机局域网 IP；不要把 `0.0.0.0` 作为发送给终端的回调地址。
 - 示例保存的是 `.txt` 占位文件，不是真实图片。
 - 真实服务端建议补充 UTF-8 路径处理、终端异常码映射、VLC 句柄生命周期管理和更完整的日志。

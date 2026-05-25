@@ -15,6 +15,7 @@
 #include "path_helper.h"
 #include "result_parser.h"
 #include "image_saver.h"
+#include <tlhelp32.h>
 
 // Export function implementations use small body helpers so SEH wrappers do not
 // span C++ object lifetimes.
@@ -127,6 +128,130 @@ static void TryRestoreCameraPreviewToDelphiHost(const std::string& requestId,
     LOG_INFO("EXPORT", "归还预览窗口：request_id=%s，vlc_hwnd=%p，delphi_host_hwnd=%p，restore_parent=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，move=%d，move_error=%lu",
              requestId.c_str(), vlcHwnd, delphiHostHwnd, restoreParent, oldParent,
              setParentError, gotRect, moved, moveError);
+}
+
+static bool IsAbsoluteWindowsPath(const std::string& path) {
+    return (path.size() > 1 && path[1] == ':') ||
+        (path.size() > 1 && (path[0] == '\\' || path[0] == '/') &&
+         (path[1] == '\\' || path[1] == '/'));
+}
+
+static std::string ResolveDelphiExecutablePath(const HZCYKJTHardWare::ConfigManager& cfg,
+                                               const std::string& dllDir) {
+    std::string executable = cfg.GetDelphiExecutable();
+    return IsAbsoluteWindowsPath(executable)
+        ? executable
+        : HZCYKJTHardWare::PathHelper::Join(dllDir, executable);
+}
+
+static bool IsProcessRunningForExecutable(const std::string& executablePath) {
+    using namespace HZCYKJTHardWare;
+
+    std::wstring executableName = PathHelper::Utf8ToWide(PathHelper::GetFileName(executablePath));
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        LOG_WARN("EXPORT", "检查Delphi程序进程失败：error=%lu", GetLastError());
+        return false;
+    }
+
+    PROCESSENTRY32W entry = {};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, executableName.c_str()) == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
+                                      const std::string& dllDir,
+                                      std::string& executablePath) {
+    using namespace HZCYKJTHardWare;
+
+    executablePath = ResolveDelphiExecutablePath(cfg, dllDir);
+    if (!PathHelper::FileExists(executablePath)) {
+        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：可执行文件不存在，path=%s", executablePath.c_str());
+        return false;
+    }
+
+    if (IsProcessRunningForExecutable(executablePath)) {
+        LOG_WARN("EXPORT", "检测到Delphi程序已在运行，不重复启动进程；将等待/ping服务就绪：path=%s",
+                 executablePath.c_str());
+        return true;
+    }
+
+    std::wstring wExecutable = PathHelper::Utf8ToWide(executablePath);
+    std::string workingDir = PathHelper::GetParentDir(executablePath);
+    std::wstring wWorkingDir = PathHelper::Utf8ToWide(workingDir);
+    std::wstring commandLine = L"\"" + wExecutable + L"\"";
+    std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
+    mutableCommandLine.push_back(L'\0');
+
+    STARTUPINFOW startupInfo = {};
+    startupInfo.cb = sizeof(startupInfo);
+    PROCESS_INFORMATION processInfo = {};
+    BOOL created = CreateProcessW(wExecutable.c_str(),
+                                  mutableCommandLine.data(),
+                                  nullptr,
+                                  nullptr,
+                                  FALSE,
+                                  0,
+                                  nullptr,
+                                  wWorkingDir.empty() ? nullptr : wWorkingDir.c_str(),
+                                  &startupInfo,
+                                  &processInfo);
+    if (!created) {
+        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：CreateProcessW失败，path=%s，error=%lu",
+                  executablePath.c_str(), GetLastError());
+        return false;
+    }
+
+    LOG_INFO("EXPORT", "已自动启动Delphi程序：path=%s，pid=%lu",
+             executablePath.c_str(), processInfo.dwProcessId);
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    return true;
+}
+
+static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
+                                         const HZCYKJTHardWare::ConfigManager& cfg,
+                                         const std::string& dllDir,
+                                         const std::string& delphiServerUrl) {
+    if (proxy.Ping()) {
+        return true;
+    }
+    if (!cfg.GetDelphiAutoStart()) {
+        LOG_ERROR("EXPORT", "Delphi程序/ping失败且自动启动未启用：delphi_server=%s",
+                  delphiServerUrl.c_str());
+        return false;
+    }
+
+    std::string executablePath;
+    if (!StartDelphiServiceProcess(cfg, dllDir, executablePath)) {
+        return false;
+    }
+
+    int waitMs = cfg.GetDelphiStartWaitMs();
+    int intervalMs = cfg.GetDelphiPingIntervalMs();
+    ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(waitMs);
+    do {
+        Sleep(static_cast<DWORD>(intervalMs));
+        if (proxy.Ping()) {
+            LOG_INFO("EXPORT", "自动启动后的Delphi通信服务已就绪：delphi_server=%s，path=%s",
+                     delphiServerUrl.c_str(), executablePath.c_str());
+            return true;
+        }
+    } while (GetTickCount64() < deadline);
+
+    LOG_ERROR("EXPORT", "自动启动Delphi程序后等待/ping超时：delphi_server=%s，path=%s，wait_ms=%d",
+              delphiServerUrl.c_str(), executablePath.c_str(), waitMs);
+    return false;
 }
 
 static int InitSdkBody() {
@@ -246,9 +371,11 @@ static int InitSdkBody() {
 
     EventDispatcher::Instance().Start();
 
+    LOG_INFO("EXPORT", "初始化DLL：正在检查Delphi通信服务，delphi_server=%s，auto_start=%s",
+             delphiServerUrl.c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
     DelphiProxy proxy(delphiServerUrl);
-    if (!proxy.Ping()) {
-        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi程序未启动或/ping失败，delphi_server=%s", delphiServerUrl.c_str());
+    if (!EnsureDelphiServiceAvailable(proxy, cfg, ctx.dll_dir, delphiServerUrl)) {
+        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi程序/ping不可用，delphi_server=%s", delphiServerUrl.c_str());
         EventDispatcher::Instance().Stop();
         CallbackServer::Instance().Stop();
         {

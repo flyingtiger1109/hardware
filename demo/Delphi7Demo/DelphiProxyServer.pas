@@ -43,6 +43,12 @@ type
     FPreviewManager: TPreviewManager;
     FRequestSaveDirs: TStringList;
     FRequestCallbacks: TStringList;
+    FDelphiServerHost: string;
+    FDelphiServerPort: Integer;
+    FTerminalCallbackListenHost: string;
+    FTerminalCallbackPublicHost: string;
+    FTerminalCallbackPort: Integer;
+    FTerminalCallbackPath: string;
     FDllCallbackHost: string;
     FDllCallbackPort: Integer;
     FDllCallbackBasePath: string;
@@ -268,8 +274,11 @@ begin
 end;
 
 function TDelphiProxyServer.GetCallbackBase: string;
+var CallbackHost: string;
 begin
-  Result := 'http://' + FLanIp + ':8081/terminal-callback';
+  CallbackHost := FTerminalCallbackPublicHost;
+  if CallbackHost = '' then CallbackHost := FLanIp;
+  Result := 'http://' + CallbackHost + ':' + IntToStr(FTerminalCallbackPort) + FTerminalCallbackPath;
 end;
 
 function TDelphiProxyServer.GetDllCallbackUrl(const ResourcePath: string): string;
@@ -297,6 +306,12 @@ procedure TDelphiProxyServer.LoadRuntimeConfig;
 var ConfigPath, ConfigText, Section, HostText, BasePathText: string;
   SL: TStringList; PortValue: Int64;
 begin
+  FDelphiServerHost := '127.0.0.1';
+  FDelphiServerPort := 8080;
+  FTerminalCallbackListenHost := '0.0.0.0';
+  FTerminalCallbackPublicHost := '';
+  FTerminalCallbackPort := 8081;
+  FTerminalCallbackPath := '/terminal-callback';
   FDllCallbackHost := '127.0.0.1';
   FDllCallbackPort := 39091;
   FDllCallbackBasePath := '/HZCYKJTHardWare/callback';
@@ -313,6 +328,40 @@ begin
   end;
 
   FTerminalManager.LoadFromConfig(ConfigText);
+
+  Section := ExtractJsonObject(ConfigText, 'delphi_server');
+  if Section <> '' then
+  begin
+    HostText := ExtractJsonString(Section, 'host');
+    if HostText <> '' then
+      FDelphiServerHost := HostText;
+
+    PortValue := ExtractJsonInt(Section, 'port');
+    if (PortValue > 0) and (PortValue <= 65535) then
+      FDelphiServerPort := PortValue;
+  end;
+
+  Section := ExtractJsonObject(ConfigText, 'terminal_callback_server');
+  if Section <> '' then
+  begin
+    HostText := ExtractJsonString(Section, 'listen_host');
+    if HostText <> '' then
+      FTerminalCallbackListenHost := HostText;
+
+    FTerminalCallbackPublicHost := ExtractJsonString(Section, 'public_host');
+
+    PortValue := ExtractJsonInt(Section, 'port');
+    if (PortValue > 0) and (PortValue <= 65535) then
+      FTerminalCallbackPort := PortValue;
+
+    BasePathText := ExtractJsonString(Section, 'path');
+    if BasePathText <> '' then
+    begin
+      if BasePathText[1] <> '/' then
+        BasePathText := '/' + BasePathText;
+      FTerminalCallbackPath := BasePathText;
+    end;
+  end;
 
   Section := ExtractJsonObject(ConfigText, 'callback_server');
   if Section = '' then Exit;
@@ -352,11 +401,21 @@ var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..16383] of C
 begin if WSAStartup($0202, WSA) <> 0 then Exit;
   try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
     FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET;
-    Addr.sin_addr.S_addr := inet_addr('0.0.0.0'); Addr.sin_port := htons(8081);
-    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin FOwner.DoLog('[错误] [终端回调] 回调监听启动失败：bind 0.0.0.0:8081 失败。'); Exit; end;
-    if listen(FListenSocket, SOMAXCONN) <> 0 then Exit;
-    FOwner.DoLog('[信息] [终端回调] 回调接收服务已启动：listen=0.0.0.0:8081，lan=' + FOwner.FLanIp);
-    FOwner.DoLog('[信息] [终端回调] 终端回调地址：http://' + FOwner.FLanIp + ':8081/terminal-callback');
+    Addr.sin_addr.S_addr := inet_addr(PChar(FOwner.FTerminalCallbackListenHost));
+    Addr.sin_port := htons(FOwner.FTerminalCallbackPort);
+    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
+      FOwner.DoLog('[错误] [终端回调] 回调监听启动失败：bind ' + FOwner.FTerminalCallbackListenHost + ':' +
+        IntToStr(FOwner.FTerminalCallbackPort) + ' 失败，error=' + IntToStr(WSAGetLastError) + '。');
+      Exit;
+    end;
+    if listen(FListenSocket, SOMAXCONN) <> 0 then begin
+      FOwner.DoLog('[错误] [终端回调] 回调监听启动失败：listen ' + FOwner.FTerminalCallbackListenHost + ':' +
+        IntToStr(FOwner.FTerminalCallbackPort) + ' 失败，error=' + IntToStr(WSAGetLastError) + '。');
+      Exit;
+    end;
+    FOwner.DoLog('[信息] [终端回调] 回调接收服务已启动：listen=' + FOwner.FTerminalCallbackListenHost + ':' +
+      IntToStr(FOwner.FTerminalCallbackPort));
+    FOwner.DoLog('[信息] [终端回调] 终端回调地址：' + FOwner.GetCallbackBase);
     while not Terminated do begin
       Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
       try Raw := '';
@@ -387,7 +446,7 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
 end;
 
 // ============================================================
-// TDelphiHttpServerThread (8080 for DLL)
+// TDelphiHttpServerThread (configured DLL communication endpoint)
 // ============================================================
 constructor TDelphiHttpServerThread.Create(AOwner: TDelphiProxyServer);
 begin inherited Create(True); FreeOnTerminate := False; FOwner := AOwner; FListenSocket := INVALID_SOCKET; end;
@@ -401,8 +460,21 @@ var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..8191] of Ch
   Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string; P1, P2, CLPos, LineEnd: Integer;
 begin if WSAStartup($0202, WSA) <> 0 then Exit;
   try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
-    FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET; Addr.sin_addr.S_addr := inet_addr('127.0.0.1'); Addr.sin_port := htons(8080);
-    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then Exit; if listen(FListenSocket, SOMAXCONN) <> 0 then Exit;
+    FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET;
+    Addr.sin_addr.S_addr := inet_addr(PChar(FOwner.FDelphiServerHost));
+    Addr.sin_port := htons(FOwner.FDelphiServerPort);
+    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
+      FOwner.DoLog('[错误] [服务] DLL通信服务监听失败：bind ' + FOwner.FDelphiServerHost + ':' +
+        IntToStr(FOwner.FDelphiServerPort) + ' 失败，error=' + IntToStr(WSAGetLastError) + '。');
+      Exit;
+    end;
+    if listen(FListenSocket, SOMAXCONN) <> 0 then begin
+      FOwner.DoLog('[错误] [服务] DLL通信服务监听失败：listen ' + FOwner.FDelphiServerHost + ':' +
+        IntToStr(FOwner.FDelphiServerPort) + ' 失败，error=' + IntToStr(WSAGetLastError) + '。');
+      Exit;
+    end;
+    FOwner.DoLog('[信息] [服务] DLL通信服务已启动：http://' + FOwner.FDelphiServerHost + ':' +
+      IntToStr(FOwner.FDelphiServerPort));
     while not Terminated do begin Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
       try Raw := '';
         repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
@@ -466,8 +538,9 @@ begin if FThread <> nil then Exit;
   DoLog('[信息] [服务] 已检测本机局域网地址：' + FLanIp);
   DoLog('[信息] [终端状态] 当前终端：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
+  DoLog('[信息] [服务] 正在启动DLL通信服务：http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
-  DoLog('[信息] [服务] DLL通信服务已启动：http://127.0.0.1:8080，终端回调=' + GetCallbackBase);
+  DoLog('[信息] [服务] DLL通信终端回调=' + GetCallbackBase);
   // Auto-start camera + fingerprint preview
   DoLog('[信息] [预览控制] 正在自动启动摄像头和指纹预览。');
   Include(FActivePreviews, prtCamera);

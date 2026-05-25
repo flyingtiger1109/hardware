@@ -1,7 +1,17 @@
 {
   "delphi_server": {
     "host": "127.0.0.1",
-    "port": 8080
+    "port": 18080,
+    "auto_start": true,
+    "executable": "HZCYKJTHardWare.exe",
+    "start_wait_ms": 10000,
+    "ping_interval_ms": 300
+  },
+  "terminal_callback_server": {
+    "listen_host": "192.168.20.199",
+    "public_host": "192.168.20.199",
+    "port": 18081,
+    "path": "/terminal-callback"
   },
   "terminal": {
     "mode": "auto_subnet",
@@ -10,44 +20,32 @@
     "check_on_init": false,
     "default_index": 1,
     "preferred_subnet_prefix": "192.168.20",
-    "fixed_terminals": [
-      {
-        "index": 1,
-        "name": "terminal_a",
-        "base_url": ""
-      },
-      {
-        "index": 2,
-        "name": "terminal_b",
-        "base_url": ""
-      }
-    ],
     "auto_subnet_devices": [
       {
         "index": 1,
-        "name": "terminal_a",
+        "name": "validation_terminal",
         "host_suffix": 30
-      },
-      {
+      }，
+     {
         "index": 2,
-        "name": "terminal_b",
-        "host_suffix": 11
+        "name": "validation_terminal",
+        "host_suffix": 31
       }
     ]
   },
   "callback_server": {
-    "host": "",
-    "auto_bind_lan_ip": true,
-    "listen_any": true,
-    "port": 39091,
+    "host": "127.0.0.1",
+    "auto_bind_lan_ip": false,
+    "listen_any": false,
+    "port": 39092,
     "base_path": "/HZCYKJTHardWare/callback"
   },
   "timeout": {
-    "http_connect_ms": 3000,
-    "http_request_ms": 3000,
-    "face_capture_ms": 5000,
-    "fingerprint_capture_ms": 5000,
-    "ocr_ms": 10000
+    "http_connect_ms": 500,
+    "http_request_ms": 500,
+    "face_capture_ms": 500,
+    "fingerprint_capture_ms": 500,
+    "ocr_ms": 500
   },
   "save": {
     "default_root": ".\\captures",
@@ -56,7 +54,7 @@
   },
   "preview": {
     "renderer": "libvlc",
-    "auto_reconnect": true,
+    "auto_reconnect": false,
     "check_hwnd_interval_ms": 500,
     "stop_preview_on_end_process": false,
     "rtsp_network_caching_ms": 150,
@@ -65,6 +63,6 @@
   },
   "log": {
     "dir": "HZCYKJTHardWareDLL_Logs",
-    "level": "info"
+    "level": "debug"
   }
 }

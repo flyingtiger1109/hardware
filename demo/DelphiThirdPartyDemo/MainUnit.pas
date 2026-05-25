@@ -204,10 +204,12 @@ end;
 
 
 procedure TFormMain.BtnInitClick(Sender: TObject);
+var Ret: Integer;
 begin
   if FInitialized then begin Log('Already initialized'); Exit; end;
-  LogRet('InitSdk', HZCYKJTHardWare_InitSdk);
-  if HZCYKJTHardWare_InitSdk = 1 then
+  Ret := HZCYKJTHardWare_InitSdk;
+  LogRet('InitSdk', Ret);
+  if Ret = 1 then
   begin
     FInitialized := True;
     LogRet('RegisterEventCallback', HZCYKJTHardWare_RegisterEventCallback(@EventCallback));
