@@ -1,0 +1,22 @@
+; Module definition file. Keep undecorated x86 __stdcall export names.
+LIBRARY HZCYKJTHardWare
+EXPORTS
+    HZCYKJTHardWare_InitSdk
+    HZCYKJTHardWare_ReleaseSdk
+    HZCYKJTHardWare_SwitchTerminal
+    HZCYKJTHardWare_StartProcess
+    HZCYKJTHardWare_EndProcess
+    HZCYKJTHardWare_StartCameraPreview
+    HZCYKJTHardWare_StopCameraPreview
+    HZCYKJTHardWare_StartFingerprintPreview
+    HZCYKJTHardWare_StopFingerprintPreview
+    HZCYKJTHardWare_StartIrisPreview
+    HZCYKJTHardWare_StopIrisPreview
+    HZCYKJTHardWare_StartPlatePreview
+    HZCYKJTHardWare_StopPlatePreview
+    HZCYKJTHardWare_CaptureCameraImage
+    HZCYKJTHardWare_CaptureFingerprintImage
+    HZCYKJTHardWare_CaptureIrisImage
+    HZCYKJTHardWare_RequestOCR
+    HZCYKJTHardWare_RequestNfcCard
+    HZCYKJTHardWare_RegisterEventCallback

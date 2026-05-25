@@ -1,0 +1,860 @@
+unit DelphiProxyServer;
+
+interface
+
+uses
+  Windows, SysUtils, Classes, WinSock, ExtCtrls,
+  TerminalManager, TerminalClient, CallbackParser, FileSaver, PreviewManager, EncodingHelper;
+
+type
+  TDelphiProxyServer = class;
+  TLogCallback = procedure(const Msg: string) of object;
+
+  TCallbackReceiverThread = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+    FListenSocket: TSocket;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer);
+    procedure StopServer;
+  end;
+
+  TDelphiHttpServerThread = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+    FListenSocket: TSocket;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer);
+    procedure StopServer;
+  end;
+
+  TDelphiProxyServer = class
+  private
+    FThread: TDelphiHttpServerThread;
+    FCallbackThread: TCallbackReceiverThread;
+    FTerminalManager: TTerminalManager;
+    FTerminalClient: TTerminalClient;
+    FCallbackParser: TCallbackParser;
+    FFileSaver: TFileSaver;
+    FPreviewManager: TPreviewManager;
+    FRequestSaveDirs: TStringList;
+    FRequestCallbacks: TStringList;
+    FDllCallbackHost: string;
+    FDllCallbackPort: Integer;
+    FDllCallbackBasePath: string;
+    FLogProc: TLogCallback;
+    FLanIp: string;
+    FActivePreviews: set of TPreviewResourceType;
+    FThirdPartyCameraHwnd: HWND;
+    FThirdPartyFingerprintHwnd: HWND;
+    procedure DoLog(const Msg: string);
+    function GenRequestId(const Prefix: string): string;
+    function GetLocalLanIp: string;
+    function GetCallbackBase: string;
+    function GetDllCallbackUrl(const ResourcePath: string): string;
+    function BuildTerminalProcessStartBody: string;
+    procedure LoadRuntimeConfig;
+    procedure AutoStartPreviews;
+    procedure AutoStopPreviews;
+    function HandleRequest(const Method, Path, BodyUtf8: string): string;
+    function HandleTerminalCallback(const BodyUtf8: string): string;
+    function MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
+  public
+    constructor Create(ACameraPanel, AFingerprintPanel, AIrisPanel: TPanel);
+    destructor Destroy; override;
+    procedure Start;
+    procedure Stop;
+    procedure SetLogProc(ALogProc: TLogCallback);
+    property TerminalManager: TTerminalManager read FTerminalManager;
+    property PreviewManager: TPreviewManager read FPreviewManager;
+    // Direct terminal operations (for Delphi UI buttons)
+    function SwitchTerminalDirect(Index: Integer): Boolean;
+    function StartProcessDirect(const SaveDir: string): Boolean;
+    function EndProcessDirect: Boolean;
+    function CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
+    function CaptureFingerprintDirect(const SaveDir: string; out SavePath: string): Boolean;
+    function RequestOCRDirect(const SaveDir: string): string;
+    function RequestNfcDirect(const SaveDir: string): string;
+    function CaptureIrisDirect(const SaveDir: string): string;
+    function StartCameraPreviewDirect: Boolean;
+    function StopCameraPreviewDirect: Boolean;
+    function StartFingerprintPreviewDirect: Boolean;
+    function StopFingerprintPreviewDirect: Boolean;
+    function StartIrisPreviewDirect: Boolean;
+    function StopIrisPreviewDirect: Boolean;
+  end;
+
+implementation
+
+function PosExSimple(const SubStr, S: string; Offset: Integer): Integer;
+var I: Integer;
+begin Result := 0; if Offset < 1 then Offset := 1;
+  for I := Offset to Length(S) - Length(SubStr) + 1 do
+    if Copy(S, I, Length(SubStr)) = SubStr then begin Result := I; Exit; end;
+end;
+
+function JsonEscape(const S: string): string;
+var I: Integer;
+begin Result := '';
+  for I := 1 to Length(S) do
+    case S[I] of
+      '\': Result := Result + '\\';
+      '"': Result := Result + '\"';
+      #13: Result := Result + '\r';
+      #10: Result := Result + '\n';
+      #9: Result := Result + '\t';
+    else Result := Result + S[I];
+    end;
+end;
+
+function JsonStr(const Name, Value: string): string;
+begin Result := '"' + Name + '":"' + JsonEscape(Value) + '"'; end;
+
+function JsonInt(const Name: string; Value: Int64): string;
+begin Result := '"' + Name + '":' + IntToStr(Value); end;
+
+function ExtractJsonString(const JsonUtf8, Name: string): string;
+var Key: string; P, I: Integer; Escaped: Boolean;
+begin Result := ''; Key := '"' + Name + '"'; P := Pos(Key, JsonUtf8);
+  if P = 0 then Exit;
+  P := PosExSimple(':', JsonUtf8, P + Length(Key)); if P = 0 then Exit; Inc(P);
+  while (P <= Length(JsonUtf8)) and (JsonUtf8[P] in [' ', #9, #13, #10]) do Inc(P);
+  if (P > Length(JsonUtf8)) or (JsonUtf8[P] <> '"') then Exit; Inc(P); Escaped := False;
+  for I := P to Length(JsonUtf8) do begin
+    if Escaped then begin
+      case JsonUtf8[I] of 'n': Result := Result + #10; 'r': Result := Result + #13; 't': Result := Result + #9;
+      else Result := Result + JsonUtf8[I]; end; Escaped := False;
+    end else if JsonUtf8[I] = '\' then Escaped := True
+    else if JsonUtf8[I] = '"' then Exit else Result := Result + JsonUtf8[I];
+  end;
+end;
+
+function ExtractJsonInt(const JsonUtf8, Name: string): Int64;
+var Text, Key: string; P: Integer;
+begin Result := 0; Text := ExtractJsonString(JsonUtf8, Name);
+  if Text <> '' then begin Result := StrToInt64Def(Text, 0); Exit; end;
+  Key := '"' + Name + '"'; P := Pos(Key, JsonUtf8); if P = 0 then Exit;
+  P := PosExSimple(':', JsonUtf8, P + Length(Key)); if P = 0 then Exit; Inc(P);
+  while (P <= Length(JsonUtf8)) and (JsonUtf8[P] in [' ', #9, #13, #10]) do Inc(P);
+  Text := '';
+  while (P <= Length(JsonUtf8)) and (JsonUtf8[P] in ['0'..'9', '-']) do begin Text := Text + JsonUtf8[P]; Inc(P); end;
+  Result := StrToInt64Def(Text, 0);
+end;
+
+function ExtractJsonObject(const JsonUtf8, Name: string): string;
+var Key: string; P, I, Depth: Integer; InString, Escaped: Boolean;
+begin
+  Result := '';
+  Key := '"' + Name + '"';
+  P := Pos(Key, JsonUtf8);
+  if P = 0 then Exit;
+  P := PosExSimple(':', JsonUtf8, P + Length(Key));
+  if P = 0 then Exit;
+  Inc(P);
+  while (P <= Length(JsonUtf8)) and (JsonUtf8[P] in [' ', #9, #13, #10]) do Inc(P);
+  if (P > Length(JsonUtf8)) or (JsonUtf8[P] <> '{') then Exit;
+
+  Depth := 0;
+  InString := False;
+  Escaped := False;
+  for I := P to Length(JsonUtf8) do
+  begin
+    if InString then
+    begin
+      if Escaped then
+        Escaped := False
+      else if JsonUtf8[I] = '\' then
+        Escaped := True
+      else if JsonUtf8[I] = '"' then
+        InString := False;
+    end
+    else
+    begin
+      if JsonUtf8[I] = '"' then
+        InString := True
+      else if JsonUtf8[I] = '{' then
+        Inc(Depth)
+      else if JsonUtf8[I] = '}' then
+      begin
+        Dec(Depth);
+        if Depth = 0 then
+        begin
+          Result := Copy(JsonUtf8, P, I - P + 1);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
+function HttpPostJson(const Url, BodyUtf8: string): Boolean;
+var WSA: TWSAData; Sock: TSocket; Addr: TSockAddrIn; Host, Path, Req, HostPort: string; Port, SlashPos, ColonPos: Integer; U: string;
+begin Result := False; U := Url; if Copy(U, 1, 7) = 'http://' then Delete(U, 1, 7);
+  SlashPos := Pos('/', U); if SlashPos = 0 then Exit;
+  HostPort := Copy(U, 1, SlashPos - 1); Path := Copy(U, SlashPos, MaxInt);
+  ColonPos := Pos(':', HostPort);
+  if ColonPos > 0 then begin Host := Copy(HostPort, 1, ColonPos - 1); Port := StrToIntDef(Copy(HostPort, ColonPos + 1, MaxInt), 80); end
+  else begin Host := HostPort; Port := 80; end;
+  if Host = '' then Exit; if WSAStartup($0202, WSA) <> 0 then Exit;
+  try Sock := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if Sock = INVALID_SOCKET then Exit;
+    try FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET; Addr.sin_port := htons(Port);
+      Addr.sin_addr.S_addr := inet_addr(PChar(Host)); if Addr.sin_addr.S_addr = INADDR_NONE then Exit;
+      if connect(Sock, Addr, SizeOf(Addr)) <> 0 then Exit;
+      Req := 'POST ' + Path + ' HTTP/1.1'#13#10 + 'Host: ' + Host + ':' + IntToStr(Port) + #13#10 +
+        'Content-Type: application/json; charset=utf-8'#13#10 + 'Content-Length: ' + IntToStr(Length(BodyUtf8)) + #13#10 +
+        'Connection: close'#13#10#13#10 + BodyUtf8;
+      Result := send(Sock, Req[1], Length(Req), 0) = Length(Req);
+    finally closesocket(Sock); end;
+  finally WSACleanup; end;
+end;
+
+function SafeResolveSaveDir(const SaveDir: string): string;
+begin Result := SaveDir; if Result = '' then Result := ExtractFilePath(ParamStr(0)) + 'captures';
+  if not DirectoryExists(Result) then ForceDirectories(Result); end;
+
+// ============================================================
+// GetLocalLanIp - find local IP matching terminal subnet
+// ============================================================
+function TDelphiProxyServer.GetLocalLanIp: string;
+var
+  TerminalIp, SubnetPrefix: string;
+  HostEnt: PHostEnt;
+  HostName: array[0..255] of Char;
+  P: PChar;
+  I: Integer;
+begin
+  Result := '127.0.0.1';
+  if gethostname(HostName, SizeOf(HostName)) <> 0 then Exit;
+  HostEnt := gethostbyname(HostName);
+  if HostEnt = nil then Exit;
+
+  // Get subnet prefix from current terminal IP
+  TerminalIp := FTerminalManager.CurrentBaseUrl;
+  // Extract IP from URL: "http://192.168.20.30:9098" -> "192.168.20"
+  if Copy(TerminalIp, 1, 7) = 'http://' then Delete(TerminalIp, 1, 7);
+  I := Pos(':', TerminalIp);
+  if I > 0 then TerminalIp := Copy(TerminalIp, 1, I - 1);
+  // Get first 3 octets
+  I := Pos('.', TerminalIp);
+  if I > 0 then I := Pos('.', Copy(TerminalIp, I+1, MaxInt));
+  // Actually we need "192.168.20"
+  SubnetPrefix := TerminalIp;
+  // Remove last octet: "192.168.20.30" -> "192.168.20."
+  I := Length(SubnetPrefix);
+  while (I > 0) and (SubnetPrefix[I] <> '.') do Dec(I);
+  if I > 0 then SubnetPrefix := Copy(SubnetPrefix, 1, I);
+
+  // Find local IP matching the subnet
+  P := HostEnt.h_addr_list^;
+  I := 0;
+  while P <> nil do
+  begin
+    Result := Format('%d.%d.%d.%d', [Byte(P[0]), Byte(P[1]), Byte(P[2]), Byte(P[3])]);
+    if Pos(SubnetPrefix, Result) = 1 then
+      Exit; // Found matching subnet
+    Inc(I);
+    if I >= 16 then Break;
+    P := PChar(Pointer(Integer(HostEnt.h_addr_list) + I * SizeOf(Pointer)));
+  end;
+
+  // No matching subnet found, return first IP
+  P := HostEnt.h_addr_list^;
+  if P <> nil then
+    Result := Format('%d.%d.%d.%d', [Byte(P[0]), Byte(P[1]), Byte(P[2]), Byte(P[3])]);
+end;
+
+function TDelphiProxyServer.GetCallbackBase: string;
+begin
+  Result := 'http://' + FLanIp + ':8081/terminal-callback';
+end;
+
+function TDelphiProxyServer.GetDllCallbackUrl(const ResourcePath: string): string;
+var PathText: string;
+begin
+  PathText := ResourcePath;
+  if (PathText <> '') and (PathText[1] <> '/') then
+    PathText := '/' + PathText;
+  Result := 'http://' + FDllCallbackHost + ':' + IntToStr(FDllCallbackPort) +
+    FDllCallbackBasePath + PathText;
+end;
+
+function TDelphiProxyServer.BuildTerminalProcessStartBody: string;
+var CallbackBase, RequestId: string;
+begin
+  CallbackBase := GetCallbackBase;
+  RequestId := GenRequestId('PROCESS');
+  Result := '{' + JsonStr('request_id', RequestId) + ',"callbacks":{' +
+    JsonStr('ocr_document', CallbackBase) + ',' +
+    JsonStr('ocr_event_status', CallbackBase) + ',' +
+    JsonStr('nfc_card', CallbackBase) + '}}';
+end;
+
+procedure TDelphiProxyServer.LoadRuntimeConfig;
+var ConfigPath, ConfigText, Section, HostText, BasePathText: string;
+  SL: TStringList; PortValue: Int64;
+begin
+  FDllCallbackHost := '127.0.0.1';
+  FDllCallbackPort := 39091;
+  FDllCallbackBasePath := '/HZCYKJTHardWare/callback';
+
+  ConfigPath := ExtractFilePath(ParamStr(0)) + 'HZCYKJTHardWare.json';
+  if not FileExists(ConfigPath) then Exit;
+
+  SL := TStringList.Create;
+  try
+    SL.LoadFromFile(ConfigPath);
+    ConfigText := SL.Text;
+  finally
+    SL.Free;
+  end;
+
+  FTerminalManager.LoadFromConfig(ConfigText);
+
+  Section := ExtractJsonObject(ConfigText, 'callback_server');
+  if Section = '' then Exit;
+
+  HostText := ExtractJsonString(Section, 'host');
+  if HostText <> '' then
+    FDllCallbackHost := HostText;
+
+  PortValue := ExtractJsonInt(Section, 'port');
+  if (PortValue > 0) and (PortValue <= 65535) then
+    FDllCallbackPort := PortValue;
+
+  BasePathText := ExtractJsonString(Section, 'base_path');
+  if BasePathText <> '' then
+  begin
+    if BasePathText[1] <> '/' then
+      BasePathText := '/' + BasePathText;
+    while (Length(BasePathText) > 1) and (BasePathText[Length(BasePathText)] = '/') do
+      Delete(BasePathText, Length(BasePathText), 1);
+    FDllCallbackBasePath := BasePathText;
+  end;
+end;
+
+// ============================================================
+// TCallbackReceiverThread
+// ============================================================
+constructor TCallbackReceiverThread.Create(AOwner: TDelphiProxyServer);
+begin inherited Create(True); FreeOnTerminate := False; FOwner := AOwner; FListenSocket := INVALID_SOCKET; end;
+
+procedure TCallbackReceiverThread.StopServer;
+begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; end; end;
+
+procedure TCallbackReceiverThread.Execute;
+var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..16383] of Char;
+  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen, CLPos, LineEnd: Integer;
+  Raw, Header, BodyUtf8, Response, ResponseBody, Chunk: string;
+begin if WSAStartup($0202, WSA) <> 0 then Exit;
+  try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
+    FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET;
+    Addr.sin_addr.S_addr := inet_addr('0.0.0.0'); Addr.sin_port := htons(8081);
+    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin FOwner.DoLog('[CB] Failed to bind 0.0.0.0:8081'); Exit; end;
+    if listen(FListenSocket, SOMAXCONN) <> 0 then Exit;
+    FOwner.DoLog('[CB] Callback receiver listening on 0.0.0.0:8081 (LAN=' + FOwner.FLanIp + ')');
+    FOwner.DoLog('[CB] Terminal callbacks should POST to http://' + FOwner.FLanIp + ':8081/terminal-callback');
+    while not Terminated do begin
+      Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
+      try Raw := '';
+        repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+          if RecvLen > 0 then begin SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; end;
+          HeaderEnd := Pos(#13#10#13#10, Raw);
+        until (RecvLen <= 0) or (HeaderEnd > 0);
+        if HeaderEnd > 0 then begin
+          Header := Copy(Raw, 1, HeaderEnd - 1); ContentLength := 0;
+          CLPos := Pos('Content-Length:', Header); if CLPos = 0 then CLPos := Pos('content-length:', Header);
+          if CLPos > 0 then begin CLPos := CLPos + Length('Content-Length:');
+            while (CLPos <= Length(Header)) and (Header[CLPos] in [' ', #9]) do Inc(CLPos);
+            LineEnd := PosExSimple(#13#10, Header, CLPos); if LineEnd = 0 then LineEnd := Length(Header) + 1;
+            ContentLength := StrToIntDef(Trim(Copy(Header, CLPos, LineEnd - CLPos)), 0); end;
+          BodyLen := Length(Raw) - (HeaderEnd + 3); NeedLen := ContentLength - BodyLen;
+          while (NeedLen > 0) do begin RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+            if RecvLen <= 0 then Break; SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; Dec(NeedLen, RecvLen); end;
+          BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
+          FOwner.DoLog('[CB] <<< Terminal callback received, body_size=' + IntToStr(Length(BodyUtf8)));
+          ResponseBody := FOwner.HandleTerminalCallback(BodyUtf8); end
+        else ResponseBody := '{"status":"rejected"}';
+        Response := 'HTTP/1.1 202 Accepted'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
+          'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
+        send(Client, Response[1], Length(Response), 0);
+      finally closesocket(Client); end;
+    end;
+  finally if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; WSACleanup; end;
+end;
+
+// ============================================================
+// TDelphiHttpServerThread (8080 for DLL)
+// ============================================================
+constructor TDelphiHttpServerThread.Create(AOwner: TDelphiProxyServer);
+begin inherited Create(True); FreeOnTerminate := False; FOwner := AOwner; FListenSocket := INVALID_SOCKET; end;
+
+procedure TDelphiHttpServerThread.StopServer;
+begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; end; end;
+
+procedure TDelphiHttpServerThread.Execute;
+var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..8191] of Char;
+  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen: Integer;
+  Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string; P1, P2, CLPos, LineEnd: Integer;
+begin if WSAStartup($0202, WSA) <> 0 then Exit;
+  try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
+    FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET; Addr.sin_addr.S_addr := inet_addr('127.0.0.1'); Addr.sin_port := htons(8080);
+    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then Exit; if listen(FListenSocket, SOMAXCONN) <> 0 then Exit;
+    while not Terminated do begin Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
+      try Raw := '';
+        repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+          if RecvLen > 0 then begin SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; end;
+          HeaderEnd := Pos(#13#10#13#10, Raw);
+        until (RecvLen <= 0) or (HeaderEnd > 0);
+        if HeaderEnd > 0 then begin Header := Copy(Raw, 1, HeaderEnd - 1); ContentLength := 0;
+          CLPos := Pos('Content-Length:', Header); if CLPos = 0 then CLPos := Pos('content-length:', Header);
+          if CLPos > 0 then begin CLPos := CLPos + Length('Content-Length:');
+            while (CLPos <= Length(Header)) and (Header[CLPos] in [' ', #9]) do Inc(CLPos);
+            LineEnd := PosExSimple(#13#10, Header, CLPos); if LineEnd = 0 then LineEnd := Length(Header) + 1;
+            ContentLength := StrToIntDef(Trim(Copy(Header, CLPos, LineEnd - CLPos)), 0); end;
+          BodyLen := Length(Raw) - (HeaderEnd + 3); NeedLen := ContentLength - BodyLen;
+          while (NeedLen > 0) do begin RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+            if RecvLen <= 0 then Break; SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; Dec(NeedLen, RecvLen); end;
+          P1 := Pos(' ', Header); P2 := PosExSimple(' ', Header, P1 + 1);
+          Method := Copy(Header, 1, P1 - 1); Path := Copy(Header, P1 + 1, P2 - P1 - 1);
+          BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
+          FOwner.DoLog('[HTTP] DLL request: ' + Method + ' ' + Path);
+          ResponseBody := FOwner.HandleRequest(Method, Path, BodyUtf8); end
+        else ResponseBody := '{"error":true,"code":"bad_request"}';
+        Response := 'HTTP/1.1 200 OK'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
+          'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
+        send(Client, Response[1], Length(Response), 0);
+      finally closesocket(Client); end;
+    end;
+  finally if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; WSACleanup; end;
+end;
+
+// ============================================================
+// TDelphiProxyServer - Core
+// ============================================================
+constructor TDelphiProxyServer.Create(ACameraPanel, AFingerprintPanel, AIrisPanel: TPanel);
+begin inherited Create;
+  FTerminalManager := TTerminalManager.Create; FTerminalClient := TTerminalClient.Create;
+  FCallbackParser := TCallbackParser.Create; FFileSaver := TFileSaver.Create;
+  FPreviewManager := TPreviewManager.Create(ACameraPanel, AFingerprintPanel, AIrisPanel);
+  FRequestSaveDirs := TStringList.Create; FRequestCallbacks := TStringList.Create;
+  FThread := nil; FCallbackThread := nil; FLogProc := nil; FLanIp := '127.0.0.1';
+  FActivePreviews := [];
+  LoadRuntimeConfig;
+end;
+
+destructor TDelphiProxyServer.Destroy;
+begin Stop; FRequestSaveDirs.Free; FRequestCallbacks.Free; FPreviewManager.Free;
+  FFileSaver.Free; FCallbackParser.Free; FTerminalClient.Free; FTerminalManager.Free; inherited Destroy; end;
+
+procedure TDelphiProxyServer.SetLogProc(ALogProc: TLogCallback);
+begin FLogProc := ALogProc; FPreviewManager.SetLogProc(ALogProc); end;
+
+procedure TDelphiProxyServer.DoLog(const Msg: string);
+begin if Assigned(FLogProc) then FLogProc(Msg); end;
+
+function TDelphiProxyServer.GenRequestId(const Prefix: string): string;
+begin Result := Prefix + '_' + FormatDateTime('yyyymmddhhnnsszzz', Now); end;
+
+procedure TDelphiProxyServer.Start;
+begin if FThread <> nil then Exit;
+  FLanIp := GetLocalLanIp;
+  FThirdPartyCameraHwnd := 0; FThirdPartyFingerprintHwnd := 0;
+  DoLog('[Server] Local LAN IP detected: ' + FLanIp);
+  DoLog('[Server] Current terminal: ' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
+  FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
+  DoLog('[Server] Started: http://127.0.0.1:8080 (DLL), callback: ' + GetCallbackBase);
+  // Auto-start camera + fingerprint preview
+  DoLog('[Server] Auto-starting previews...');
+  Include(FActivePreviews, prtCamera);
+  Include(FActivePreviews, prtFingerprint);
+  StartCameraPreviewDirect;
+  StartFingerprintPreviewDirect; end;
+
+procedure TDelphiProxyServer.Stop;
+begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
+  if FCallbackThread <> nil then begin FCallbackThread.StopServer; FCallbackThread.WaitFor; FCallbackThread.Free; FCallbackThread := nil; end;
+  FPreviewManager.StopPreview(prtCamera); FPreviewManager.StopPreview(prtFingerprint); FPreviewManager.StopPreview(prtIris); FActivePreviews := []; DoLog('[Server] Stopped'); end;
+
+function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
+begin Result := False; if DllCallbackUrl = '' then Exit;
+  DoLog('[CB] >>> Forward to DLL: url=' + DllCallbackUrl + ' body=' + PayloadUtf8);
+  HttpPostJson(DllCallbackUrl, PayloadUtf8); Result := True; end;
+
+// ============================================================
+// AUTO PREVIEWS
+// ============================================================
+procedure TDelphiProxyServer.AutoStopPreviews;
+begin
+  DoLog(Format('[Switch] Stopping previews for switch', []));
+  if prtIris in FActivePreviews then StopIrisPreviewDirect;
+  if prtFingerprint in FActivePreviews then StopFingerprintPreviewDirect;
+  if prtCamera in FActivePreviews then StopCameraPreviewDirect;
+end;
+
+procedure TDelphiProxyServer.AutoStartPreviews;
+begin
+  DoLog(Format('[Switch] Restarting previews on terminal %d', [FTerminalManager.CurrentIndex]));
+  // Use third-party HWND if set, otherwise use Delphi panel (0)
+  if prtCamera in FActivePreviews then
+    FPreviewManager.StartPreview(prtCamera, FThirdPartyCameraHwnd, FTerminalManager.CurrentBaseUrl);
+  if prtFingerprint in FActivePreviews then
+    FPreviewManager.StartPreview(prtFingerprint, FThirdPartyFingerprintHwnd, FTerminalManager.CurrentBaseUrl);
+end;
+
+// ============================================================
+// DIRECT METHODS
+// ============================================================
+function TDelphiProxyServer.SwitchTerminalDirect(Index: Integer): Boolean;
+begin Result := False;
+  if (Index < 1) or (Index > 2) then Exit;
+  if FTerminalManager.IsSameTerminal(Index) then begin
+    DoLog('[Terminal] Already on terminal ' + IntToStr(Index) + ', restarting camera/fingerprint previews');
+    AutoStopPreviews;
+    Include(FActivePreviews, prtCamera);
+    Include(FActivePreviews, prtFingerprint);
+    AutoStartPreviews;
+    Result := True;
+    Exit;
+  end;
+  DoLog('[Terminal] Switching ' + IntToStr(FTerminalManager.CurrentIndex) + ' -> ' + IntToStr(Index));
+  // Stop all running previews
+  AutoStopPreviews;
+  // Switch
+  FTerminalManager.SwitchTo(Index);
+  DoLog('[Terminal] Switched to: ' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  Include(FActivePreviews, prtCamera);
+  Include(FActivePreviews, prtFingerprint);
+  AutoStartPreviews;
+  Result := True; end;
+
+function TDelphiProxyServer.StartProcessDirect(const SaveDir: string): Boolean;
+var BaseUrl, BodyUtf8, ResponseUtf8, ResolvedSaveDir: string;
+begin
+  Result := False;
+  ResolvedSaveDir := SafeResolveSaveDir(SaveDir);
+  BaseUrl := FTerminalManager.CurrentBaseUrl;
+  BodyUtf8 := BuildTerminalProcessStartBody;
+  FTerminalManager.ProcessSaveDir := ResolvedSaveDir;
+  DoLog('[Process] Start >>> ' + BaseUrl + '/process/start save_dir=' + ResolvedSaveDir);
+  DoLog('[Process] Terminal callbacks=' + GetCallbackBase);
+  if not FTerminalClient.PostJson(BaseUrl, '/process/start', BodyUtf8, ResponseUtf8) then
+  begin
+    DoLog('[Process] Start terminal request FAILED');
+    Exit;
+  end;
+  FTerminalManager.ProcessActive := True;
+  DoLog('[Process] Started, save_dir=' + FTerminalManager.ProcessSaveDir);
+  Result := True;
+end;
+
+function TDelphiProxyServer.EndProcessDirect: Boolean;
+begin FTerminalManager.ProcessActive := False; FTerminalManager.ProcessSaveDir := '';
+  FRequestSaveDirs.Clear; FRequestCallbacks.Clear; DoLog('[Process] Ended'); Result := True; end;
+
+function TDelphiProxyServer.CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
+var BaseUrl, ReqId, ResponseUtf8: string; FaceResult: TImageCallbackResult;
+begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FACE');
+  DoLog('[Capture] Face: ' + ReqId + ' >>> ' + BaseUrl + '/resources/face-image/sync-request');
+  if not FTerminalClient.PostJson(BaseUrl, '/resources/face-image/sync-request',
+      '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
+    DoLog('[Capture] Face: terminal request FAILED, terminal=' + BaseUrl); Exit; end;
+  DoLog('[Capture] Face: raw=' + Copy(ResponseUtf8, 1, 300));
+  FaceResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
+  if not FaceResult.Valid then begin DoLog('[Capture] Face: parse FAILED, raw=' + Copy(ResponseUtf8, 1, 200)); Exit; end;
+  if FaceResult.RequestId = '' then FaceResult.RequestId := ReqId;
+  SavePath := FFileSaver.SaveBase64Image(FaceResult.ImageBase64, FaceResult.ImageMimeType,
+    SafeResolveSaveDir(SaveDir), FaceResult.RequestId, 'face');
+  if SavePath = '' then begin DoLog('[Capture] Face: save FAILED'); Exit; end;
+  DoLog('[Capture] Face: OK -> ' + SavePath); Result := True; end;
+
+function TDelphiProxyServer.CaptureFingerprintDirect(const SaveDir: string; out SavePath: string): Boolean;
+var BaseUrl, ReqId, ResponseUtf8: string; FpResult: TImageCallbackResult;
+begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FP');
+  DoLog('[Capture] Fingerprint: ' + ReqId + ' >>> ' + BaseUrl + '/resources/fingerprint/sync-request');
+  if not FTerminalClient.PostJson(BaseUrl, '/resources/fingerprint/sync-request',
+      '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
+    DoLog('[Capture] Fingerprint: terminal request FAILED, terminal=' + BaseUrl); Exit; end;
+  FpResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
+  if not FpResult.Valid then begin DoLog('[Capture] Fingerprint: parse FAILED, raw=' + Copy(ResponseUtf8, 1, 200)); Exit; end;
+  if FpResult.RequestId = '' then FpResult.RequestId := ReqId;
+  SavePath := FFileSaver.SaveBase64Image(FpResult.ImageBase64, FpResult.ImageMimeType,
+    SafeResolveSaveDir(SaveDir), FpResult.RequestId, 'fingerprint');
+  if SavePath = '' then begin DoLog('[Capture] Fingerprint: save FAILED'); Exit; end;
+  DoLog('[Capture] Fingerprint: OK -> ' + SavePath); Result := True; end;
+
+function TDelphiProxyServer.RequestOCRDirect(const SaveDir: string): string;
+var BaseUrl, ResponseUtf8, CallbackUrl: string;
+begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('OCR');
+  CallbackUrl := GetCallbackBase;
+  DoLog('[Async] OCR: ' + Result + ' >>> ' + BaseUrl + '/resources/ocr-document/request callback=' + CallbackUrl);
+  if not FTerminalClient.PostJson(BaseUrl, '/resources/ocr-document/request',
+      '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
+    DoLog('[Async] OCR: terminal request FAILED'); Result := ''; Exit; end;
+  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  DoLog('[Async] OCR: accepted, waiting for terminal callback to ' + CallbackUrl); end;
+
+function TDelphiProxyServer.RequestNfcDirect(const SaveDir: string): string;
+var BaseUrl, ResponseUtf8, CallbackUrl: string;
+begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('NFC');
+  CallbackUrl := GetCallbackBase;
+  DoLog('[Async] NFC: ' + Result + ' >>> ' + BaseUrl + '/resources/nfc-card/request callback=' + CallbackUrl);
+  if not FTerminalClient.PostJson(BaseUrl, '/resources/nfc-card/request',
+      '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
+    DoLog('[Async] NFC: terminal request FAILED'); Result := ''; Exit; end;
+  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  DoLog('[Async] NFC: accepted, waiting for card tap...'); end;
+
+function TDelphiProxyServer.CaptureIrisDirect(const SaveDir: string): string;
+var BaseUrl, ResponseUtf8, CallbackUrl: string;
+begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('IRIS');
+  CallbackUrl := GetCallbackBase;
+  DoLog('[Async] Iris: ' + Result + ' >>> ' + BaseUrl + '/resources/iris/request callback=' + CallbackUrl);
+  if not FTerminalClient.PostJson(BaseUrl, '/resources/iris/request',
+      '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
+    DoLog('[Async] Iris: terminal request FAILED'); Result := ''; Exit; end;
+  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  DoLog('[Async] Iris: accepted, waiting for capture...'); end;
+
+function TDelphiProxyServer.StartCameraPreviewDirect: Boolean;
+var BaseUrl: string;
+begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  Result := FPreviewManager.StartPreview(prtCamera, 0, BaseUrl);
+  if Result then Include(FActivePreviews, prtCamera); end;
+
+function TDelphiProxyServer.StopCameraPreviewDirect: Boolean;
+begin Result := FPreviewManager.StopPreview(prtCamera);
+  Exclude(FActivePreviews, prtCamera); end;
+
+function TDelphiProxyServer.StartFingerprintPreviewDirect: Boolean;
+var BaseUrl: string;
+begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  Result := FPreviewManager.StartPreview(prtFingerprint, 0, BaseUrl);
+  if Result then Include(FActivePreviews, prtFingerprint); end;
+
+function TDelphiProxyServer.StopFingerprintPreviewDirect: Boolean;
+begin Result := FPreviewManager.StopPreview(prtFingerprint);
+  Exclude(FActivePreviews, prtFingerprint); end;
+
+function TDelphiProxyServer.StartIrisPreviewDirect: Boolean;
+var BaseUrl: string;
+begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  Result := FPreviewManager.StartPreview(prtIris, 0, BaseUrl);
+  if Result then Include(FActivePreviews, prtIris); end;
+
+function TDelphiProxyServer.StopIrisPreviewDirect: Boolean;
+begin Result := FPreviewManager.StopPreview(prtIris);
+  Exclude(FActivePreviews, prtIris); end;
+
+// ============================================================
+// HTTP HANDLER (for DLL requests)
+// ============================================================
+function TDelphiProxyServer.HandleRequest(const Method, Path, BodyUtf8: string): string;
+var RequestId, SaveDir, CallbackUrl, TerminalBaseUrl, SavePath, ResponseUtf8, DllCallbackUrl: string;
+  TerminalIndex: Integer; Client: TTerminalClient;
+  ThirdPartyHwndVal, FpHwnd, IrisHwnd: HWND;
+begin
+  if Path = '/ping' then begin Result := '{"status":"ok"}'; Exit; end;
+  RequestId := ExtractJsonString(BodyUtf8, 'request_id');
+  SaveDir := ExtractJsonString(BodyUtf8, 'save_dir');
+  CallbackUrl := ExtractJsonString(BodyUtf8, 'callback_url');
+  if SaveDir = '' then SaveDir := FTerminalManager.ProcessSaveDir;
+  if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
+  if (CallbackUrl <> '') and (RequestId <> '') then begin
+    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
+    FRequestCallbacks.Values[RequestId] := CallbackUrl; end;
+  TerminalBaseUrl := FTerminalManager.CurrentBaseUrl;
+
+  if Path = '/terminal/switch' then begin
+    TerminalIndex := ExtractJsonInt(BodyUtf8, 'terminal_index');
+    if SwitchTerminalDirect(TerminalIndex) then
+      Result := '{"status":"ok","terminal_index":' + IntToStr(TerminalIndex) + '}'
+    else Result := '{"error":true,"code":"invalid_terminal_index"}'; Exit; end;
+
+  if Path = '/process/start' then begin
+    if StartProcessDirect(SaveDir) then
+      Result := '{"status":"ok"}'
+    else
+      Result := '{"error":true,"code":"terminal_request_failed"}';
+    Exit; end;
+  if Path = '/process/end' then begin EndProcessDirect; Result := '{"status":"ok"}'; Exit; end;
+
+  if Path = '/capture/face' then begin
+    if CaptureFaceDirect(SaveDir, SavePath) then
+      Result := '{"status":"ok",' + JsonStr('save_path', SavePath) + '}'
+    else Result := '{"error":true,"code":"capture_failed"}'; Exit; end;
+
+  if Path = '/capture/fingerprint' then begin
+    if CaptureFingerprintDirect(SaveDir, SavePath) then
+      Result := '{"status":"ok",' + JsonStr('save_path', SavePath) + '}'
+    else Result := '{"error":true,"code":"capture_failed"}'; Exit; end;
+
+  if Path = '/capture/iris' then begin
+    DllCallbackUrl := CallbackUrl;
+    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
+    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    Client := TTerminalClient.Create;
+    try
+      if Client.PostJson(TerminalBaseUrl, '/resources/iris/request',
+          '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
+      begin DoLog('[HTTP] Iris async: accepted ' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[HTTP] Iris async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+    finally Client.Free; end; Exit; end;
+
+  if Path = '/ocr' then begin
+    DllCallbackUrl := CallbackUrl;
+    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
+    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    Client := TTerminalClient.Create;
+    try
+      if Client.PostJson(TerminalBaseUrl, '/resources/ocr-document/request',
+          '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
+      begin DoLog('[HTTP] OCR async: accepted ' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[HTTP] OCR async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+    finally Client.Free; end; Exit; end;
+
+  if Path = '/nfc' then begin
+    DllCallbackUrl := CallbackUrl;
+    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
+    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    Client := TTerminalClient.Create;
+    try
+      if Client.PostJson(TerminalBaseUrl, '/resources/nfc-card/request',
+          '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
+      begin DoLog('[HTTP] NFC async: accepted ' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[HTTP] NFC async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+    finally Client.Free; end; Exit; end;
+
+  if Path = '/preview/camera/start' then begin
+    ThirdPartyHwndVal := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
+    if ThirdPartyHwndVal <> 0 then FThirdPartyCameraHwnd := ThirdPartyHwndVal;
+    DoLog('[Preview] DLL camera preview, target_hwnd=' + IntToStr(ThirdPartyHwndVal));
+    if FPreviewManager.StartPreview(prtCamera, ThirdPartyHwndVal, TerminalBaseUrl) then begin
+      MakeCallback(RequestId, CallbackUrl,
+        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'face_image') + ',' +
+        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtCamera)) + ',' +
+        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtCamera)) + '}');
+      Result := '{"accepted":true}'; end
+    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+
+  if Path = '/preview/camera/stop' then begin FPreviewManager.StopPreview(prtCamera); Result := '{"status":"ok"}'; Exit; end;
+
+  if Path = '/preview/fingerprint/start' then begin
+    FpHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
+    if FpHwnd <> 0 then FThirdPartyFingerprintHwnd := FpHwnd;
+    if FPreviewManager.StartPreview(prtFingerprint, FpHwnd, TerminalBaseUrl) then begin
+      MakeCallback(RequestId, CallbackUrl,
+        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'fingerprint_image') + ',' +
+        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtFingerprint)) + ',' +
+        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtFingerprint)) + '}');
+      Result := '{"accepted":true}'; end
+    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+
+  if Path = '/preview/fingerprint/stop' then begin FPreviewManager.StopPreview(prtFingerprint); Result := '{"status":"ok"}'; Exit; end;
+
+  if Path = '/preview/iris/start' then begin
+    IrisHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
+    if FPreviewManager.StartPreview(prtIris, IrisHwnd, TerminalBaseUrl) then begin
+      MakeCallback(RequestId, CallbackUrl,
+        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'iris_image') + ',' +
+        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtIris)) + ',' +
+        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtIris)) + '}');
+      Result := '{"accepted":true}'; end
+    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+
+  if Path = '/preview/iris/stop' then begin FPreviewManager.StopPreview(prtIris); Result := '{"status":"ok"}'; Exit; end;
+
+  Result := '{"error":true,"code":"not_found","message":"unknown:' + Path + '"}'; end;
+
+// ============================================================
+// HandleTerminalCallback
+// ============================================================
+function TDelphiProxyServer.HandleTerminalCallback(const BodyUtf8: string): string;
+var ResourceType, RequestId, DllCallbackUrl, SaveDir, SavePath, PayloadUtf8: string;
+  OcrResult: TOcrCallbackResult; NfcResult: TNfcCallbackResult; ImgResult: TImageCallbackResult;
+  I: Integer; ImgPath, Suffix: string;
+begin
+  ResourceType := FCallbackParser.GetResourceType(BodyUtf8);
+  RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
+  DoLog('[CB] Received: resource_type=' + ResourceType + ' request_id=' + RequestId + ' preview=' + Copy(BodyUtf8, 1, 200));
+
+  SaveDir := FRequestSaveDirs.Values[RequestId];
+  DllCallbackUrl := FRequestCallbacks.Values[RequestId];
+  if SaveDir = '' then SaveDir := FTerminalManager.ProcessSaveDir;
+  if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
+
+  if ResourceType = 'ocr_event_status' then begin
+    DoLog('[CB] OCR process event (waiting for final ocr_document)');
+  end
+  else if ResourceType = 'ocr_document' then begin
+    OcrResult := FCallbackParser.ParseOcrDocument(BodyUtf8);
+    if OcrResult.Valid then begin
+      SavePath := FFileSaver.SaveJsonFile(BodyUtf8, SaveDir, RequestId, 'OCR');
+      // Save evidence images
+      I := 0;
+      while I < OcrResult.EvidenceImagesCount do begin
+        if OcrResult.EvidenceImages[I].ImageBase64 <> '' then begin
+          Suffix := '';
+          if OcrResult.EvidenceImages[I].ImageType = 2 then Suffix := '_portrait'
+          else case OcrResult.EvidenceImages[I].LampType of
+            1: Suffix := '_visible';
+            2: Suffix := '_infrared';
+            3: Suffix := '_ultraviolet';
+          end;
+          ImgPath := FFileSaver.SaveBase64Image(OcrResult.EvidenceImages[I].ImageBase64,
+            'image/bmp', SaveDir, RequestId + Suffix, 'evidence');
+          DoLog('[CB] OCR evidence: type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
+            ' lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + ' saved=' + ImgPath);
+        end;
+        I := I + 1;
+      end;
+      DoLog('[CB] OCR result: mrz=' + OcrResult.Mrz + ' evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + ' save=' + SavePath);
+      if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/ocr');
+      if DllCallbackUrl <> '' then begin
+        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('mrz', OcrResult.Mrz) + ',' +
+          JsonStr('save_path', SavePath) + '}';
+        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+    else DoLog('[CB] OCR: parse failed'); end
+
+  else if ResourceType = 'nfc_card' then begin
+    DoLog('[CB] NFC raw=' + Copy(BodyUtf8, 1, 500));
+    NfcResult := FCallbackParser.ParseNfcCard(BodyUtf8);
+    if NfcResult.Valid then begin
+      DoLog('[CB] NFC result: card_text=' + NfcResult.CardText);
+      if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/nfc-card');
+      if DllCallbackUrl <> '' then begin
+        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('card_text', NfcResult.CardText) + '}';
+        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+    else DoLog('[CB] NFC: parse failed, no card_text'); end
+
+  else if ResourceType = 'iris_image' then begin
+    ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
+    if ImgResult.Valid then begin
+      SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'iris');
+      DoLog('[CB] Iris result: save=' + SavePath);
+      if DllCallbackUrl <> '' then begin
+        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('save_path', SavePath) + '}';
+        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+    else DoLog('[CB] Iris: parse failed'); end
+
+  else if ResourceType = 'face_image' then begin
+    ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
+    if ImgResult.Valid then begin
+      SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'face_async');
+      DoLog('[CB] Face async: save=' + SavePath); end; end
+
+  else if ResourceType = 'fingerprint_image' then begin
+    ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
+    if ImgResult.Valid then begin
+      SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'fingerprint_async');
+      DoLog('[CB] Fingerprint async: save=' + SavePath); end; end
+
+  else DoLog('[CB] Unknown resource_type: ' + ResourceType);
+
+  Result := '{"status":"accepted"}'; end;
+
+end.

@@ -1,0 +1,30 @@
+# Visual Studio and build output
+.vs/
+.claude/settings.local.json
+codex_build/
+x64/
+Release/
+Debug/
+*.obj
+*.dcu
+*.aps
+*.pdb
+*.exp
+*.lib
+*.user
+
+# Runtime output and captured device data
+logs/
+*.log
+demo/Delphi7Demo/captures/
+demo/DelphiThirdPartyDemo/captures/
+demo/Delphi7Demo/*_Logs/
+demo/DelphiThirdPartyDemo/*_Logs/
+
+# Bundled runtime dependencies and prior snapshots
+demo/Delphi7Demo/vlc/
+demo/Delphi7Demo - 副本/
+backup_*/
+
+# One-off generation or repair scripts
+demo/Delphi7Demo/_*.py

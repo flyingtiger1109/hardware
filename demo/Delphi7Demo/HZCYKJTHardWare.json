@@ -1,0 +1,70 @@
+{
+  "delphi_server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "terminal": {
+    "mode": "auto_subnet",
+    "scheme": "http",
+    "port": 9098,
+    "check_on_init": false,
+    "default_index": 1,
+    "preferred_subnet_prefix": "192.168.20",
+    "fixed_terminals": [
+      {
+        "index": 1,
+        "name": "终端1",
+        "base_url": "http://192.168.20.30:9098"
+      },
+      {
+        "index": 2,
+        "name": "终端2",
+        "base_url": "http://192.168.20.31:9098"
+      }
+    ],
+    "auto_subnet_devices": [
+      {
+        "index": 1,
+        "name": "terminal_a",
+        "host_suffix": 30
+      },
+      {
+        "index": 2,
+        "name": "terminal_b",
+        "host_suffix": 11
+      }
+    ]
+  },
+  "callback_server": {
+    "host": "",
+    "auto_bind_lan_ip": true,
+    "listen_any": true,
+    "port": 39091,
+    "base_path": "/HZCYKJTHardWare/callback"
+  },
+  "timeout": {
+    "http_connect_ms": 5000,
+    "http_request_ms": 3000,
+    "face_capture_ms": 5000,
+    "fingerprint_capture_ms": 5000,
+    "ocr_ms": 10000
+  },
+  "save": {
+    "default_root": ".\\captures",
+    "create_date_folder": true,
+    "create_request_folder": true
+  },
+  "preview": {
+    "renderer": "libvlc",
+    "auto_reconnect": true,
+    "check_hwnd_interval_ms": 500,
+    "stop_preview_on_end_process": false,
+    "rtsp_network_caching_ms": 150,
+    "rtsp_live_caching_ms": 150,
+    "rtsp_transport": "tcp"
+  },
+  "log": {
+    "dir": "HZCYKJTHardWare_Logs",
+    "level": "info"
+  }
+}

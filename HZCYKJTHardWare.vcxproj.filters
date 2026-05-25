@@ -1,0 +1,152 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="婧愭枃浠?>
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="澶存枃浠?>
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{B2C3D4E5-F6A7-8901-BCDE-F12345678901}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework.h">
+      <Filter>澶存枃浠?/Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>澶存枃浠?/Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">`r`n      <Filter>include</Filter>`r`n    </ClInclude>`r`n    <ClInclude Include="include\HZCYKJTHardWare.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\HZCYKJTHardWare_types.h">
+      <Filter>include</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\hzsjkjt_context.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\logger.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\config_manager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\network_detector.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal_manager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\terminal_status_checker.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\http_client.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\callback_server.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\request_session_manager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\result_parser.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image_saver.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\event_dispatcher.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\preview_manager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\rtsp_renderer.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\libvlc_rtsp_renderer.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\json_helper.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base64.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\path_helper.h">
+      <Filter>src</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="pch.cpp">
+      <Filter>婧愭枃浠?/Filter>
+    </ClCompile>
+    <ClCompile Include="src\dllmain.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\hzsjkjt_context.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\logger.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\config_manager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\network_detector.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal_manager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal_status_checker.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\http_client.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\callback_server.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\request_session_manager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\result_parser.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image_saver.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\event_dispatcher.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\preview_manager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\libvlc_rtsp_renderer.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\json_helper.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\base64.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\path_helper.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\exports.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>`r`n    <ResourceCompile Include="HZCYKJTHardWare.rc">`r`n      <Filter>src</Filter>`r`n    </ResourceCompile>`r`n  </ItemGroup>`r`n</Project>
+

@@ -1,0 +1,959 @@
+﻿#include "pch.h"
+#include "include/HZCYKJTHardWare.h"
+#include "hzsjkjt_context.h"
+#include "config_manager.h"
+#include "logger.h"
+#include "network_detector.h"
+#include "terminal_manager.h"
+#include "terminal_status_checker.h"
+#include "http_client.h"
+#include "delphi_proxy.h"
+#include "callback_server.h"
+#include "request_session_manager.h"
+#include "event_dispatcher.h"
+#include "preview_manager.h"
+#include "path_helper.h"
+#include "result_parser.h"
+#include "image_saver.h"
+
+// Export function implementations use small body helpers so SEH wrappers do not
+// span C++ object lifetimes.
+
+static std::string GenerateSyncRequestId(const char* prefix) {
+    static std::atomic<int> seq{0};
+    int currentSeq = ++seq;
+    char seqBuf[16];
+    snprintf(seqBuf, sizeof(seqBuf), "%03d", currentSeq);
+    return std::string(prefix) + "_" + HZCYKJTHardWare::PathHelper::GetTimestampString() + "_" + seqBuf;
+}
+
+static std::string ResolveSaveRoot(const char* saveDir) {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    std::string root = saveDir ? saveDir : "";
+    if (!root.empty()) return root;
+
+    auto lock = HZCYKJTHardWare::ReadLock();
+    root = ctx.runtime_save_path;
+    if (root.empty()) {
+        root = ctx.save_default_root;
+    }
+    return root;
+}
+
+static void PostCaptureEvent(const std::string& requestId,
+                             const std::string& resourceType,
+                             int eventType,
+                             int status,
+                             const char* errorCode,
+                             const char* message,
+                             const char* savePath = nullptr,
+                             const char* rawJson = nullptr) {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    std::string terminalBaseUrl;
+    int terminalIndex = 0;
+    {
+        auto lock = HZCYKJTHardWare::ReadLock();
+        terminalBaseUrl = ctx.current_terminal_base_url;
+        terminalIndex = ctx.current_terminal_index;
+    }
+
+    HZCYKJTHardWare_EVENT event;
+    memset(&event, 0, sizeof(event));
+    event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
+    event.event_type = eventType;
+    event.request_id = requestId.c_str();
+    event.resource_type = resourceType.c_str();
+    event.status = status;
+    event.error_code = errorCode;
+    event.message = message;
+    event.terminal_base_url = terminalBaseUrl.c_str();
+    event.terminal_index = terminalIndex;
+    event.save_path = savePath;
+    event.raw_json = rawJson;
+    HZCYKJTHardWare::EventDispatcher::Instance().PostEvent(event);
+}
+
+static int GetVersionBody(char* buffer, int bufferSize) {
+    static const char* kVersion = "1.0";
+    if (!buffer || bufferSize <= 0) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+    int required = (int)strlen(kVersion) + 1;
+    if (bufferSize < required) {
+        return HZCYKJTHardWare_RET_BUFFER_TOO_SMALL;
+    }
+    memcpy(buffer, kVersion, required);
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static std::string BuildCallbackUrl(const HZCYKJTHardWare::HzsjkjtContext& ctx,
+                                    const char* route) {
+    return "http://" + ctx.callback_url_host + ":" +
+        std::to_string(ctx.callback_server_port) +
+        ctx.callback_server_base_path + route;
+}
+
+static void TryRestoreCameraPreviewToDelphiHost(const std::string& requestId,
+                                                intptr_t vlcHwndValue,
+                                                intptr_t delphiHostHwndValue) {
+    if (vlcHwndValue == 0) {
+        return;
+    }
+
+    HWND vlcHwnd = reinterpret_cast<HWND>(vlcHwndValue);
+    HWND delphiHostHwnd = reinterpret_cast<HWND>(delphiHostHwndValue);
+    if (!IsWindow(vlcHwnd)) {
+        LOG_WARN("EXPORT", "归还预览窗口跳过：request_id=%s，vlc_hwnd=%p 已无效", requestId.c_str(), vlcHwnd);
+        return;
+    }
+
+    bool hasValidDelphiHost = delphiHostHwndValue != 0 && IsWindow(delphiHostHwnd);
+    HWND restoreParent = hasValidDelphiHost ? delphiHostHwnd : nullptr;
+
+    SetLastError(0);
+    HWND oldParent = SetParent(vlcHwnd, restoreParent);
+    DWORD setParentError = GetLastError();
+
+    RECT rc = {0};
+    BOOL gotRect = hasValidDelphiHost ? GetClientRect(delphiHostHwnd, &rc) : FALSE;
+    BOOL moved = FALSE;
+    DWORD moveError = 0;
+    if (gotRect) {
+        SetLastError(0);
+        moved = MoveWindow(vlcHwnd, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+        moveError = GetLastError();
+    }
+
+    LOG_INFO("EXPORT", "归还预览窗口：request_id=%s，vlc_hwnd=%p，delphi_host_hwnd=%p，restore_parent=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，move=%d，move_error=%lu",
+             requestId.c_str(), vlcHwnd, delphiHostHwnd, restoreParent, oldParent,
+             setParentError, gotRect, moved, moveError);
+}
+
+static int InitSdkBody() {
+    using namespace HZCYKJTHardWare;
+
+    auto& ctx = HzsjkjtContext::Instance();
+
+    {
+        auto lock = ReadLock();
+        if (ctx.initialized) {
+            return HZCYKJTHardWare_RET_OK;
+        }
+    }
+
+    // 初始化日志
+    std::string logDir = PathHelper::Join(ctx.dll_dir, "HZCYKJTHardWareDLL_Logs");
+    bool logOk = Logger::Instance().Init(logDir);
+    if (!logOk) {
+        logDir = "HZCYKJTHardWareDLL_Logs";
+        logOk = Logger::Instance().Init(logDir);
+    }
+    if (!logOk) {
+        wchar_t tempPath[MAX_PATH] = {0};
+        GetTempPathW(MAX_PATH, tempPath);
+        std::wstring ws(tempPath);
+        if (!ws.empty() && ws.back() != L'\\') ws += L'\\';
+        ws += L"HZCYKJTHardWareDLL_Logs";
+        logDir = PathHelper::WideToUtf8(ws);
+        logOk = Logger::Instance().Init(logDir);
+    }
+
+    ConfigManager cfg;
+    int ret = cfg.Load(ctx.dll_dir);
+    if (ret == HZCYKJTHardWare_RET_CONFIG_INVALID) {
+        Logger::Instance().Shutdown();
+        return HZCYKJTHardWare_RET_CONFIG_INVALID;
+    }
+
+    std::string cfgLogDir = cfg.GetLogDir();
+    if (!cfgLogDir.empty() && cfgLogDir != "HZCYKJTHardWareDLL_Logs") {
+        bool absoluteLogDir =
+            cfgLogDir[0] == '\\' ||
+            cfgLogDir[0] == '/' ||
+            (cfgLogDir.size() > 1 && cfgLogDir[1] == ':');
+        if (!absoluteLogDir) {
+            cfgLogDir = PathHelper::Join(ctx.dll_dir, cfgLogDir);
+        }
+        if (!Logger::Instance().Init(cfgLogDir)) {
+            Logger::Instance().Init(logDir); // 切换失败，回退到原路径
+        }
+    }
+
+    std::string cfgLogLevel = cfg.GetLogLevel();
+    if (cfgLogLevel == "debug") {
+        Logger::Instance().SetLevel(LogLevel::Debug);
+    } else if (cfgLogLevel == "warn") {
+        Logger::Instance().SetLevel(LogLevel::Warn);
+    } else if (cfgLogLevel == "error") {
+        Logger::Instance().SetLevel(LogLevel::Error);
+    }
+
+    std::string delphiServerUrl = cfg.GetDelphiServerUrl();
+
+    {
+        auto lock = WriteLock();
+        ctx.delphi_server_url = delphiServerUrl;
+        ctx.current_terminal_index = 0;
+        ctx.current_terminal_base_url = delphiServerUrl;
+        ctx.selected_lan_ip.clear();
+        ctx.selected_subnet_prefix.clear();
+
+        ctx.http_connect_timeout_ms = cfg.GetHttpConnectTimeoutMs();
+        ctx.http_request_timeout_ms = cfg.GetHttpRequestTimeoutMs();
+        ctx.face_capture_timeout_ms = cfg.GetFaceCaptureTimeoutMs();
+        ctx.fingerprint_capture_timeout_ms = cfg.GetFingerprintCaptureTimeoutMs();
+        ctx.ocr_timeout_ms = cfg.GetOcrTimeoutMs();
+
+        ctx.save_default_root = cfg.GetSaveDefaultRoot();
+        ctx.save_create_date_folder = cfg.GetCreateDateFolder();
+        ctx.save_create_request_folder = cfg.GetCreateRequestFolder();
+        ctx.callback_server_base_path = cfg.GetCallbackBasePath();
+        ctx.rtsp_network_caching_ms = cfg.GetRtspNetworkCachingMs();
+        ctx.rtsp_live_caching_ms = cfg.GetRtspLiveCachingMs();
+        ctx.rtsp_transport = cfg.GetRtspTransport();
+    }
+
+    std::string callbackHost = cfg.GetCallbackServerHost();
+    if (callbackHost.empty()) {
+        callbackHost = "127.0.0.1";
+    }
+
+    std::string listenHost = cfg.GetListenAny() ? "0.0.0.0" : callbackHost;
+    int callbackPort = cfg.GetCallbackServerPort();
+    std::string callbackUrl = "http://" + callbackHost + ":" +
+        std::to_string(callbackPort) + cfg.GetCallbackBasePath();
+
+    LOG_DEBUG("EXPORT", "Starting callback HTTP server: listen=%s:%d, callback_url=%s",
+             listenHost.c_str(), callbackPort, callbackUrl.c_str());
+
+    {
+        auto lock = WriteLock();
+        ctx.callback_server_host = listenHost;
+        ctx.callback_server_port = callbackPort;
+        ctx.callback_url_host = callbackHost;
+    }
+
+    ret = CallbackServer::Instance().Start(listenHost, callbackPort);
+    if (ret != HZCYKJTHardWare_RET_OK) {
+        LOG_ERROR("EXPORT", "初始化DLL失败：回调HTTP服务启动失败，listen=%s:%d", listenHost.c_str(), callbackPort);
+        Logger::Instance().Shutdown();
+        return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
+    }
+    {
+        auto lock = WriteLock();
+        ctx.callback_server_running = true;
+    }
+
+    EventDispatcher::Instance().Start();
+
+    DelphiProxy proxy(delphiServerUrl);
+    if (!proxy.Ping()) {
+        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi程序未启动或/ping失败，delphi_server=%s", delphiServerUrl.c_str());
+        EventDispatcher::Instance().Stop();
+        CallbackServer::Instance().Stop();
+        {
+            auto lock = WriteLock();
+            ctx.callback_server_running = false;
+            ctx.delphi_server_url.clear();
+            ctx.current_terminal_base_url.clear();
+        }
+        Logger::Instance().Shutdown();
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        ctx.initialized = true;
+    }
+
+    LOG_INFO("EXPORT", "初始化DLL成功：delphi_server=%s，callback_url=%s，dll_dir=%s",
+             delphiServerUrl.c_str(), callbackUrl.c_str(), ctx.dll_dir.c_str());
+
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int ReleaseSdkBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：ReleaseSdk()");
+
+    auto& ctx = HzsjkjtContext::Instance();
+
+    {
+        auto lock = ReadLock();
+        if (!ctx.initialized) {
+            return HZCYKJTHardWare_RET_OK;
+        }
+    }
+
+    std::string delphiServerUrl;
+    std::string previewRequestId;
+    intptr_t vlcHwnd = 0;
+    intptr_t delphiHostHwnd = 0;
+    {
+        auto lock = ReadLock();
+        delphiServerUrl = ctx.delphi_server_url;
+        previewRequestId = ctx.camera_preview_request_id;
+        vlcHwnd = ctx.camera_preview_vlc_hwnd;
+        delphiHostHwnd = ctx.camera_preview_delphi_host_hwnd;
+    }
+
+    TryRestoreCameraPreviewToDelphiHost(previewRequestId, vlcHwnd, delphiHostHwnd);
+
+    if (!previewRequestId.empty() && !delphiServerUrl.empty()) {
+        DelphiProxy proxy(delphiServerUrl);
+        if (!proxy.StopCameraPreview(previewRequestId)) {
+            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi停止预览失败：request_id=%s，delphi_server=%s",
+                     previewRequestId.c_str(), delphiServerUrl.c_str());
+        }
+    }
+
+    RequestSessionManager::Instance().CancelAll();
+
+    CallbackServer::Instance().Stop();
+
+    EventDispatcher::Instance().Stop();
+
+    {
+        auto lock = WriteLock();
+        ctx.callback_server_running = false;
+        ctx.Reset();
+    }
+
+    Logger::Instance().Shutdown();
+
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int SetTerminalBaseUrlBody(const char* baseUrl) {
+    using namespace HZCYKJTHardWare;
+    if (!baseUrl || !baseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
+    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    LOG_WARN("EXPORT", "代理模式不支持DLL直连终端URL：base_url=%s，实际终端由Delphi程序管理", baseUrl);
+    return HZCYKJTHardWare_RET_UNSUPPORTED;
+}
+
+static int SetCallbackServerBody(const char* host, int port) {
+    using namespace HZCYKJTHardWare;
+    auto& ctx = HzsjkjtContext::Instance();
+    if (port <= 0 || port > 65535) return HZCYKJTHardWare_RET_INVALID_PARAM;
+
+    bool wasRunning = false;
+    std::string selectedLanIp;
+    {
+        auto lock = ReadLock();
+        if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+        wasRunning = ctx.callback_server_running;
+        selectedLanIp = ctx.selected_lan_ip;
+    }
+
+    if (wasRunning) {
+        CallbackServer::Instance().Stop();
+        auto lock = WriteLock();
+        ctx.callback_server_running = false;
+    }
+
+    std::string listenHost("0.0.0.0");
+    std::string callbackHost = host ? host : "";
+    if (callbackHost.empty()) {
+        callbackHost = selectedLanIp;
+        if (callbackHost.empty()) callbackHost = "127.0.0.1";
+    }
+
+    int ret = CallbackServer::Instance().Start(listenHost, port);
+    if (ret != HZCYKJTHardWare_RET_OK) return ret;
+
+    {
+        auto lock = WriteLock();
+        ctx.callback_server_host = listenHost;
+        ctx.callback_server_port = port;
+        ctx.callback_url_host = callbackHost;
+        ctx.callback_server_running = true;
+    }
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int SetSavePathBody(const char* savePath) {
+    using namespace HZCYKJTHardWare;
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    auto lock = WriteLock();
+    ctx.runtime_save_path = savePath ? savePath : "";
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int SwitchTerminalBody(int terminalIndex) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：SwitchTerminal(%d)", terminalIndex);
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (terminalIndex <= 0) return HZCYKJTHardWare_RET_TERMINAL_INDEX_INVALID;
+
+    // Same terminal — skip
+    {
+        auto lock = ReadLock();
+        if (ctx.current_terminal_index == terminalIndex) {
+            LOG_INFO("EXPORT", "SwitchTerminal跳过：已在终端%d", terminalIndex);
+            return HZCYKJTHardWare_RET_OK;
+        }
+    }
+
+    RequestSessionManager::Instance().ExpireAllForTerminalSwitch();
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.SwitchTerminal(terminalIndex)) {
+        LOG_ERROR("EXPORT", "SwitchTerminal转发Delphi失败：terminal_index=%d", terminalIndex);
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        ctx.current_terminal_index = terminalIndex;
+    }
+
+    LOG_INFO("EXPORT", "SwitchTerminal成功：terminal_index=%d，已转发Delphi", terminalIndex);
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int SwitchTerminalByUrlBody(const char* terminalBaseUrl) {
+    using namespace HZCYKJTHardWare;
+    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (!terminalBaseUrl || !terminalBaseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
+    LOG_WARN("EXPORT", "代理模式不支持DLL按URL切换终端：terminal_base_url=%s，实际终端由Delphi程序管理", terminalBaseUrl);
+    return HZCYKJTHardWare_RET_UNSUPPORTED;
+}
+
+static int GetDetectedNetworkInfoBody(char* buffer, int bufferSize) {
+    using namespace HZCYKJTHardWare;
+    if (!buffer || bufferSize <= 0) return HZCYKJTHardWare_RET_INVALID_PARAM;
+
+    auto& ctx = HzsjkjtContext::Instance();
+    int callbackPort = CallbackServer::Instance().GetPort();
+
+    std::string json = "{\n";
+    json += "  \"selected_ip\": \"" + ctx.selected_lan_ip + "\",\n";
+    json += "  \"selected_subnet_prefix\": \"" + ctx.selected_subnet_prefix + "\",\n";
+    json += "  \"delphi_server_url\": \"" + ctx.delphi_server_url + "\",\n";
+    json += "  \"callback_host\": \"" + ctx.callback_url_host + "\",\n";
+    json += "  \"callback_port\": " + std::to_string(callbackPort) + "\n";
+    json += "}";
+
+    if ((int)json.size() >= bufferSize) return HZCYKJTHardWare_RET_BUFFER_TOO_SMALL;
+    memcpy(buffer, json.c_str(), json.size() + 1);
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int CheckTerminalStatusBody() {
+    using namespace HZCYKJTHardWare;
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    DelphiProxy proxy(ctx.delphi_server_url);
+    return proxy.Ping() ? HZCYKJTHardWare_RET_OK : HZCYKJTHardWare_RET_TERMINAL_UNREACHABLE;
+}
+
+static int StartProcessBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StartProcess(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PROCESS");
+
+    // Create session so callbacks can be matched
+    RequestSessionManager::Instance().CreateSession(
+        requestId, saveRoot, ctx.ocr_timeout_ms);
+    RequestSessionManager::Instance().MarkAccepted(requestId);
+
+    // Build callbacks JSON for async operations
+    std::string ocrCallback = BuildCallbackUrl(ctx, "/ocr");
+    std::string nfcCallback = BuildCallbackUrl(ctx, "/nfc-card");
+    std::string irisCallback = BuildCallbackUrl(ctx, "/iris");
+    std::string callbacksJson = "{" +
+        std::string("\"callbacks\":{") +
+        "\"ocr\":\"" + ocrCallback + "\"," +
+        "\"nfc\":\"" + nfcCallback + "\"," +
+        "\"iris\":\"" + irisCallback + "\"" +
+        "}}";
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
+        LOG_ERROR("EXPORT", "开始流程失败：DLL转发Delphi失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        ctx.process_active = true;
+    }
+
+    LOG_INFO("EXPORT", "Delphi已受理开始流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int EndProcessBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：EndProcess()");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    RequestSessionManager::Instance().CancelAll();
+    DelphiProxy proxy(ctx.delphi_server_url);
+    bool ok = proxy.ProcessEnd();
+
+    {
+        auto lock = WriteLock();
+        ctx.process_active = false;
+    }
+
+    if (!ok) {
+        LOG_ERROR("EXPORT", "结束流程失败：DLL转发Delphi失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    LOG_INFO("EXPORT", "Delphi已处理结束流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+// ---- 棰勮 ----
+
+static int StartCameraPreviewBody(void* hwnd) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StartCameraPreview(hwnd=%p)", hwnd);
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
+        LOG_ERROR("EXPORT", "启动摄像头预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        return HZCYKJTHardWare_RET_INVALID_HWND;
+    }
+
+    {
+        auto lock = ReadLock();
+        if (ctx.camera_preview_running) {
+            LOG_WARN("EXPORT", "启动摄像头预览失败：预览已运行，request_id=%s",
+                     ctx.camera_preview_request_id.c_str());
+            return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
+        }
+    }
+
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
+        LOG_ERROR("EXPORT", "启动摄像头预览失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        ctx.camera_preview_running = true;
+        ctx.camera_preview_request_id = requestId;
+        ctx.camera_preview_third_party_hwnd = thirdPartyHwnd;
+        ctx.camera_preview_vlc_hwnd = 0;
+    }
+
+    LOG_INFO("EXPORT", "摄像头预览请求已转发Delphi：request_id=%s，third_party_hwnd=%p，callback_url=%s",
+             requestId.c_str(), hwnd, callbackUrl.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StopCameraPreviewBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StopCameraPreview()");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId;
+    std::string delphiServerUrl;
+    intptr_t vlcHwnd = 0;
+    intptr_t delphiHostHwnd = 0;
+    {
+        auto lock = ReadLock();
+        if (!ctx.camera_preview_running) {
+            return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
+        }
+        requestId = ctx.camera_preview_request_id;
+        delphiServerUrl = ctx.delphi_server_url;
+        vlcHwnd = ctx.camera_preview_vlc_hwnd;
+        delphiHostHwnd = ctx.camera_preview_delphi_host_hwnd;
+    }
+
+    TryRestoreCameraPreviewToDelphiHost(requestId, vlcHwnd, delphiHostHwnd);
+
+    DelphiProxy proxy(delphiServerUrl);
+    bool ok = proxy.StopCameraPreview(requestId);
+
+    {
+        auto lock = WriteLock();
+        ctx.camera_preview_running = false;
+        ctx.camera_preview_request_id.clear();
+        ctx.camera_preview_third_party_hwnd = 0;
+        ctx.camera_preview_vlc_hwnd = 0;
+        ctx.camera_preview_delphi_host_hwnd = 0;
+    }
+
+    if (!ok) {
+        LOG_ERROR("EXPORT", "停止摄像头预览失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), delphiServerUrl.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    LOG_INFO("EXPORT", "摄像头预览已停止：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StartFingerprintPreviewBody(void* hwnd) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StartFingerprintPreview(hwnd=%p)", hwnd);
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
+        LOG_ERROR("EXPORT", "启动指纹预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        return HZCYKJTHardWare_RET_INVALID_HWND;
+    }
+
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP_PREVIEW");
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.StartFingerprintPreview(requestId, thirdPartyHwnd, callbackUrl)) {
+        LOG_ERROR("EXPORT", "启动指纹预览失败：DLL转发Delphi失败，request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        ctx.fingerprint_preview_running = true;
+        ctx.camera_preview_request_id = requestId; // reuse for preview tracking
+    }
+
+    LOG_INFO("EXPORT", "指纹预览请求已转发Delphi：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StopFingerprintPreviewBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StopFingerprintPreview()");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId;
+    std::string delphiServerUrl;
+    {
+        auto lock = ReadLock();
+        if (!ctx.fingerprint_preview_running) {
+            return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
+        }
+        requestId = ctx.camera_preview_request_id;
+        delphiServerUrl = ctx.delphi_server_url;
+    }
+
+    DelphiProxy proxy(delphiServerUrl);
+    proxy.StopFingerprintPreview(requestId);
+
+    {
+        auto lock = WriteLock();
+        ctx.fingerprint_preview_running = false;
+    }
+
+    LOG_INFO("EXPORT", "指纹预览已停止：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StartIrisPreviewBody(void* hwnd) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StartIrisPreview(hwnd=%p)", hwnd);
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
+        LOG_ERROR("EXPORT", "启动虹膜预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        return HZCYKJTHardWare_RET_INVALID_HWND;
+    }
+
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.StartIrisPreview(requestId, thirdPartyHwnd, callbackUrl)) {
+        LOG_ERROR("EXPORT", "启动虹膜预览失败：DLL转发Delphi失败，request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    LOG_INFO("EXPORT", "虹膜预览请求已转发Delphi：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StopIrisPreviewBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StopIrisPreview()");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId;
+    std::string delphiServerUrl;
+    {
+        auto lock = ReadLock();
+        requestId = ctx.camera_preview_request_id;
+        delphiServerUrl = ctx.delphi_server_url;
+    }
+
+    DelphiProxy proxy(delphiServerUrl);
+    proxy.StopIrisPreview(requestId);
+
+    LOG_INFO("EXPORT", "虹膜预览已停止：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int StartPlatePreviewBody(void* hwnd) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StartPlatePreview(hwnd=%p)", hwnd);
+    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    LOG_WARN("EXPORT", "代理模式暂不支持车牌预览：未定义Delphi HTTP端点，已拒绝调用");
+    return HZCYKJTHardWare_RET_UNSUPPORTED;
+}
+
+static int StopPlatePreviewBody() {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：StopPlatePreview()");
+    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    LOG_WARN("EXPORT", "代理模式暂不支持停止车牌预览：未定义Delphi HTTP端点，已拒绝调用");
+    return HZCYKJTHardWare_RET_UNSUPPORTED;
+}
+
+// ---- 鎶撴媿 ----
+
+static int CaptureCameraImageBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：CaptureCameraImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FACE");
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string savePath;
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
+        LOG_ERROR("EXPORT", "人脸抓拍失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    LOG_INFO("EXPORT", "人脸抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int CaptureFingerprintImageBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：CaptureFingerprintImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP");
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string savePath;
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {
+        LOG_ERROR("EXPORT", "指纹抓拍失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    LOG_INFO("EXPORT", "指纹抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int CaptureIrisImageBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：CaptureIrisImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    int timeoutMs = ctx.face_capture_timeout_ms;
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string requestId = RequestSessionManager::Instance().CreateSession(
+        HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, saveRoot, timeoutMs);
+
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
+        LOG_ERROR("EXPORT", "虹膜抓拍提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
+                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "Iris request HTTP failed",
+                         nullptr, nullptr);
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    RequestSessionManager::Instance().MarkAccepted(requestId);
+    LOG_INFO("EXPORT", "Delphi已受理虹膜抓拍请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int RequestOCRBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：RequestOCR(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string requestId = RequestSessionManager::Instance().CreateSession(
+        HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, saveRoot, ctx.ocr_timeout_ms);
+
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
+        LOG_ERROR("EXPORT", "OCR请求提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
+                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "OCR request HTTP failed",
+                         nullptr, nullptr);
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    RequestSessionManager::Instance().MarkAccepted(requestId);
+    LOG_INFO("EXPORT", "Delphi已受理OCR请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int RequestNfcCardBody(const char* saveDir) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：RequestNfcCard(saveDir=%s)", saveDir ? saveDir : "NULL");
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    int timeoutMs = ctx.ocr_timeout_ms;
+    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string requestId = RequestSessionManager::Instance().CreateSession(
+        HZCYKJTHardWare_RESOURCE_NFC_CARD, saveRoot, timeoutMs);
+
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
+        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
+        PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
+                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "NFC request HTTP failed",
+                         nullptr, nullptr);
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    RequestSessionManager::Instance().MarkAccepted(requestId);
+    LOG_INFO("NFC", "Delphi已受理IC卡识别请求：request_id=%s，callback_url=%s",
+             requestId.c_str(), callbackUrl.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
+static int RegisterEventCallbackBody(THZCYKJTHardWareEventCallback callback) {
+    using namespace HZCYKJTHardWare;
+    if (!callback) return HZCYKJTHardWare_RET_INVALID_PARAM;
+    EventDispatcher::Instance().SetCallback(callback);
+    return HZCYKJTHardWare_RET_OK;
+}
+
+// ============================================================================
+// Exported functions. Keep SEH wrappers outside C++ object lifetimes.
+// ============================================================================
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_InitSdk(void) {
+    __try { return InitSdkBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        OutputDebugStringA("=== HZCYKJTHardWare_InitSdk CRASH ===");
+        return 0;
+    }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_ReleaseSdk(void) {
+    __try { return ReleaseSdkBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_SwitchTerminal(int terminalIndex) {
+    __try { return SwitchTerminalBody(terminalIndex) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartProcess(const char* saveDir) {
+    __try { return StartProcessBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_EndProcess(void) {
+    __try { return EndProcessBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartCameraPreview(void* hwnd) {
+    __try { return StartCameraPreviewBody(hwnd) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopCameraPreview(void) {
+    __try { return StopCameraPreviewBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartFingerprintPreview(void* hwnd) {
+    __try { return StartFingerprintPreviewBody(hwnd) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopFingerprintPreview(void) {
+    __try { return StopFingerprintPreviewBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartIrisPreview(void* hwnd) {
+    __try { return StartIrisPreviewBody(hwnd) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopIrisPreview(void) {
+    __try { return StopIrisPreviewBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreview(void* hwnd) {
+    __try { return StartPlatePreviewBody(hwnd) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreview(void) {
+    __try { return StopPlatePreviewBody() == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureCameraImage(const char* saveDir) {
+    __try { return CaptureCameraImageBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir) {
+    __try { return CaptureFingerprintImageBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureIrisImage(const char* saveDir) {
+    __try { return CaptureIrisImageBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestOCR(const char* saveDir) {
+    __try { return RequestOCRBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestNfcCard(const char* saveDir) {
+    __try { return RequestNfcCardBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RegisterEventCallback(
+    THZCYKJTHardWareEventCallback callback)
+{
+    __try { return RegisterEventCallbackBody(callback) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
