@@ -38,11 +38,11 @@ Logger& Logger::Instance() {
 
 const char* Logger::LevelToString(LogLevel level) {
     switch (level) {
-        case LogLevel::Debug: return "DEBUG";
-        case LogLevel::Info:  return "INFO";
-        case LogLevel::Warn:  return "WARN";
-        case LogLevel::Error: return "ERROR";
-        default: return "INFO";
+        case LogLevel::Debug: return "调试";
+        case LogLevel::Info:  return "信息";
+        case LogLevel::Warn:  return "警告";
+        case LogLevel::Error: return "错误";
+        default: return "信息";
     }
 }
 
@@ -110,7 +110,7 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
 
     char lineBuf[4608];
     snprintf(lineBuf, sizeof(lineBuf), "[%s] [%s] [%s] %s\n",
-             timeBuf, moduleFunction, LevelToString(level), msgBuf);
+             timeBuf, LevelToString(level), moduleFunction, msgBuf);
 
     EnterCriticalSection(&m_cs);
     if (m_file) {
@@ -119,7 +119,7 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
     }
     LeaveCriticalSection(&m_cs);
 
-    OutputDebugStringA(lineBuf);
+    OutputDebugStringW(PathHelper::Utf8ToWide(lineBuf).c_str());
 }
 
 void Logger::Debug(const char* module, const char* function, const char* fmt, ...) {

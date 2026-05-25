@@ -86,14 +86,14 @@ DelphiProxy::DelphiProxy(const std::string& baseUrl)
 bool DelphiProxy::Ping() {
     std::string response;
     if (!Get("/ping", response)) {
-        LOG_ERROR("DelphiProxy", "Delphi ping failed: base_url=%s", baseUrl_.c_str());
+        LOG_ERROR("DelphiProxy", "Delphi程序连通性检查失败：base_url=%s", baseUrl_.c_str());
         return false;
     }
     if (!IsOkResponse(response)) {
-        LOG_ERROR("DelphiProxy", "Delphi ping returned invalid response: response=%s", response.c_str());
+        LOG_ERROR("DelphiProxy", "Delphi程序连通性响应无效：response=%s", response.c_str());
         return false;
     }
-    LOG_INFO("DelphiProxy", "Delphi ping ok: base_url=%s", baseUrl_.c_str());
+    LOG_INFO("DelphiProxy", "Delphi程序连通性检查成功：base_url=%s", baseUrl_.c_str());
     return true;
 }
 
@@ -221,7 +221,7 @@ bool DelphiProxy::StopIrisPreview(const std::string& requestId) {
 
 bool DelphiProxy::Get(const std::string& path, std::string& response) {
     if (baseUrl_.empty()) {
-        LOG_ERROR("DelphiProxy", "Delphi GET failed: base_url is empty, path=%s", path.c_str());
+        LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：base_url为空，method=GET，path=%s", path.c_str());
         return false;
     }
 
@@ -234,15 +234,15 @@ bool DelphiProxy::Get(const std::string& path, std::string& response) {
     std::string url = BuildUrl(path);
     bool ok = client.Get(url, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
-        LOG_ERROR("DelphiProxy", "DLL->Delphi GET failed: url=%s", url.c_str());
+        LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：method=GET，url=%s", url.c_str());
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
-        LOG_ERROR("DelphiProxy", "DLL->Delphi GET http status failed: url=%s, status=%d, response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序响应状态异常：method=GET，url=%s，status=%d，response=%s",
                   url.c_str(), statusCode, response.c_str());
         return false;
     }
-    LOG_DEBUG("DelphiProxy", "DLL->Delphi GET ok: url=%s, status=%d", url.c_str(), statusCode);
+    LOG_DEBUG("DelphiProxy", "DLL下发Delphi程序成功：method=GET，url=%s，status=%d", url.c_str(), statusCode);
     return true;
 }
 
@@ -250,7 +250,7 @@ bool DelphiProxy::PostJson(const std::string& path,
                            const std::string& body,
                            std::string& response) {
     if (baseUrl_.empty()) {
-        LOG_ERROR("DelphiProxy", "Delphi POST failed: base_url is empty, path=%s", path.c_str());
+        LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：base_url为空，method=POST，path=%s", path.c_str());
         return false;
     }
 
@@ -261,14 +261,14 @@ bool DelphiProxy::PostJson(const std::string& path,
     int statusCode = 0;
     HttpClient client;
     std::string url = BuildUrl(path);
-    LOG_DEBUG("DelphiProxy", "DLL->Delphi POST: url=%s, body=%s", url.c_str(), body.c_str());
+    LOG_DEBUG("DelphiProxy", "DLL正在下发Delphi程序：method=POST，url=%s，body=%s", url.c_str(), body.c_str());
     bool ok = client.PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
-        LOG_ERROR("DelphiProxy", "DLL->Delphi POST failed: url=%s", url.c_str());
+        LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：method=POST，url=%s", url.c_str());
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
-        LOG_ERROR("DelphiProxy", "DLL->Delphi POST http status failed: url=%s, status=%d, response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序响应状态异常：method=POST，url=%s，status=%d，response=%s",
                   url.c_str(), statusCode, response.c_str());
         return false;
     }
@@ -276,12 +276,12 @@ bool DelphiProxy::PostJson(const std::string& path,
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("DelphiProxy", "Delphi business error: url=%s, code=%s, message=%s, response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序返回业务错误：url=%s，code=%s，message=%s，response=%s",
                   url.c_str(), errorCode.c_str(), errorMessage.c_str(), response.c_str());
         return false;
     }
 
-    LOG_DEBUG("DelphiProxy", "DLL->Delphi POST ok: url=%s, status=%d, response=%s",
+    LOG_DEBUG("DelphiProxy", "DLL下发Delphi程序成功：method=POST，url=%s，status=%d，response=%s",
               url.c_str(), statusCode, response.c_str());
     return true;
 }
@@ -290,7 +290,7 @@ bool DelphiProxy::IsOkResponse(const std::string& response) {
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("DelphiProxy", "Delphi response error: code=%s, message=%s, response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序响应包含错误：code=%s，message=%s，response=%s",
                   errorCode.c_str(), errorMessage.c_str(), response.c_str());
         return false;
     }
@@ -300,7 +300,7 @@ bool DelphiProxy::IsOkResponse(const std::string& response) {
         return true;
     }
 
-    LOG_ERROR("DelphiProxy", "Delphi response is not ok: response=%s", response.c_str());
+    LOG_ERROR("DelphiProxy", "Delphi程序响应未返回成功状态：response=%s", response.c_str());
     return false;
 }
 
@@ -308,7 +308,7 @@ bool DelphiProxy::IsAcceptedResponse(const std::string& response) {
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("DelphiProxy", "Delphi accepted response error: code=%s, message=%s, response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序受理响应包含错误：code=%s，message=%s，response=%s",
                   errorCode.c_str(), errorMessage.c_str(), response.c_str());
         return false;
     }
@@ -317,7 +317,7 @@ bool DelphiProxy::IsAcceptedResponse(const std::string& response) {
         return true;
     }
 
-    LOG_ERROR("DelphiProxy", "Delphi response is not accepted: response=%s", response.c_str());
+    LOG_ERROR("DelphiProxy", "Delphi程序未受理请求：response=%s", response.c_str());
     return false;
 }
 
@@ -329,7 +329,7 @@ bool DelphiProxy::ExtractSavePath(const std::string& response,
 
     outSavePath = JsonHelper::GetString(response, "save_path");
     if (outSavePath.empty()) {
-        LOG_ERROR("DelphiProxy", "Delphi sync capture response missing save_path: response=%s",
+        LOG_ERROR("DelphiProxy", "Delphi程序同步抓拍响应缺少save_path：response=%s",
                   response.c_str());
         return false;
     }

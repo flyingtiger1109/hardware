@@ -237,3 +237,43 @@
 - 使用 `backup_before_delphi_proxy_20260522_151729` 恢复原 `demo/Delphi7Demo`。
 - 删除新增目录 `demo/DelphiThirdPartyDemo` 即可移除第三方调用示例副本。
 - DLL 回退按阶段 1-6 的回退说明执行，或直接使用备份目录中的旧 DLL 产物。
+
+## UI 与日志中文化小范围修复记录（2026-05-25）
+
+### 修改内容与原因
+
+- [x] 修改前初始化 Git，并创建可回退基线提交 `ec88dff backup-before-ui-log-review`。
+- [x] Delphi 日志文件改为按 UTF-8 字节追加写入，并增加写入锁，解决 ANSI/UTF-8 混写造成的中文乱码及并发写入风险。
+- [x] Delphi 界面日志改为由主线程写入 `TMemo`，避免终端回调工作线程直接访问 UI 控件。
+- [x] 修复 VLC 预览错误提示中的乱码文字，并将界面提示、状态提示和活动业务日志统一为中文描述。
+- [x] Delphi 接收 DLL JSON 的 `save_dir` 时由 UTF-8 转为 ANSI/GBK，本地生成的 `save_path` 回传 JSON 时由 ANSI/GBK 转为 UTF-8，避免中文路径在 HTTP/JSON 边界乱码。
+- [x] DLL 日志级别统一为 `调试/信息/警告/错误`，输出格式调整为 `[时间] [级别] [模块] 内容`，调试输出改用 Unicode 接口显示 UTF-8 中文。
+- [x] DLL 活动日志明确区分第三方调用、DLL 下发 Delphi 程序、Delphi 程序回调 DLL、DLL 回调第三方等链路阶段，修复将 Delphi 回调误写为终端 HTTP 回调的描述。
+- [x] 本轮仅修改界面、日志及中文编码边界；未改变 DLL 导出接口、终端调用协议、回调解析流程或预览窗口迁移逻辑。
+
+### 修改文件列表
+
+- Delphi 程序：`demo/Delphi7Demo/Logger.pas`、`MainUnit.pas`、`TerminalManager.pas`、`PreviewManager.pas`、`VlcPlayer.pas`、`DelphiProxyServer.pas`。
+- DLL：`src/logger.cpp`、`delphi_proxy.cpp`、`callback_server.cpp`、`terminal_status_checker.cpp`、`event_dispatcher.cpp`、`exports.cpp`。
+- 文档：`todo.md`。
+
+### 中文编码处理方式
+
+- Delphi 7 源文件继续使用 ANSI/GBK 保存，已抽查六个修改的 `.pas` 文件均可按 GBK 正确读取中文。
+- Delphi 运行日志文件统一按 UTF-8 内容写入，日志行采用 `[时间] [级别] [模块] 中文内容` 格式。
+- DLL C++ 源文件继续由项目 `/utf-8` 编译选项处理；DLL 文件日志保持 UTF-8。
+- DLL 与 Delphi 程序之间的 HTTP/JSON 文本按 UTF-8 传输，仅在 Delphi 调用 ANSI 文件系统路径前后进行 UTF-8 与 ANSI/GBK 转换。
+- `todo.md` 早期章节已有的历史乱码为本轮修改前状态，本轮未扩大范围重写历史记录，仅新增本节中文记录。
+
+### 验证方法与结果
+
+- `git diff --check`：通过，未发现新增空白错误；Git 仅提示后续检出时可能执行 LF/CRLF 转换。
+- Delphi 7 编译验证：使用 `DCC32.EXE` 构建 `demo/Delphi7Demo/HZCYKJTHardWare.dpr`，生成到 `codex_build/delphi`，编译成功；存在原有的 `2` 个平台相关 warning 与 `3` 个未使用变量 hint，无 error。
+- DLL 编译验证：使用 MSBuild 构建 `HZCYKJTHardWare.vcxproj` 的 `Release|Win32`，生成到 `codex_build/dll/Release/Win32`，结果为 `0` warning、`0` error。
+- 静态日志检查：活动 DLL 日志中已不再出现原英文级别、英文链路提示或将 Delphi 程序回调误标为终端 HTTP 回调的文本。
+
+### 回退方式与保留风险
+
+- 修改前基线为 Git 提交 `ec88dff backup-before-ui-log-review`；提交本轮变更后，可使用 Git 对本轮提交执行反向提交回退。
+- 如尚未提交本轮变更，可将工作区恢复到上述基线提交以撤销本轮 UI/日志修改。
+- 已识别但本轮未处理的风险：摄像头预览启动路径中，DLL 保存 preview `request_id` 的时机可能晚于 Delphi 程序同步回调，存在预览就绪回调被判定为不匹配的竞态；该项涉及已验证的预览流程，需单独确认后处理。

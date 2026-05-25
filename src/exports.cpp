@@ -223,7 +223,7 @@ static int InitSdkBody() {
     std::string callbackUrl = "http://" + callbackHost + ":" +
         std::to_string(callbackPort) + cfg.GetCallbackBasePath();
 
-    LOG_DEBUG("EXPORT", "Starting callback HTTP server: listen=%s:%d, callback_url=%s",
+    LOG_DEBUG("EXPORT", "正在启动Delphi回调接收服务：listen=%s:%d，callback_url=%s",
              listenHost.c_str(), callbackPort, callbackUrl.c_str());
 
     {
@@ -235,7 +235,7 @@ static int InitSdkBody() {
 
     ret = CallbackServer::Instance().Start(listenHost, callbackPort);
     if (ret != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("EXPORT", "初始化DLL失败：回调HTTP服务启动失败，listen=%s:%d", listenHost.c_str(), callbackPort);
+        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi回调接收服务启动失败，listen=%s:%d", listenHost.c_str(), callbackPort);
         Logger::Instance().Shutdown();
         return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
     }
@@ -302,7 +302,7 @@ static int ReleaseSdkBody() {
     if (!previewRequestId.empty() && !delphiServerUrl.empty()) {
         DelphiProxy proxy(delphiServerUrl);
         if (!proxy.StopCameraPreview(previewRequestId)) {
-            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi停止预览失败：request_id=%s，delphi_server=%s",
+            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi程序停止预览失败：request_id=%s，delphi_server=%s",
                      previewRequestId.c_str(), delphiServerUrl.c_str());
         }
     }
@@ -392,7 +392,7 @@ static int SwitchTerminalBody(int terminalIndex) {
     {
         auto lock = ReadLock();
         if (ctx.current_terminal_index == terminalIndex) {
-            LOG_INFO("EXPORT", "SwitchTerminal跳过：已在终端%d", terminalIndex);
+            LOG_INFO("EXPORT", "终端切换请求跳过：当前已在终端%d", terminalIndex);
             return HZCYKJTHardWare_RET_OK;
         }
     }
@@ -401,7 +401,7 @@ static int SwitchTerminalBody(int terminalIndex) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.SwitchTerminal(terminalIndex)) {
-        LOG_ERROR("EXPORT", "SwitchTerminal转发Delphi失败：terminal_index=%d", terminalIndex);
+        LOG_ERROR("EXPORT", "终端切换失败：DLL转发Delphi程序失败，terminal_index=%d", terminalIndex);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -410,7 +410,7 @@ static int SwitchTerminalBody(int terminalIndex) {
         ctx.current_terminal_index = terminalIndex;
     }
 
-    LOG_INFO("EXPORT", "SwitchTerminal成功：terminal_index=%d，已转发Delphi", terminalIndex);
+    LOG_INFO("EXPORT", "终端切换请求已转发Delphi程序：terminal_index=%d", terminalIndex);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -477,7 +477,7 @@ static int StartProcessBody(const char* saveDir) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
-        LOG_ERROR("EXPORT", "开始流程失败：DLL转发Delphi失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("EXPORT", "开始流程失败：DLL转发Delphi程序失败，delphi_server=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -486,7 +486,7 @@ static int StartProcessBody(const char* saveDir) {
         ctx.process_active = true;
     }
 
-    LOG_INFO("EXPORT", "Delphi已受理开始流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    LOG_INFO("EXPORT", "Delphi程序已受理开始流程：delphi_server=%s", ctx.delphi_server_url.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -506,11 +506,11 @@ static int EndProcessBody() {
     }
 
     if (!ok) {
-        LOG_ERROR("EXPORT", "结束流程失败：DLL转发Delphi失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("EXPORT", "结束流程失败：DLL转发Delphi程序失败，delphi_server=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "Delphi已处理结束流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    LOG_INFO("EXPORT", "Delphi程序已处理结束流程：delphi_server=%s", ctx.delphi_server_url.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -541,7 +541,7 @@ static int StartCameraPreviewBody(void* hwnd) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动摄像头预览失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "启动摄像头预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -554,7 +554,7 @@ static int StartCameraPreviewBody(void* hwnd) {
         ctx.camera_preview_vlc_hwnd = 0;
     }
 
-    LOG_INFO("EXPORT", "摄像头预览请求已转发Delphi：request_id=%s，third_party_hwnd=%p，callback_url=%s",
+    LOG_INFO("EXPORT", "摄像头预览请求已转发Delphi程序：request_id=%s，third_party_hwnd=%p，callback_url=%s",
              requestId.c_str(), hwnd, callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
@@ -595,7 +595,7 @@ static int StopCameraPreviewBody() {
     }
 
     if (!ok) {
-        LOG_ERROR("EXPORT", "停止摄像头预览失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "停止摄像头预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), delphiServerUrl.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -620,7 +620,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.StartFingerprintPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动指纹预览失败：DLL转发Delphi失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("EXPORT", "启动指纹预览失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -630,7 +630,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         ctx.camera_preview_request_id = requestId; // reuse for preview tracking
     }
 
-    LOG_INFO("EXPORT", "指纹预览请求已转发Delphi：request_id=%s", requestId.c_str());
+    LOG_INFO("EXPORT", "指纹预览请求已转发Delphi程序：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -679,11 +679,11 @@ static int StartIrisPreviewBody(void* hwnd) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.StartIrisPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动虹膜预览失败：DLL转发Delphi失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("EXPORT", "启动虹膜预览失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "虹膜预览请求已转发Delphi：request_id=%s", requestId.c_str());
+    LOG_INFO("EXPORT", "虹膜预览请求已转发Delphi程序：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -737,7 +737,7 @@ static int CaptureCameraImageBody(const char* saveDir) {
     std::string savePath;
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
-        LOG_ERROR("EXPORT", "人脸抓拍失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "人脸抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -757,7 +757,7 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
     std::string savePath;
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {
-        LOG_ERROR("EXPORT", "指纹抓拍失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "指纹抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -780,7 +780,7 @@ static int CaptureIrisImageBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("EXPORT", "虹膜抓拍提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "虹膜抓拍提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "Iris request HTTP failed",
@@ -789,7 +789,7 @@ static int CaptureIrisImageBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("EXPORT", "Delphi已受理虹膜抓拍请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    LOG_INFO("EXPORT", "Delphi程序已受理虹膜抓拍请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -806,7 +806,7 @@ static int RequestOCRBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("EXPORT", "OCR请求提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("EXPORT", "OCR请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "OCR request HTTP failed",
@@ -815,7 +815,7 @@ static int RequestOCRBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("EXPORT", "Delphi已受理OCR请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    LOG_INFO("EXPORT", "Delphi程序已受理OCR请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -833,7 +833,7 @@ static int RequestNfcCardBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发Delphi失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "NFC request HTTP failed",
@@ -842,7 +842,7 @@ static int RequestNfcCardBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("NFC", "Delphi已受理IC卡识别请求：request_id=%s，callback_url=%s",
+    LOG_INFO("NFC", "Delphi程序已受理IC卡识别请求：request_id=%s，callback_url=%s",
              requestId.c_str(), callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }

@@ -185,7 +185,7 @@ begin
   // If already running with same target, just return OK
   if IsPreviewRunning(ResType) and (GetTargetHwnd(ResType) = TargetHwnd) then
   begin
-    DoLog('[Preview] Already running, target unchanged');
+    DoLog('[提示] [预览控制] 预览已在目标窗口运行，无需重复启动。');
     Result := True;
     Exit;
   end;
@@ -193,7 +193,7 @@ begin
   // If running but target changed, stop old first
   if IsPreviewRunning(ResType) then
   begin
-    DoLog('[Preview] Target changed, restarting...');
+    DoLog('[信息] [预览控制] 目标窗口已变更，正在重新启动预览。');
     StopPreview(ResType);
   end;
 
@@ -203,18 +203,18 @@ begin
   // Request preview URL from terminal
   Client := TTerminalClient.Create;
   try
-    DoLog('[Preview] >>> Requesting: ' + TerminalBaseUrl + TerminalPath);
+    DoLog('[信息] [终端调用] 正在请求预览地址：' + TerminalBaseUrl + TerminalPath);
     if not Client.PostJson(TerminalBaseUrl, TerminalPath, '{}', ResponseUtf8) then
     begin
-      DoLog('[Preview] ERROR: Terminal request failed');
+      DoLog('[错误] [终端调用] 请求预览地址失败。');
       Exit;
     end;
     Status := ExtractJsonField(ResponseUtf8, 'status');
     PreviewUrl := ExtractJsonField(ResponseUtf8, 'preview_url');
-    DoLog('[Preview] Response: status=' + Status + ' url=' + PreviewUrl);
+    DoLog('[信息] [终端调用] 已收到预览地址响应：status=' + Status + '，url=' + PreviewUrl);
     if (Status <> 'ok') or (PreviewUrl = '') then
     begin
-      DoLog('[Preview] ERROR: Invalid preview URL');
+      DoLog('[错误] [终端调用] 终端返回的预览地址无效。');
       Exit;
     end;
   finally
@@ -231,7 +231,7 @@ begin
   Vlc := TVlcPlayer.Create;
   if not Vlc.Play(PreviewUrl, RenderHwnd) then
   begin
-    DoLog('[Preview] VLC failed: ' + Vlc.LastError);
+    DoLog('[错误] [预览渲染] VLC启动失败：' + Vlc.LastError);
     Vlc.Free;
     Exit;
   end;
@@ -239,8 +239,8 @@ begin
   SetVlcPlayer(ResType, Vlc);
   SetTargetHwnd(ResType, TargetHwnd);
 
-  DoLog('[Preview] VLC OK: url=' + PreviewUrl + ' hwnd=' + IntToStr(RenderHwnd) +
-    ' target=' + IntToStr(TargetHwnd));
+  DoLog('[信息] [预览渲染] VLC预览已启动：url=' + PreviewUrl + '，hwnd=' +
+    IntToStr(RenderHwnd) + '，target=' + IntToStr(TargetHwnd));
   Result := True;
 end;
 
@@ -257,7 +257,7 @@ begin
   SetVlcPlayer(ResType, nil);
   SetTargetHwnd(ResType, 0);
 
-  DoLog('[Preview] Stopped');
+  DoLog('[信息] [预览渲染] 预览已停止。');
   Result := True;
 end;
 

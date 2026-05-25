@@ -11,7 +11,7 @@ int TerminalStatusChecker::Check(const std::string& baseUrl, int connectTimeoutM
         return HZCYKJTHardWare_RET_TERMINAL_NOT_SELECTED;
     }
 
-    LOG_DEBUG("TerminalChecker", "Checking terminal: %s", baseUrl.c_str());
+    LOG_DEBUG("TerminalChecker", "正在检查终端状态：terminal=%s", baseUrl.c_str());
 
     HttpClient client;
     std::string responseBody;
@@ -29,7 +29,7 @@ int TerminalStatusChecker::Check(const std::string& baseUrl, int connectTimeoutM
     }
 
     // 任何 HTTP 响应（包括 404）都说明终端在线
-    LOG_DEBUG("TerminalChecker", "Terminal responded: %s, status=%d", baseUrl.c_str(), statusCode);
+    LOG_DEBUG("TerminalChecker", "终端已响应：terminal=%s，status=%d", baseUrl.c_str(), statusCode);
     return HZCYKJTHardWare_RET_OK;
 }
 

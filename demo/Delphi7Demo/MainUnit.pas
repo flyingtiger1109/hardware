@@ -6,6 +6,9 @@ uses
   Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs,
   StdCtrls, ExtCtrls, DelphiProxyServer, TerminalManager, Logger, EncodingHelper;
 
+const
+  WM_APPEND_APP_LOG = WM_USER + 101;
+
 type
   TFormMain = class(TForm)
     PanelTop: TPanel;
@@ -60,6 +63,8 @@ type
     FServer: TDelphiProxyServer;
     FSaveDir: string;
     procedure ApplyChineseCaptions;
+    procedure AppendLogLine(const S: string);
+    procedure WMAppendAppLog(var Msg: TMessage); message WM_APPEND_APP_LOG;
     procedure Log(const S: string);
   public
   end;
@@ -70,6 +75,9 @@ var
 implementation
 
 {$R *.dfm}
+
+type
+  PLogMessage = ^string;
 
 function Cn(const Utf8Bytes: string): string;
 begin
@@ -106,10 +114,39 @@ begin
   PanelIris.Caption := Cn(#$E8#$99#$B9#$E8#$86#$9C#$E9#$A2#$84#$E8#$A7#$88);
 end;
 
-procedure TFormMain.Log(const S: string);
+procedure TFormMain.AppendLogLine(const S: string);
 begin
-  MemoLog.Lines.Add(FormatDateTime('hh:nn:ss.zzz', Now) + '  ' + S);
+  MemoLog.Lines.Add('[' + FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now) +
+    '] ' + S);
+end;
+
+procedure TFormMain.WMAppendAppLog(var Msg: TMessage);
+var
+  LogMessage: PLogMessage;
+begin
+  LogMessage := PLogMessage(Msg.LParam);
+  if LogMessage = nil then Exit;
+  try
+    AppendLogLine(LogMessage^);
+  finally
+    Dispose(LogMessage);
+  end;
+end;
+
+procedure TFormMain.Log(const S: string);
+var
+  LogMessage: PLogMessage;
+begin
   GLogger.WriteLog(S);
+  if GetCurrentThreadID = MainThreadID then
+    AppendLogLine(S)
+  else
+  begin
+    New(LogMessage);
+    LogMessage^ := S;
+    if not PostMessage(Handle, WM_APPEND_APP_LOG, 0, LPARAM(LogMessage)) then
+      Dispose(LogMessage);
+  end;
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
@@ -118,7 +155,7 @@ begin
   MemoLog.Clear;
   FServer := nil;
   FSaveDir := '.\captures';
-  Log('Program started. Click [Start Server] to begin.');
+  Log('[信息] [程序] 程序已启动，请点击“启动服务”。');
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
@@ -135,26 +172,26 @@ procedure TFormMain.BtnStartServerClick(Sender: TObject);
 begin
   if FServer <> nil then
   begin
-    Log('Server already running');
+    Log('[提示] [服务] 服务已在运行，无需重复启动。');
     Exit;
   end;
   FServer := TDelphiProxyServer.Create(PanelCamera, PanelFingerprint, PanelIris);
   FServer.SetLogProc(Log);
   FServer.Start;
-  Log('Server started: http://127.0.0.1:8080');
+  Log('[信息] [服务] 服务已启动：http://127.0.0.1:8080');
 end;
 
 procedure TFormMain.BtnStopServerClick(Sender: TObject);
 begin
   if FServer = nil then
   begin
-    Log('Server not running');
+    Log('[提示] [服务] 服务尚未启动，无需停止。');
     Exit;
   end;
   FServer.Stop;
   FServer.Free;
   FServer := nil;
-  Log('Server stopped');
+  Log('[信息] [服务] 服务已停止。');
 end;
 
 // ============================================================
@@ -163,25 +200,25 @@ end;
 
 procedure TFormMain.BtnStartProcessClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [流程] 操作失败，请先启动服务。'); Exit; end;
   FServer.StartProcessDirect(FSaveDir);
 end;
 
 procedure TFormMain.BtnEndProcessClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [流程] 操作失败，请先启动服务。'); Exit; end;
   FServer.EndProcessDirect;
 end;
 
 procedure TFormMain.BtnSwitchTerminal1Click(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [终端切换] 操作失败，请先启动服务。'); Exit; end;
   FServer.SwitchTerminalDirect(1);
 end;
 
 procedure TFormMain.BtnSwitchTerminal2Click(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [终端切换] 操作失败，请先启动服务。'); Exit; end;
   FServer.SwitchTerminalDirect(2);
 end;
 
@@ -189,116 +226,116 @@ procedure TFormMain.BtnFaceCaptureClick(Sender: TObject);
 var
   SavePath: string;
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [人脸抓拍] 操作失败，请先启动服务。'); Exit; end;
   if FServer.CaptureFaceDirect(FSaveDir, SavePath) then
-    Log('[Capture] Face OK: ' + SavePath)
+    Log('[信息] [人脸抓拍] 抓拍成功，保存路径=' + SavePath)
   else
-    Log('[Capture] Face FAILED');
+    Log('[错误] [人脸抓拍] 抓拍失败。');
 end;
 
 procedure TFormMain.BtnFingerprintCaptureClick(Sender: TObject);
 var
   SavePath: string;
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [指纹抓拍] 操作失败，请先启动服务。'); Exit; end;
   if FServer.CaptureFingerprintDirect(FSaveDir, SavePath) then
-    Log('[Capture] Fingerprint OK: ' + SavePath)
+    Log('[信息] [指纹抓拍] 抓拍成功，保存路径=' + SavePath)
   else
-    Log('[Capture] Fingerprint FAILED');
+    Log('[错误] [指纹抓拍] 抓拍失败。');
 end;
 
 procedure TFormMain.BtnOCRClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [OCR识别] 操作失败，请先启动服务。'); Exit; end;
   ReqId := FServer.RequestOCRDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[Async] OCR accepted: ' + ReqId)
+    Log('[信息] [OCR识别] 请求已受理，request_id=' + ReqId)
   else
-    Log('[Async] OCR FAILED');
+    Log('[错误] [OCR识别] 请求提交失败。');
 end;
 
 procedure TFormMain.BtnNfcCardClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [IC卡识别] 操作失败，请先启动服务。'); Exit; end;
   ReqId := FServer.RequestNfcDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[Async] NFC accepted: ' + ReqId)
+    Log('[信息] [IC卡识别] 请求已受理，request_id=' + ReqId)
   else
-    Log('[Async] NFC FAILED');
+    Log('[错误] [IC卡识别] 请求提交失败。');
 end;
 
 procedure TFormMain.BtnIrisCaptureClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [虹膜抓拍] 操作失败，请先启动服务。'); Exit; end;
   ReqId := FServer.CaptureIrisDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[Async] Iris accepted: ' + ReqId)
+    Log('[信息] [虹膜抓拍] 请求已受理，request_id=' + ReqId)
   else
-    Log('[Async] Iris FAILED');
+    Log('[错误] [虹膜抓拍] 请求提交失败。');
 end;
 
 procedure TFormMain.BtnStartCameraPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [摄像头预览] 操作失败，请先启动服务。'); Exit; end;
   if FServer.StartCameraPreviewDirect then
-    Log('[Preview] Camera preview started')
+    Log('[信息] [摄像头预览] 预览已启动。')
   else
-    Log('[Preview] Camera preview FAILED');
+    Log('[错误] [摄像头预览] 预览启动失败。');
 end;
 
 procedure TFormMain.BtnStopCameraPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [摄像头预览] 操作失败，请先启动服务。'); Exit; end;
   FServer.StopCameraPreviewDirect;
-  Log('[Preview] Camera preview stopped');
+  Log('[信息] [摄像头预览] 预览已停止。');
 end;
 
 procedure TFormMain.BtnStartFingerprintPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [指纹预览] 操作失败，请先启动服务。'); Exit; end;
   if FServer.StartFingerprintPreviewDirect then
-    Log('[Preview] Fingerprint preview started')
+    Log('[信息] [指纹预览] 预览已启动。')
   else
-    Log('[Preview] Fingerprint preview FAILED');
+    Log('[错误] [指纹预览] 预览启动失败。');
 end;
 
 procedure TFormMain.BtnStopFingerprintPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [指纹预览] 操作失败，请先启动服务。'); Exit; end;
   FServer.StopFingerprintPreviewDirect;
-  Log('[Preview] Fingerprint preview stopped');
+  Log('[信息] [指纹预览] 预览已停止。');
 end;
 
 procedure TFormMain.BtnStartIrisPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [虹膜预览] 操作失败，请先启动服务。'); Exit; end;
   if FServer.StartIrisPreviewDirect then
-    Log('[Preview] Iris preview started')
+    Log('[信息] [虹膜预览] 预览已启动。')
   else
-    Log('[Preview] Iris preview FAILED');
+    Log('[错误] [虹膜预览] 预览启动失败。');
 end;
 
 procedure TFormMain.BtnStopIrisPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('ERROR: Start server first'); Exit; end;
+  if FServer = nil then begin Log('[错误] [虹膜预览] 操作失败，请先启动服务。'); Exit; end;
   FServer.StopIrisPreviewDirect;
-  Log('[Preview] Iris preview stopped');
+  Log('[信息] [虹膜预览] 预览已停止。');
 end;
 
 procedure TFormMain.BtnStartPlatePreviewClick(Sender: TObject);
 begin
-  Log('[Preview] Plate preview not supported');
+  Log('[提示] [车牌预览] 当前版本暂不支持车牌预览。');
 end;
 
 procedure TFormMain.BtnStopPlatePreviewClick(Sender: TObject);
 begin
-  Log('[Preview] Stop plate preview not supported');
+  Log('[提示] [车牌预览] 当前版本暂不支持车牌预览停止操作。');
 end;
 
 end.

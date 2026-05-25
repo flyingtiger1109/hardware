@@ -2,7 +2,7 @@ unit Logger;
 
 interface
 
-uses SysUtils;
+uses Windows, SysUtils, Classes;
 
 type
   TFileLogger = class
@@ -10,10 +10,12 @@ type
     FLogPath: string;
     FLogFile: string;
     FLogFileFull: string;
+    FLock: TRTLCriticalSection;
     procedure EnsureDir;
     procedure InitLogFile;
   public
     constructor Create;
+    destructor Destroy; override;
     procedure WriteLog(const Msg: string);
     procedure WriteLogFmt(const Fmt: string; const Args: array of const);
   end;
@@ -23,13 +25,14 @@ var
 
 implementation
 
-uses Windows;
+uses EncodingHelper;
 
 constructor TFileLogger.Create;
 var
   ExeDir: string;
 begin
   inherited Create;
+  InitializeCriticalSection(FLock);
   ExeDir := ExtractFilePath(ParamStr(0));
   FLogPath := ExeDir + 'HZCYKJTHardWareExe_Logs';
   EnsureDir;
@@ -53,22 +56,35 @@ end;
 
 procedure TFileLogger.WriteLog(const Msg: string);
 var
-  F: TextFile;
-  Timestamp: string;
+  FS: TFileStream;
+  LineUtf8: string;
 begin
-  Timestamp := FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now);
-  InitLogFile; // re-init in case date changed
+  LineUtf8 := AnsiToUtf8('[' + FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now) +
+    '] ' + Msg + #13#10);
+  EnterCriticalSection(FLock);
   try
-    AssignFile(F, FLogFileFull);
+    InitLogFile;
     if FileExists(FLogFileFull) then
-      Append(F)
+      FS := TFileStream.Create(FLogFileFull, fmOpenReadWrite or fmShareDenyNone)
     else
-      Rewrite(F);
-    WriteLn(F, Timestamp + '  ' + Msg);
-    CloseFile(F);
+      FS := TFileStream.Create(FLogFileFull, fmCreate or fmShareDenyNone);
+    try
+      FS.Seek(0, soFromEnd);
+      if LineUtf8 <> '' then
+        FS.WriteBuffer(LineUtf8[1], Length(LineUtf8));
+    finally
+      FS.Free;
+    end;
   except
-    // silent fail
+    // 日志失败不能影响设备业务流程。
   end;
+  LeaveCriticalSection(FLock);
+end;
+
+destructor TFileLogger.Destroy;
+begin
+  DeleteCriticalSection(FLock);
+  inherited Destroy;
 end;
 
 procedure TFileLogger.WriteLogFmt(const Fmt: string; const Args: array of const);

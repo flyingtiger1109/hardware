@@ -190,7 +190,7 @@ begin
     end;
   end;
 
-  FLastError := '锟斤拷??? 32 锟斤拷 libVLC????? 32 锟斤拷 VLC ?? libvlc.dll??libvlccore.dll??plugins ??????????????';
+  FLastError := '未找到可用的32位libVLC，请在程序目录的vlc子目录部署libvlc.dll、libvlccore.dll和plugins。';
   Result := False;
 end;
 
@@ -228,12 +228,12 @@ begin
   if FRunning then Stop;
   if Url = '' then
   begin
-    FLastError := '?????????';
+    FLastError := '预览地址为空。';
     Exit;
   end;
   if not IsWindow(Hwnd) then
   begin
-    FLastError := '????????锟斤拷';
+    FLastError := '预览目标窗口无效。';
     Exit;
   end;
   if not LoadLibVlc then Exit;
@@ -255,7 +255,7 @@ begin
   FVlcInstance := Flibvlc_new(ArgCount, @Argv[0]);
   if FVlcInstance = nil then
   begin
-    FLastError := '???? VLC ??????';
+    FLastError := '创建VLC实例失败。';
     Exit;
   end;
 
@@ -263,7 +263,7 @@ begin
   FMedia := Flibvlc_media_new_location(FVlcInstance, PChar(Url));
   if FMedia = nil then
   begin
-    FLastError := '??????????????: ' + Url;
+    FLastError := '创建预览媒体失败，地址=' + Url;
     Flibvlc_release(FVlcInstance);
     FVlcInstance := nil;
     Exit;
@@ -273,7 +273,7 @@ begin
   FMediaPlayer := Flibvlc_media_player_new_from_media(FMedia);
   if FMediaPlayer = nil then
   begin
-    FLastError := '?????????????';
+    FLastError := '创建预览播放器失败。';
     Flibvlc_media_release(FMedia);
     FMedia := nil;
     Flibvlc_release(FVlcInstance);
@@ -287,7 +287,7 @@ begin
   // start playing
   if Flibvlc_media_player_play(FMediaPlayer) <> 0 then
   begin
-    FLastError := '???????????';
+    FLastError := '启动预览播放失败。';
     Flibvlc_media_player_release(FMediaPlayer);
     FMediaPlayer := nil;
     Flibvlc_media_release(FMedia);
@@ -300,7 +300,7 @@ begin
   FRunning := True;
   FRenderHwnd := Hwnd;
   FLastError := '';
-  // Fill target window 锟斤拷 VLC child created async, retry up to 1.5s
+  // VLC 子窗口异步创建，短暂重试以填满目标窗口。
   for Retry := 1 to 3 do begin
     Sleep(100);
     EnumChildWindows(Hwnd, @ResizeVlcChild, 0);

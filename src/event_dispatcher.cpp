@@ -119,7 +119,7 @@ void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
 // 处理回调服务器的数据并转化为事件
 void EventDispatcher::PostCallbackData(const CallbackData& cbData) {
     if (!m_running) {
-        LOG_WARN("EventDispatcher", "回调服务未运行，已丢弃终端回调：path=%s", cbData.path.c_str());
+        LOG_WARN("EventDispatcher", "回调分发未运行，已丢弃Delphi程序回调：path=%s", cbData.path.c_str());
         return;
     }
 
@@ -127,7 +127,7 @@ void EventDispatcher::PostCallbackData(const CallbackData& cbData) {
     EnterCriticalSection(&m_cs);
     m_pendingCallbacks.push(cbData);
     LeaveCriticalSection(&m_cs);
-    LOG_DEBUG("EventDispatcher", "终端回调已投递到事件队列：path=%s，body_size=%zu",
+    LOG_DEBUG("EventDispatcher", "Delphi程序回调已投递到事件队列：path=%s，body_size=%zu",
              cbData.path.c_str(), cbData.body.size());
     WakeConditionVariable(&m_cv);
 }
@@ -136,7 +136,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     std::string path = cbData.path;
     std::string body = cbData.body;
 
-    LOG_DEBUG("EventDispatcher", "开始处理Delphi回调：path=%s，body_size=%zu", path.c_str(), body.size());
+    LOG_DEBUG("EventDispatcher", "开始处理Delphi程序回调：path=%s，body_size=%zu", path.c_str(), body.size());
 
     std::string resourceType;
     bool isPreviewReady = false;
@@ -150,13 +150,13 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     } else if (path.find("/nfc-card") != std::string::npos || path.find("/nfc") != std::string::npos) {
         resourceType = HZCYKJTHardWare_RESOURCE_NFC_CARD;
     } else {
-        LOG_WARN("EventDispatcher", "收到未知Delphi回调路径：path=%s", path.c_str());
+        LOG_WARN("EventDispatcher", "收到未知Delphi程序回调路径：path=%s", path.c_str());
         return;
     }
 
     std::string requestId = JsonHelper::GetString(body, "request_id");
     if (requestId.empty()) {
-        LOG_WARN("EventDispatcher", "收到Delphi回调但缺少request_id：path=%s", path.c_str());
+        LOG_WARN("EventDispatcher", "收到Delphi程序回调但缺少request_id：path=%s", path.c_str());
         return;
     }
 
@@ -183,7 +183,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             bool isError = IsDelphiErrorResponse(body, errorCode, errorMsg);
 
             LOG_INFO("EventDispatcher",
-                     "按流程级回调处理Delphi结果：request_id=%s，resource=%s，path=%s",
+                     "按流程级回调处理Delphi程序结果：request_id=%s，resource=%s，path=%s",
                      requestId.c_str(), resourceType.c_str(), path.c_str());
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
@@ -226,7 +226,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             }
         }
 
-        LOG_WARN("EventDispatcher", "收到Delphi回调但请求不存在：request_id=%s，path=%s",
+        LOG_WARN("EventDispatcher", "收到Delphi程序回调但请求不存在：request_id=%s，path=%s",
                  requestId.c_str(), path.c_str());
         return;
     }
@@ -234,7 +234,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     if (session->status == RequestStatus::Expired ||
         session->status == RequestStatus::Cancelled ||
         session->status == RequestStatus::Timeout) {
-        LOG_DEBUG("EventDispatcher", "Delphi回调被忽略：request_id=%s，status=%d",
+        LOG_DEBUG("EventDispatcher", "Delphi程序回调已忽略：request_id=%s，status=%d",
                   requestId.c_str(), static_cast<int>(session->status));
         return;
     }
@@ -464,7 +464,7 @@ void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
         savePath = session.save_dir;
     }
 
-    LOG_INFO("EventDispatcher", "Delphi OCR回调处理完成：request_id=%s，save_path=%s，mrz=%s",
+    LOG_INFO("EventDispatcher", "Delphi程序OCR回调处理完成：request_id=%s，save_path=%s，mrz=%s",
              requestId.c_str(), savePath.c_str(), mrz.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "OCR completed successfully",
@@ -559,7 +559,7 @@ void EventDispatcher::ProcessIrisCallback(const std::string& requestId,
         savePath = session.save_dir;
     }
 
-    LOG_INFO("EventDispatcher", "Delphi虹膜回调处理完成：request_id=%s，save_path=%s",
+    LOG_INFO("EventDispatcher", "Delphi程序虹膜回调处理完成：request_id=%s，save_path=%s",
              requestId.c_str(), savePath.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "Iris captured successfully",
@@ -634,7 +634,7 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         cardText = JsonHelper::GetString(body, "ic_number");
     }
     if (cardText.empty()) {
-        LOG_ERROR("NFC", "Delphi IC卡回调缺少card_text：request_id=%s，body=%s",
+        LOG_ERROR("NFC", "Delphi程序IC卡回调缺少card_text：request_id=%s，body=%s",
                   requestId.c_str(), body.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "NFC callback missing card_text",
@@ -642,7 +642,7 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         return;
     }
 
-    LOG_INFO("NFC", "Delphi IC卡回调处理完成：request_id=%s，card_text=%s",
+    LOG_INFO("NFC", "Delphi程序IC卡回调处理完成：request_id=%s，card_text=%s",
              requestId.c_str(), cardText.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(), cardText.c_str());
@@ -689,7 +689,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     {
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id != requestId) {
-            LOG_WARN("EventDispatcher", "preview-ready request_id不匹配：callback=%s，current=%s",
+            LOG_WARN("EventDispatcher", "Delphi程序预览就绪回调request_id不匹配：callback=%s，current=%s",
                      requestId.c_str(), ctx.camera_preview_request_id.c_str());
             return;
         }
@@ -704,7 +704,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     HWND thirdPartyWindow = reinterpret_cast<HWND>(thirdPartyHwndValue);
 
     if (vlcHwnd == 0 || !IsWindow(vlcWindow)) {
-        LOG_ERROR("EventDispatcher", "preview-ready失败：vlc_hwnd无效，request_id=%s，vlc_hwnd=%p",
+        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：vlc_hwnd无效，request_id=%s，vlc_hwnd=%p",
                   requestId.c_str(), vlcWindow);
         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED,
                   HZCYKJTHardWare_RET_INVALID_HWND, "", "Invalid VLC preview hwnd",
@@ -713,7 +713,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     }
 
     if (thirdPartyHwndValue == 0 || !IsWindow(thirdPartyWindow)) {
-        LOG_ERROR("EventDispatcher", "preview-ready失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，vlc_hwnd=%p",
+        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，vlc_hwnd=%p",
                   requestId.c_str(), thirdPartyWindow, vlcWindow);
         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED,
                   HZCYKJTHardWare_RET_INVALID_HWND, "", "Invalid third-party preview hwnd",
@@ -738,7 +738,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
         moveError = GetLastError();
     }
 
-    LOG_INFO("EventDispatcher", "Delphi预览就绪并嵌入第三方窗口：request_id=%s，resource=%s，third_party_hwnd=%p，vlc_hwnd=%p，delphi_host_hwnd=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，get_rect_error=%lu，move=%d，move_error=%lu，width=%ld，height=%ld",
+    LOG_INFO("EventDispatcher", "Delphi程序预览就绪并嵌入第三方窗口：request_id=%s，resource=%s，third_party_hwnd=%p，vlc_hwnd=%p，delphi_host_hwnd=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，get_rect_error=%lu，move=%d，move_error=%lu，width=%ld，height=%ld",
              requestId.c_str(), resourceType.c_str(), thirdPartyWindow, vlcWindow,
              reinterpret_cast<void*>(delphiHostHwnd), oldParent, setParentError,
              gotRect, getRectError, moved, moveError,
@@ -791,7 +791,7 @@ void EventDispatcher::SendEvent(const std::string& requestId,
 }
 
 void EventDispatcher::WorkerLoop() {
-LOG_DEBUG("EventDispatcher", "Worker thread started");
+LOG_DEBUG("EventDispatcher", "第三方回调分发线程已启动");
 
     while (m_running) {
         bool hasWork = false;
@@ -858,7 +858,7 @@ LOG_DEBUG("EventDispatcher", "Worker thread started");
                              event.event_type, strs.request_id.c_str());
                 }
 
-                LOG_INFO("EventDispatcher", "已通知第三方回调：event=%d request_id=%s resource=%s",
+                LOG_INFO("EventDispatcher", "DLL已回调第三方：event=%d，request_id=%s，resource=%s",
                          event.event_type, strs.request_id.c_str(), strs.resource_type.c_str());
             } else {
                 LeaveCriticalSection(&m_cs);
@@ -866,7 +866,7 @@ LOG_DEBUG("EventDispatcher", "Worker thread started");
         }
     }
 
-LOG_DEBUG("EventDispatcher", "Worker thread exited");
+LOG_DEBUG("EventDispatcher", "第三方回调分发线程已退出");
 }
 
 } // namespace HZCYKJTHardWare

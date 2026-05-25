@@ -33,7 +33,7 @@ type
 
 implementation
 
-uses SysUtils;
+uses SysUtils, EncodingHelper;
 
 function ExtractJsonStr(const Json, Key: string): string;
 var
@@ -101,12 +101,12 @@ begin
     // Check if this is terminal 1 or 2 by URL
     if Pos('30', BaseUrl) > 0 then
     begin
-      FTerminals[1].Name := Name;
+      FTerminals[1].Name := Utf8ToAnsi(Name);
       FTerminals[1].BaseUrl := BaseUrl;
     end
     else if Pos('31', BaseUrl) > 0 then
     begin
-      FTerminals[2].Name := Name;
+      FTerminals[2].Name := Utf8ToAnsi(Name);
       FTerminals[2].BaseUrl := BaseUrl;
     end;
   end;

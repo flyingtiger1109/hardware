@@ -353,10 +353,10 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
   try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
     FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET;
     Addr.sin_addr.S_addr := inet_addr('0.0.0.0'); Addr.sin_port := htons(8081);
-    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin FOwner.DoLog('[CB] Failed to bind 0.0.0.0:8081'); Exit; end;
+    if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin FOwner.DoLog('[错误] [终端回调] 回调监听启动失败：bind 0.0.0.0:8081 失败。'); Exit; end;
     if listen(FListenSocket, SOMAXCONN) <> 0 then Exit;
-    FOwner.DoLog('[CB] Callback receiver listening on 0.0.0.0:8081 (LAN=' + FOwner.FLanIp + ')');
-    FOwner.DoLog('[CB] Terminal callbacks should POST to http://' + FOwner.FLanIp + ':8081/terminal-callback');
+    FOwner.DoLog('[信息] [终端回调] 回调接收服务已启动：listen=0.0.0.0:8081，lan=' + FOwner.FLanIp);
+    FOwner.DoLog('[信息] [终端回调] 终端回调地址：http://' + FOwner.FLanIp + ':8081/terminal-callback');
     while not Terminated do begin
       Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
       try Raw := '';
@@ -375,7 +375,7 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
           while (NeedLen > 0) do begin RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
             if RecvLen <= 0 then Break; SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; Dec(NeedLen, RecvLen); end;
           BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
-          FOwner.DoLog('[CB] <<< Terminal callback received, body_size=' + IntToStr(Length(BodyUtf8)));
+          FOwner.DoLog('[信息] [终端回调] 已收到终端回调：body_size=' + IntToStr(Length(BodyUtf8)));
           ResponseBody := FOwner.HandleTerminalCallback(BodyUtf8); end
         else ResponseBody := '{"status":"rejected"}';
         Response := 'HTTP/1.1 202 Accepted'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
@@ -421,7 +421,7 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
           P1 := Pos(' ', Header); P2 := PosExSimple(' ', Header, P1 + 1);
           Method := Copy(Header, 1, P1 - 1); Path := Copy(Header, P1 + 1, P2 - P1 - 1);
           BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
-          FOwner.DoLog('[HTTP] DLL request: ' + Method + ' ' + Path);
+          FOwner.DoLog('[信息] [DLL请求] 已收到DLL下发请求：' + Method + ' ' + Path);
           ResponseBody := FOwner.HandleRequest(Method, Path, BodyUtf8); end
         else ResponseBody := '{"error":true,"code":"bad_request"}';
         Response := 'HTTP/1.1 200 OK'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
@@ -463,13 +463,13 @@ procedure TDelphiProxyServer.Start;
 begin if FThread <> nil then Exit;
   FLanIp := GetLocalLanIp;
   FThirdPartyCameraHwnd := 0; FThirdPartyFingerprintHwnd := 0;
-  DoLog('[Server] Local LAN IP detected: ' + FLanIp);
-  DoLog('[Server] Current terminal: ' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  DoLog('[信息] [服务] 已检测本机局域网地址：' + FLanIp);
+  DoLog('[信息] [终端状态] 当前终端：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
-  DoLog('[Server] Started: http://127.0.0.1:8080 (DLL), callback: ' + GetCallbackBase);
+  DoLog('[信息] [服务] DLL通信服务已启动：http://127.0.0.1:8080，终端回调=' + GetCallbackBase);
   // Auto-start camera + fingerprint preview
-  DoLog('[Server] Auto-starting previews...');
+  DoLog('[信息] [预览控制] 正在自动启动摄像头和指纹预览。');
   Include(FActivePreviews, prtCamera);
   Include(FActivePreviews, prtFingerprint);
   StartCameraPreviewDirect;
@@ -478,11 +478,12 @@ begin if FThread <> nil then Exit;
 procedure TDelphiProxyServer.Stop;
 begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
   if FCallbackThread <> nil then begin FCallbackThread.StopServer; FCallbackThread.WaitFor; FCallbackThread.Free; FCallbackThread := nil; end;
-  FPreviewManager.StopPreview(prtCamera); FPreviewManager.StopPreview(prtFingerprint); FPreviewManager.StopPreview(prtIris); FActivePreviews := []; DoLog('[Server] Stopped'); end;
+  FPreviewManager.StopPreview(prtCamera); FPreviewManager.StopPreview(prtFingerprint); FPreviewManager.StopPreview(prtIris); FActivePreviews := []; DoLog('[信息] [服务] 服务已停止。'); end;
 
 function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
 begin Result := False; if DllCallbackUrl = '' then Exit;
-  DoLog('[CB] >>> Forward to DLL: url=' + DllCallbackUrl + ' body=' + PayloadUtf8);
+  DoLog('[信息] [DLL回调] 正在向DLL回传处理结果：url=' + DllCallbackUrl +
+    '，body_size=' + IntToStr(Length(PayloadUtf8)));
   HttpPostJson(DllCallbackUrl, PayloadUtf8); Result := True; end;
 
 // ============================================================
@@ -490,7 +491,7 @@ begin Result := False; if DllCallbackUrl = '' then Exit;
 // ============================================================
 procedure TDelphiProxyServer.AutoStopPreviews;
 begin
-  DoLog(Format('[Switch] Stopping previews for switch', []));
+  DoLog('[信息] [终端切换] 切换前正在停止活动预览。');
   if prtIris in FActivePreviews then StopIrisPreviewDirect;
   if prtFingerprint in FActivePreviews then StopFingerprintPreviewDirect;
   if prtCamera in FActivePreviews then StopCameraPreviewDirect;
@@ -498,7 +499,7 @@ end;
 
 procedure TDelphiProxyServer.AutoStartPreviews;
 begin
-  DoLog(Format('[Switch] Restarting previews on terminal %d', [FTerminalManager.CurrentIndex]));
+  DoLog(Format('[信息] [终端切换] 正在终端%d上恢复活动预览。', [FTerminalManager.CurrentIndex]));
   // Use third-party HWND if set, otherwise use Delphi panel (0)
   if prtCamera in FActivePreviews then
     FPreviewManager.StartPreview(prtCamera, FThirdPartyCameraHwnd, FTerminalManager.CurrentBaseUrl);
@@ -513,7 +514,7 @@ function TDelphiProxyServer.SwitchTerminalDirect(Index: Integer): Boolean;
 begin Result := False;
   if (Index < 1) or (Index > 2) then Exit;
   if FTerminalManager.IsSameTerminal(Index) then begin
-    DoLog('[Terminal] Already on terminal ' + IntToStr(Index) + ', restarting camera/fingerprint previews');
+    DoLog('[提示] [终端切换] 当前已是终端' + IntToStr(Index) + '，将刷新摄像头和指纹预览。');
     AutoStopPreviews;
     Include(FActivePreviews, prtCamera);
     Include(FActivePreviews, prtFingerprint);
@@ -521,12 +522,12 @@ begin Result := False;
     Result := True;
     Exit;
   end;
-  DoLog('[Terminal] Switching ' + IntToStr(FTerminalManager.CurrentIndex) + ' -> ' + IntToStr(Index));
+  DoLog('[信息] [终端切换] 正在切换：终端' + IntToStr(FTerminalManager.CurrentIndex) + ' -> 终端' + IntToStr(Index));
   // Stop all running previews
   AutoStopPreviews;
   // Switch
   FTerminalManager.SwitchTo(Index);
-  DoLog('[Terminal] Switched to: ' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  DoLog('[信息] [终端切换] 当前终端已切换为：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   Include(FActivePreviews, prtCamera);
   Include(FActivePreviews, prtFingerprint);
   AutoStartPreviews;
@@ -540,85 +541,85 @@ begin
   BaseUrl := FTerminalManager.CurrentBaseUrl;
   BodyUtf8 := BuildTerminalProcessStartBody;
   FTerminalManager.ProcessSaveDir := ResolvedSaveDir;
-  DoLog('[Process] Start >>> ' + BaseUrl + '/process/start save_dir=' + ResolvedSaveDir);
-  DoLog('[Process] Terminal callbacks=' + GetCallbackBase);
+  DoLog('[信息] [流程] 正在向终端开始流程：url=' + BaseUrl + '/process/start，save_dir=' + ResolvedSaveDir);
+  DoLog('[信息] [流程] 终端回调地址=' + GetCallbackBase);
   if not FTerminalClient.PostJson(BaseUrl, '/process/start', BodyUtf8, ResponseUtf8) then
   begin
-    DoLog('[Process] Start terminal request FAILED');
+    DoLog('[错误] [终端调用] 开始流程请求发送到终端失败。');
     Exit;
   end;
   FTerminalManager.ProcessActive := True;
-  DoLog('[Process] Started, save_dir=' + FTerminalManager.ProcessSaveDir);
+  DoLog('[信息] [流程] 终端流程已开始，save_dir=' + FTerminalManager.ProcessSaveDir);
   Result := True;
 end;
 
 function TDelphiProxyServer.EndProcessDirect: Boolean;
 begin FTerminalManager.ProcessActive := False; FTerminalManager.ProcessSaveDir := '';
-  FRequestSaveDirs.Clear; FRequestCallbacks.Clear; DoLog('[Process] Ended'); Result := True; end;
+  FRequestSaveDirs.Clear; FRequestCallbacks.Clear; DoLog('[信息] [流程] 流程已结束。'); Result := True; end;
 
 function TDelphiProxyServer.CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FaceResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FACE');
-  DoLog('[Capture] Face: ' + ReqId + ' >>> ' + BaseUrl + '/resources/face-image/sync-request');
+  DoLog('[信息] [终端调用] 正在请求人脸抓拍：request_id=' + ReqId + '，url=' + BaseUrl + '/resources/face-image/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/face-image/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
-    DoLog('[Capture] Face: terminal request FAILED, terminal=' + BaseUrl); Exit; end;
-  DoLog('[Capture] Face: raw=' + Copy(ResponseUtf8, 1, 300));
+    DoLog('[错误] [终端调用] 人脸抓拍请求失败：terminal=' + BaseUrl); Exit; end;
+  DoLog('[信息] [人脸抓拍] 已收到终端响应：response_size=' + IntToStr(Length(ResponseUtf8)));
   FaceResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
-  if not FaceResult.Valid then begin DoLog('[Capture] Face: parse FAILED, raw=' + Copy(ResponseUtf8, 1, 200)); Exit; end;
+  if not FaceResult.Valid then begin DoLog('[错误] [人脸抓拍] 响应解析失败。'); Exit; end;
   if FaceResult.RequestId = '' then FaceResult.RequestId := ReqId;
   SavePath := FFileSaver.SaveBase64Image(FaceResult.ImageBase64, FaceResult.ImageMimeType,
     SafeResolveSaveDir(SaveDir), FaceResult.RequestId, 'face');
-  if SavePath = '' then begin DoLog('[Capture] Face: save FAILED'); Exit; end;
-  DoLog('[Capture] Face: OK -> ' + SavePath); Result := True; end;
+  if SavePath = '' then begin DoLog('[错误] [人脸抓拍] 图片保存失败。'); Exit; end;
+  DoLog('[信息] [人脸抓拍] 图片保存成功：' + SavePath); Result := True; end;
 
 function TDelphiProxyServer.CaptureFingerprintDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FpResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FP');
-  DoLog('[Capture] Fingerprint: ' + ReqId + ' >>> ' + BaseUrl + '/resources/fingerprint/sync-request');
+  DoLog('[信息] [终端调用] 正在请求指纹抓拍：request_id=' + ReqId + '，url=' + BaseUrl + '/resources/fingerprint/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/fingerprint/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
-    DoLog('[Capture] Fingerprint: terminal request FAILED, terminal=' + BaseUrl); Exit; end;
+    DoLog('[错误] [终端调用] 指纹抓拍请求失败：terminal=' + BaseUrl); Exit; end;
   FpResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
-  if not FpResult.Valid then begin DoLog('[Capture] Fingerprint: parse FAILED, raw=' + Copy(ResponseUtf8, 1, 200)); Exit; end;
+  if not FpResult.Valid then begin DoLog('[错误] [指纹抓拍] 响应解析失败。'); Exit; end;
   if FpResult.RequestId = '' then FpResult.RequestId := ReqId;
   SavePath := FFileSaver.SaveBase64Image(FpResult.ImageBase64, FpResult.ImageMimeType,
     SafeResolveSaveDir(SaveDir), FpResult.RequestId, 'fingerprint');
-  if SavePath = '' then begin DoLog('[Capture] Fingerprint: save FAILED'); Exit; end;
-  DoLog('[Capture] Fingerprint: OK -> ' + SavePath); Result := True; end;
+  if SavePath = '' then begin DoLog('[错误] [指纹抓拍] 图片保存失败。'); Exit; end;
+  DoLog('[信息] [指纹抓拍] 图片保存成功：' + SavePath); Result := True; end;
 
 function TDelphiProxyServer.RequestOCRDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('OCR');
   CallbackUrl := GetCallbackBase;
-  DoLog('[Async] OCR: ' + Result + ' >>> ' + BaseUrl + '/resources/ocr-document/request callback=' + CallbackUrl);
+  DoLog('[信息] [终端调用] 正在提交OCR识别请求：request_id=' + Result + '，callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/ocr-document/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[Async] OCR: terminal request FAILED'); Result := ''; Exit; end;
+    DoLog('[错误] [终端调用] OCR识别请求发送到终端失败。'); Result := ''; Exit; end;
   FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
-  DoLog('[Async] OCR: accepted, waiting for terminal callback to ' + CallbackUrl); end;
+  DoLog('[信息] [OCR识别] 请求已受理，等待终端回调：' + CallbackUrl); end;
 
 function TDelphiProxyServer.RequestNfcDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('NFC');
   CallbackUrl := GetCallbackBase;
-  DoLog('[Async] NFC: ' + Result + ' >>> ' + BaseUrl + '/resources/nfc-card/request callback=' + CallbackUrl);
+  DoLog('[信息] [终端调用] 正在提交IC卡识别请求：request_id=' + Result + '，callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/nfc-card/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[Async] NFC: terminal request FAILED'); Result := ''; Exit; end;
+    DoLog('[错误] [终端调用] IC卡识别请求发送到终端失败。'); Result := ''; Exit; end;
   FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
-  DoLog('[Async] NFC: accepted, waiting for card tap...'); end;
+  DoLog('[信息] [IC卡识别] 请求已受理，等待刷卡回调。'); end;
 
 function TDelphiProxyServer.CaptureIrisDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('IRIS');
   CallbackUrl := GetCallbackBase;
-  DoLog('[Async] Iris: ' + Result + ' >>> ' + BaseUrl + '/resources/iris/request callback=' + CallbackUrl);
+  DoLog('[信息] [终端调用] 正在提交虹膜抓拍请求：request_id=' + Result + '，callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/iris/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[Async] Iris: terminal request FAILED'); Result := ''; Exit; end;
+    DoLog('[错误] [终端调用] 虹膜抓拍请求发送到终端失败。'); Result := ''; Exit; end;
   FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
-  DoLog('[Async] Iris: accepted, waiting for capture...'); end;
+  DoLog('[信息] [虹膜抓拍] 请求已受理，等待终端回调。'); end;
 
 function TDelphiProxyServer.StartCameraPreviewDirect: Boolean;
 var BaseUrl: string;
@@ -660,7 +661,7 @@ var RequestId, SaveDir, CallbackUrl, TerminalBaseUrl, SavePath, ResponseUtf8, Dl
 begin
   if Path = '/ping' then begin Result := '{"status":"ok"}'; Exit; end;
   RequestId := ExtractJsonString(BodyUtf8, 'request_id');
-  SaveDir := ExtractJsonString(BodyUtf8, 'save_dir');
+  SaveDir := Utf8ToAnsi(ExtractJsonString(BodyUtf8, 'save_dir'));
   CallbackUrl := ExtractJsonString(BodyUtf8, 'callback_url');
   if SaveDir = '' then SaveDir := FTerminalManager.ProcessSaveDir;
   if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
@@ -685,12 +686,12 @@ begin
 
   if Path = '/capture/face' then begin
     if CaptureFaceDirect(SaveDir, SavePath) then
-      Result := '{"status":"ok",' + JsonStr('save_path', SavePath) + '}'
+      Result := '{"status":"ok",' + JsonStr('save_path', AnsiToUtf8(SavePath)) + '}'
     else Result := '{"error":true,"code":"capture_failed"}'; Exit; end;
 
   if Path = '/capture/fingerprint' then begin
     if CaptureFingerprintDirect(SaveDir, SavePath) then
-      Result := '{"status":"ok",' + JsonStr('save_path', SavePath) + '}'
+      Result := '{"status":"ok",' + JsonStr('save_path', AnsiToUtf8(SavePath)) + '}'
     else Result := '{"error":true,"code":"capture_failed"}'; Exit; end;
 
   if Path = '/capture/iris' then begin
@@ -701,8 +702,8 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/iris/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[HTTP] Iris async: accepted ' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[HTTP] Iris async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[信息] [DLL请求] DLL下发的虹膜抓拍请求已转交终端：request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[错误] [终端调用] DLL下发的虹膜抓拍请求转交终端失败。'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/ocr' then begin
@@ -713,8 +714,8 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/ocr-document/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[HTTP] OCR async: accepted ' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[HTTP] OCR async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[信息] [DLL请求] DLL下发的OCR识别请求已转交终端：request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[错误] [终端调用] DLL下发的OCR识别请求转交终端失败。'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/nfc' then begin
@@ -725,14 +726,14 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/nfc-card/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[HTTP] NFC async: accepted ' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[HTTP] NFC async: FAILED'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[信息] [DLL请求] DLL下发的IC卡识别请求已转交终端：request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[错误] [终端调用] DLL下发的IC卡识别请求转交终端失败。'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/preview/camera/start' then begin
     ThirdPartyHwndVal := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
     if ThirdPartyHwndVal <> 0 then FThirdPartyCameraHwnd := ThirdPartyHwndVal;
-    DoLog('[Preview] DLL camera preview, target_hwnd=' + IntToStr(ThirdPartyHwndVal));
+    DoLog('[信息] [DLL请求] DLL下发摄像头预览请求：target_hwnd=' + IntToStr(ThirdPartyHwndVal));
     if FPreviewManager.StartPreview(prtCamera, ThirdPartyHwndVal, TerminalBaseUrl) then begin
       MakeCallback(RequestId, CallbackUrl,
         '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'face_image') + ',' +
@@ -780,7 +781,7 @@ var ResourceType, RequestId, DllCallbackUrl, SaveDir, SavePath, PayloadUtf8: str
 begin
   ResourceType := FCallbackParser.GetResourceType(BodyUtf8);
   RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
-  DoLog('[CB] Received: resource_type=' + ResourceType + ' request_id=' + RequestId + ' preview=' + Copy(BodyUtf8, 1, 200));
+  DoLog('[信息] [终端回调] 正在处理终端回调：resource_type=' + ResourceType + '，request_id=' + RequestId);
 
   SaveDir := FRequestSaveDirs.Values[RequestId];
   DllCallbackUrl := FRequestCallbacks.Values[RequestId];
@@ -788,7 +789,7 @@ begin
   if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
 
   if ResourceType = 'ocr_event_status' then begin
-    DoLog('[CB] OCR process event (waiting for final ocr_document)');
+    DoLog('[信息] [OCR回调] 已收到处理中状态，等待最终识别结果。');
   end
   else if ResourceType = 'ocr_document' then begin
     OcrResult := FCallbackParser.ParseOcrDocument(BodyUtf8);
@@ -807,53 +808,52 @@ begin
           end;
           ImgPath := FFileSaver.SaveBase64Image(OcrResult.EvidenceImages[I].ImageBase64,
             'image/bmp', SaveDir, RequestId + Suffix, 'evidence');
-          DoLog('[CB] OCR evidence: type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
-            ' lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + ' saved=' + ImgPath);
+          DoLog('[信息] [OCR回调] 证据图片已保存：type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
+            '，lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + '，path=' + ImgPath);
         end;
         I := I + 1;
       end;
-      DoLog('[CB] OCR result: mrz=' + OcrResult.Mrz + ' evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + ' save=' + SavePath);
+      DoLog('[信息] [OCR回调] 识别完成：mrz=' + OcrResult.Mrz + '，evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + '，save_path=' + SavePath);
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/ocr');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('mrz', OcrResult.Mrz) + ',' +
-          JsonStr('save_path', SavePath) + '}';
+          JsonStr('save_path', AnsiToUtf8(SavePath)) + '}';
         MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
-    else DoLog('[CB] OCR: parse failed'); end
+    else DoLog('[错误] [OCR回调] 识别结果解析失败。'); end
 
   else if ResourceType = 'nfc_card' then begin
-    DoLog('[CB] NFC raw=' + Copy(BodyUtf8, 1, 500));
     NfcResult := FCallbackParser.ParseNfcCard(BodyUtf8);
     if NfcResult.Valid then begin
-      DoLog('[CB] NFC result: card_text=' + NfcResult.CardText);
+      DoLog('[信息] [IC卡回调] 卡片识别完成：card_text=' + Utf8ToAnsi(NfcResult.CardText));
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/nfc-card');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('card_text', NfcResult.CardText) + '}';
         MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
-    else DoLog('[CB] NFC: parse failed, no card_text'); end
+    else DoLog('[错误] [IC卡回调] 回调解析失败，未找到card_text。'); end
 
   else if ResourceType = 'iris_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'iris');
-      DoLog('[CB] Iris result: save=' + SavePath);
+      DoLog('[信息] [虹膜回调] 图片保存成功：save_path=' + SavePath);
       if DllCallbackUrl <> '' then begin
-        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('save_path', SavePath) + '}';
+        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('save_path', AnsiToUtf8(SavePath)) + '}';
         MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
-    else DoLog('[CB] Iris: parse failed'); end
+    else DoLog('[错误] [虹膜回调] 回调解析失败。'); end
 
   else if ResourceType = 'face_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'face_async');
-      DoLog('[CB] Face async: save=' + SavePath); end; end
+      DoLog('[信息] [人脸回调] 图片保存成功：save_path=' + SavePath); end; end
 
   else if ResourceType = 'fingerprint_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'fingerprint_async');
-      DoLog('[CB] Fingerprint async: save=' + SavePath); end; end
+      DoLog('[信息] [指纹回调] 图片保存成功：save_path=' + SavePath); end; end
 
-  else DoLog('[CB] Unknown resource_type: ' + ResourceType);
+  else DoLog('[提示] [终端回调] 收到未知资源类型：resource_type=' + ResourceType);
 
   Result := '{"status":"accepted"}'; end;
 

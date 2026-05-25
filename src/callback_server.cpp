@@ -14,7 +14,7 @@ CallbackServer& CallbackServer::Instance() {
 
 int CallbackServer::Start(const std::string& host, int port) {
     if (m_running) {
-        LOG_DEBUG("CallbackServer", "回调HTTP服务已在运行");
+        LOG_DEBUG("CallbackServer", "Delphi回调接收服务已在运行");
         return HZCYKJTHardWare_RET_OK;
     }
 
@@ -24,13 +24,13 @@ int CallbackServer::Start(const std::string& host, int port) {
     // 初始化 Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        LOG_ERROR("CallbackServer", "回调HTTP服务启动失败：WSAStartup 失败");
+        LOG_ERROR("CallbackServer", "Delphi回调接收服务启动失败：WSAStartup失败");
         return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
     }
 
     m_listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (m_listenSocket == INVALID_SOCKET) {
-        LOG_ERROR("CallbackServer", "回调HTTP服务启动失败：socket() 失败，error=%d", WSAGetLastError());
+        LOG_ERROR("CallbackServer", "Delphi回调接收服务启动失败：socket()失败，error=%d", WSAGetLastError());
         WSACleanup();
         return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
     }
@@ -39,7 +39,7 @@ int CallbackServer::Start(const std::string& host, int port) {
     int exclusive = 1;
     if (setsockopt(m_listenSocket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
                    (const char*)&exclusive, sizeof(exclusive)) == SOCKET_ERROR) {
-        LOG_WARN("CallbackServer", "setsockopt(SO_EXCLUSIVEADDRUSE) failed: %d", WSAGetLastError());
+        LOG_WARN("CallbackServer", "设置回调端口独占选项失败：error=%d", WSAGetLastError());
     }
 
     sockaddr_in addr = {0};
@@ -53,7 +53,7 @@ int CallbackServer::Start(const std::string& host, int port) {
     }
 
     if (bind(m_listenSocket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        LOG_ERROR("CallbackServer", "回调HTTP服务启动失败：bind(%s:%d) 失败，error=%d", host.c_str(), port, WSAGetLastError());
+        LOG_ERROR("CallbackServer", "Delphi回调接收服务启动失败：bind(%s:%d)失败，error=%d", host.c_str(), port, WSAGetLastError());
         closesocket(m_listenSocket);
         m_listenSocket = INVALID_SOCKET;
         WSACleanup();
@@ -61,7 +61,7 @@ int CallbackServer::Start(const std::string& host, int port) {
     }
 
     if (listen(m_listenSocket, SOMAXCONN) == SOCKET_ERROR) {
-        LOG_ERROR("CallbackServer", "回调HTTP服务启动失败：listen() 失败，error=%d", WSAGetLastError());
+        LOG_ERROR("CallbackServer", "Delphi回调接收服务启动失败：listen()失败，error=%d", WSAGetLastError());
         closesocket(m_listenSocket);
         m_listenSocket = INVALID_SOCKET;
         WSACleanup();
@@ -79,7 +79,7 @@ int CallbackServer::Start(const std::string& host, int port) {
     m_running = true;
     m_thread = std::make_unique<std::thread>(&CallbackServer::ServerThread, this);
 
-    LOG_INFO("CallbackServer", "回调HTTP服务已启动：listen=%s:%d", host.c_str(), (int)m_port);
+    LOG_INFO("CallbackServer", "Delphi回调接收服务已启动：listen=%s:%d", host.c_str(), (int)m_port);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -98,7 +98,7 @@ void CallbackServer::Stop() {
     m_thread.reset();
 
     WSACleanup();
-    LOG_INFO("CallbackServer", "回调HTTP服务已停止");
+    LOG_INFO("CallbackServer", "Delphi回调接收服务已停止");
 }
 
 bool CallbackServer::IsRunning() const {
@@ -137,7 +137,7 @@ bool CallbackServer::ParseHttpRequest(const std::string& raw,
 }
 
 void CallbackServer::ServerThread() {
-LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
+LOG_DEBUG("CallbackServer", "Delphi回调接收线程已启动");
 
     while (m_running) {
         sockaddr_in clientAddr;
@@ -146,7 +146,7 @@ LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
 
         if (clientSocket == INVALID_SOCKET) {
             if (m_running) {
-                LOG_ERROR("CallbackServer", "回调HTTP服务 accept 失败：error=%d", WSAGetLastError());
+                LOG_ERROR("CallbackServer", "Delphi回调接收失败：accept error=%d", WSAGetLastError());
             }
             continue;
         }
@@ -189,7 +189,7 @@ LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
                     static const int MAX_BODY = 10 * 1024 * 1024; // 10MB
                     if (contentLength > MAX_BODY) {
                         LOG_ERROR("CallbackServer",
-                                  "终端回调请求体过大，已拒绝：Content-Length=%d", contentLength);
+                                  "Delphi程序回调请求体过大，已拒绝：Content-Length=%d", contentLength);
                         const char* tooLarge =
                             "HTTP/1.1 413 Payload Too Large\r\n"
                             "Content-Length: 0\r\n"
@@ -226,9 +226,9 @@ LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
                 char remoteIp[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &clientAddr.sin_addr, remoteIp, sizeof(remoteIp));
 
-                LOG_INFO("CallbackServer", "收到终端HTTP回调：method=%s，path=%s，remote=%s，body_size=%zu",
+                LOG_INFO("CallbackServer", "收到Delphi程序回调：method=%s，path=%s，remote=%s，body_size=%zu",
                           method.c_str(), path.c_str(), remoteIp, body.size());
-                LOG_DEBUG("CallbackServer", "HTTP请求体：%s",
+                LOG_DEBUG("CallbackServer", "Delphi程序回调正文预览：%s",
                           body.substr(0, 500).c_str());
 
                 CallbackData cbData;
@@ -238,7 +238,7 @@ LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
 
                 EventDispatcher::Instance().PostCallbackData(cbData);
             } else {
-                LOG_WARN("CallbackServer", "收到HTTP请求但解析失败：bytes=%zu", rawRequest.size());
+                LOG_WARN("CallbackServer", "Delphi程序回调请求解析失败：bytes=%zu", rawRequest.size());
             }
 
             // 返回 HTTP 202
@@ -255,7 +255,7 @@ LOG_DEBUG("CallbackServer", "回调HTTP服务线程已启动");
         closesocket(clientSocket);
     }
 
-LOG_DEBUG("CallbackServer", "Server thread exited");
+LOG_DEBUG("CallbackServer", "Delphi回调接收线程已退出");
 }
 
 } // namespace HZCYKJTHardWare
