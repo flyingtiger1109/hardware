@@ -29,6 +29,8 @@ public:
     // 保存路径（运行时设置，优先级低于配置文件）
     std::string runtime_save_path;
     std::string save_default_root;
+    std::string save_camera_default_path;
+    std::string save_fingerprint_default_path;
     bool save_create_date_folder = true;
     bool save_create_request_folder = true;
 
@@ -46,10 +48,13 @@ public:
     // 预览状态
     bool camera_preview_running = false;
     bool fingerprint_preview_running = false;
+    bool iris_preview_running = false;
     std::string camera_preview_request_id;
+    std::string fingerprint_preview_request_id;
+    std::string iris_preview_request_id;
     intptr_t camera_preview_third_party_hwnd = 0;
-    intptr_t camera_preview_vlc_hwnd = 0;
-    intptr_t camera_preview_delphi_host_hwnd = 0;
+    intptr_t fingerprint_preview_third_party_hwnd = 0;
+    intptr_t iris_preview_third_party_hwnd = 0;
     int rtsp_network_caching_ms = 150;
     int rtsp_live_caching_ms = 150;
     std::string rtsp_transport = "tcp";

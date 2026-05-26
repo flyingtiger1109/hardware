@@ -9,6 +9,7 @@ type
   TFileSaver = class
   public
     function SaveBase64Image(const Base64Str, MimeType, SaveDir, RequestId, Prefix: string): string;
+    function SaveBase64ImageToFile(const Base64Str, FilePath: string): string;
     function SaveJsonFile(const JsonStr, SaveDir, RequestId, FileName: string): string;
     function CreateDateFolder(const BaseDir: string): string;
     function CreateRequestFolder(const BaseDir, RequestId: string): string;
@@ -124,6 +125,28 @@ begin
   Ext := GetExtensionFromMime(MimeType);
   FilePath := IncludeTrailingBackslash(Dir) + Prefix + '_' + RequestId + Ext;
 
+  if not Base64Decode(Base64Str, Buf, BufSize) then Exit;
+  try
+    FS := TFileStream.Create(FilePath, fmCreate);
+    try
+      FS.Write(Buf^, BufSize);
+      Result := FilePath;
+    finally
+      FS.Free;
+    end;
+  finally
+    FreeMem(Buf);
+  end;
+end;
+
+function TFileSaver.SaveBase64ImageToFile(const Base64Str, FilePath: string): string;
+var
+  Buf: Pointer;
+  BufSize: Integer;
+  FS: TFileStream;
+begin
+  Result := '';
+  if (Base64Str = '') or (FilePath = '') then Exit;
   if not Base64Decode(Base64Str, Buf, BufSize) then Exit;
   try
     FS := TFileStream.Create(FilePath, fmCreate);

@@ -48,7 +48,15 @@ const char* Logger::LevelToString(LogLevel level) {
 
 std::string Logger::GetLogFilePath() {
     std::string dateStr = PathHelper::GetDateString();
-    return PathHelper::Join(m_logDir, "HZCYKJTHardWare_" + dateStr + ".log");
+    std::string trimmedDir = m_logDir;
+    while (!trimmedDir.empty() && (trimmedDir.back() == '\\' || trimmedDir.back() == '/')) {
+        trimmedDir.pop_back();
+    }
+    std::string dirName = PathHelper::GetFileName(trimmedDir);
+    if (dirName.empty()) {
+        dirName = "HZCYKJTHardWareDLL_Logs";
+    }
+    return PathHelper::Join(m_logDir, dirName + "_" + dateStr + ".log");
 }
 
 bool Logger::Init(const std::string& logDir) {
@@ -56,7 +64,7 @@ bool Logger::Init(const std::string& logDir) {
 
     m_logDir = logDir;
     if (m_logDir.empty()) {
-        m_logDir = "HZCYKJTHardWare_Logs";
+        m_logDir = "HZCYKJTHardWareDLL_Logs";
     }
 
     if (m_file) {

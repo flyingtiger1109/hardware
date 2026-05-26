@@ -21,6 +21,8 @@ type
     FCameraTargetHwnd: HWND;
     FFingerprintTargetHwnd: HWND;
     FIrisTargetHwnd: HWND;
+    FNetworkCachingMs: Integer;
+    FLiveCachingMs: Integer;
     FLogProc: TPreviewLogCallback;
     procedure DoLog(const Msg: string);
     function ResTypeToTerminalPath(ResType: TPreviewResourceType): string;
@@ -32,7 +34,8 @@ type
     constructor Create(ACameraPanel, AFingerprintPanel, AIrisPanel: TPanel);
     destructor Destroy; override;
     procedure SetLogProc(ALogProc: TPreviewLogCallback);
-    // TargetHwnd: if 0, use Delphi panel; otherwise VLC renders directly to it
+    procedure SetCachingMs(NetworkCachingMs, LiveCachingMs: Integer);
+    // TargetHwnd: if 0, use Delphi panel; otherwise render within it
     function StartPreview(ResType: TPreviewResourceType; TargetHwnd: HWND;
       const TerminalBaseUrl: string): Boolean;
     function StopPreview(ResType: TPreviewResourceType): Boolean;
@@ -80,6 +83,7 @@ begin
   FIrisPanel := AIrisPanel;
   FVlcCamera := nil; FVlcFingerprint := nil; FVlcIris := nil;
   FCameraTargetHwnd := 0; FFingerprintTargetHwnd := 0; FIrisTargetHwnd := 0;
+  FNetworkCachingMs := 150; FLiveCachingMs := 150;
   FLogProc := nil;
 end;
 
@@ -91,6 +95,14 @@ end;
 
 procedure TPreviewManager.SetLogProc(ALogProc: TPreviewLogCallback);
 begin FLogProc := ALogProc; end;
+
+procedure TPreviewManager.SetCachingMs(NetworkCachingMs, LiveCachingMs: Integer);
+begin
+  if NetworkCachingMs < 0 then NetworkCachingMs := 0;
+  if LiveCachingMs < 0 then LiveCachingMs := 0;
+  FNetworkCachingMs := NetworkCachingMs;
+  FLiveCachingMs := LiveCachingMs;
+end;
 
 procedure TPreviewManager.DoLog(const Msg: string);
 begin if Assigned(FLogProc) then FLogProc(Msg); end;
@@ -178,6 +190,8 @@ var
   Client: TTerminalClient;
   ResponseUtf8, PreviewUrl, Status, TerminalPath: string;
   RenderHwnd: HWND;
+  SourceWidth, SourceHeight: Integer;
+  SwapLayoutDimensions: Boolean;
   Vlc: TVlcPlayer;
 begin
   Result := False;
@@ -227,9 +241,18 @@ begin
   else
     RenderHwnd := GetDefaultHostHwnd(ResType);
 
-  // Create VLC and render DIRECTLY to the target HWND
+  SwapLayoutDimensions := False;
+  case ResType of
+    prtCamera: begin SourceWidth := 480; SourceHeight := 640; SwapLayoutDimensions := True; end;
+    prtFingerprint: begin SourceWidth := 640; SourceHeight := 640; end;
+    else begin SourceWidth := 640; SourceHeight := 480; end;
+  end;
+
+  // The video child uses cover layout; its parent clips overflow at the center.
   Vlc := TVlcPlayer.Create;
-  if not Vlc.Play(PreviewUrl, RenderHwnd) then
+  Vlc.SetLogProc(FLogProc);
+  if not Vlc.Play(PreviewUrl, RenderHwnd, SourceWidth, SourceHeight,
+    SwapLayoutDimensions, FNetworkCachingMs, FLiveCachingMs) then
   begin
     DoLog('[´íÎó] [Ô¤ÀÀäÖÈ¾] VLCÆô¶¯Ê§°Ü£º' + Vlc.LastError);
     Vlc.Free;

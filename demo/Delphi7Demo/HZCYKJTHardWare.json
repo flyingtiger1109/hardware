@@ -3,13 +3,13 @@
     "host": "127.0.0.1",
     "port": 18080,
     "auto_start": true,
-    "executable": "HZCYKJTHardWareValidation.exe",
+    "executable": "HZCYKJTHardWare.exe",
     "start_wait_ms": 10000,
     "ping_interval_ms": 300
   },
   "terminal_callback_server": {
-    "listen_host": "127.0.0.1",
-    "public_host": "127.0.0.1",
+    "listen_host": "192.168.20.199",
+    "public_host": "",
     "port": 18081,
     "path": "/terminal-callback"
   },
@@ -19,45 +19,64 @@
     "port": 9098,
     "check_on_init": false,
     "default_index": 1,
-    "preferred_subnet_prefix": "127.0.0",
+    "preferred_subnet_prefix": "192.168.20",
+    "fixed_terminals": [
+      {
+        "index": 1,
+        "name": "terminal_a",
+        "base_url": ""
+      },
+      {
+        "index": 2,
+        "name": "terminal_b",
+        "base_url": ""
+      }
+    ],
     "auto_subnet_devices": [
       {
         "index": 1,
-        "name": "validation_terminal",
+        "name": "terminal_a",
         "host_suffix": 30
+      },
+      {
+        "index": 2,
+        "name": "terminal_b",
+        "host_suffix": 11
       }
     ]
   },
   "callback_server": {
-    "host": "127.0.0.1",
-    "auto_bind_lan_ip": false,
-    "listen_any": false,
-    "port": 39092,
+    "host": "",
+    "auto_bind_lan_ip": true,
+    "listen_any": true,
+    "port": 39091,
     "base_path": "/HZCYKJTHardWare/callback"
   },
   "timeout": {
-    "http_connect_ms": 500,
-    "http_request_ms": 500,
-    "face_capture_ms": 500,
-    "fingerprint_capture_ms": 500,
-    "ocr_ms": 500
+    "http_connect_ms": 10000,
+    "http_request_ms": 10000,
+    "face_capture_ms": 10000,
+    "fingerprint_capture_ms": 10000,
+    "ocr_ms": 10000
   },
   "save": {
     "default_root": ".\\captures",
+    "camera_default_path": ".\\captures\\camera.jpg",
+    "fingerprint_default_path": ".\\captures\\fingerprint.jpg",
     "create_date_folder": true,
     "create_request_folder": true
   },
   "preview": {
     "renderer": "libvlc",
-    "auto_reconnect": false,
+    "auto_reconnect": true,
     "check_hwnd_interval_ms": 500,
     "stop_preview_on_end_process": false,
-    "rtsp_network_caching_ms": 150,
-    "rtsp_live_caching_ms": 150,
+    "rtsp_network_caching_ms": 50,
+    "rtsp_live_caching_ms": 50,
     "rtsp_transport": "tcp"
   },
   "log": {
     "dir": "HZCYKJTHardWareDLL_Logs",
-    "level": "debug"
+    "level": "info"
   }
 }

@@ -676,9 +676,8 @@ void EventDispatcher::ProcessNfcCardCallbackLegacy(const std::string& requestId,
 #endif
 
 void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
-                                                  const std::string& body) {
-    intptr_t vlcHwnd = GetIntPtrValue(body, "vlc_hwnd");
-    intptr_t delphiHostHwnd = GetIntPtrValue(body, "delphi_host_hwnd");
+                                                   const std::string& body) {
+    intptr_t renderHwnd = GetIntPtrValue(body, "render_hwnd");
     std::string resourceType = JsonHelper::GetString(body, "resource_type");
     if (resourceType.empty()) {
         resourceType = HZCYKJTHardWare_RESOURCE_FACE_IMAGE;
@@ -686,74 +685,66 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
 
     auto& ctx = HzsjkjtContext::Instance();
     intptr_t thirdPartyHwndValue = 0;
+    std::string currentRequestId;
+    int startedEventType = HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_STARTED;
+    int failedEventType = HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED;
     {
-        auto lock = WriteLock();
-        if (ctx.camera_preview_request_id != requestId) {
-            LOG_WARN("EventDispatcher", "Delphi程序预览就绪回调request_id不匹配：callback=%s，current=%s",
-                     requestId.c_str(), ctx.camera_preview_request_id.c_str());
-            return;
+        auto lock = ReadLock();
+        if (resourceType == HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE) {
+            currentRequestId = ctx.fingerprint_preview_request_id;
+            thirdPartyHwndValue = ctx.fingerprint_preview_third_party_hwnd;
+            startedEventType = HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_STARTED;
+            failedEventType = HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_FAILED;
+        } else if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
+            currentRequestId = ctx.iris_preview_request_id;
+            thirdPartyHwndValue = ctx.iris_preview_third_party_hwnd;
+            startedEventType = HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STARTED;
+            failedEventType = HZCYKJTHardWare_EVENT_IRIS_PREVIEW_FAILED;
+        } else {
+            currentRequestId = ctx.camera_preview_request_id;
+            thirdPartyHwndValue = ctx.camera_preview_third_party_hwnd;
         }
-        thirdPartyHwndValue = ctx.camera_preview_third_party_hwnd;
-        ctx.camera_preview_vlc_hwnd = vlcHwnd;
-        if (delphiHostHwnd != 0) {
-            ctx.camera_preview_delphi_host_hwnd = delphiHostHwnd;
+        if (currentRequestId != requestId) {
+            LOG_WARN("EventDispatcher", "Delphi程序预览就绪回调request_id不匹配：resource=%s，callback=%s，current=%s",
+                     resourceType.c_str(), requestId.c_str(), currentRequestId.c_str());
+            return;
         }
     }
 
-    HWND vlcWindow = reinterpret_cast<HWND>(vlcHwnd);
+    HWND renderWindow = reinterpret_cast<HWND>(renderHwnd);
     HWND thirdPartyWindow = reinterpret_cast<HWND>(thirdPartyHwndValue);
 
-    if (vlcHwnd == 0 || !IsWindow(vlcWindow)) {
-        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：vlc_hwnd无效，request_id=%s，vlc_hwnd=%p",
-                  requestId.c_str(), vlcWindow);
-        SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED,
-                  HZCYKJTHardWare_RET_INVALID_HWND, "", "Invalid VLC preview hwnd",
+    if (renderHwnd == 0 || !IsWindow(renderWindow)) {
+        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：render_hwnd无效，request_id=%s，render_hwnd=%p",
+                  requestId.c_str(), renderWindow);
+        SendEvent(requestId, resourceType, failedEventType,
+                  HZCYKJTHardWare_RET_INVALID_HWND, "", "预览渲染窗口句柄无效",
                   nullptr, body.c_str());
         return;
     }
 
     if (thirdPartyHwndValue == 0 || !IsWindow(thirdPartyWindow)) {
-        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，vlc_hwnd=%p",
-                  requestId.c_str(), thirdPartyWindow, vlcWindow);
-        SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED,
-                  HZCYKJTHardWare_RET_INVALID_HWND, "", "Invalid third-party preview hwnd",
+        LOG_ERROR("EventDispatcher", "Delphi程序预览就绪回调处理失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，render_hwnd=%p",
+                  requestId.c_str(), thirdPartyWindow, renderWindow);
+        SendEvent(requestId, resourceType, failedEventType,
+                  HZCYKJTHardWare_RET_INVALID_HWND, "", "第三方预览窗口句柄无效",
                   nullptr, body.c_str());
         return;
     }
 
-    SetLastError(0);
-    HWND oldParent = SetParent(vlcWindow, thirdPartyWindow);
-    DWORD setParentError = GetLastError();
-
-    RECT rc = {0};
-    SetLastError(0);
-    BOOL gotRect = GetClientRect(thirdPartyWindow, &rc);
-    DWORD getRectError = GetLastError();
-
-    BOOL moved = FALSE;
-    DWORD moveError = 0;
-    if (gotRect) {
-        SetLastError(0);
-        moved = MoveWindow(vlcWindow, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-        moveError = GetLastError();
-    }
-
-    LOG_INFO("EventDispatcher", "Delphi程序预览就绪并嵌入第三方窗口：request_id=%s，resource=%s，third_party_hwnd=%p，vlc_hwnd=%p，delphi_host_hwnd=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，get_rect_error=%lu，move=%d，move_error=%lu，width=%ld，height=%ld",
-             requestId.c_str(), resourceType.c_str(), thirdPartyWindow, vlcWindow,
-             reinterpret_cast<void*>(delphiHostHwnd), oldParent, setParentError,
-             gotRect, getRectError, moved, moveError,
-             gotRect ? (rc.right - rc.left) : 0,
-             gotRect ? (rc.bottom - rc.top) : 0);
-
-    if (setParentError != 0 || !gotRect || !moved) {
-        SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED,
-                  HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED, "", "Failed to move preview window",
+    if (renderWindow != thirdPartyWindow) {
+        LOG_ERROR("EventDispatcher", "Delphi程序预览渲染目标不一致：request_id=%s，resource=%s，third_party_hwnd=%p，render_hwnd=%p",
+                  requestId.c_str(), resourceType.c_str(), thirdPartyWindow, renderWindow);
+        SendEvent(requestId, resourceType, failedEventType,
+                  HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED, "", "预览渲染窗口与传入窗口不一致",
                   nullptr, body.c_str());
         return;
     }
 
-    SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_STARTED,
-              HZCYKJTHardWare_RET_OK, "", "Camera preview ready",
+    LOG_INFO("EventDispatcher", "Delphi程序已在第三方窗口启动预览：request_id=%s，resource=%s，render_hwnd=%p",
+             requestId.c_str(), resourceType.c_str(), renderWindow);
+    SendEvent(requestId, resourceType, startedEventType,
+              HZCYKJTHardWare_RET_OK, "", "预览已就绪",
               nullptr, body.c_str());
 }
 

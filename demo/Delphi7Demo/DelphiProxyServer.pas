@@ -57,6 +57,7 @@ type
     FActivePreviews: set of TPreviewResourceType;
     FThirdPartyCameraHwnd: HWND;
     FThirdPartyFingerprintHwnd: HWND;
+    FThirdPartyIrisHwnd: HWND;
     procedure DoLog(const Msg: string);
     function GenRequestId(const Prefix: string): string;
     function GetLocalLanIp: string;
@@ -122,6 +123,19 @@ begin Result := '"' + Name + '":"' + JsonEscape(Value) + '"'; end;
 
 function JsonInt(const Name: string; Value: Int64): string;
 begin Result := '"' + Name + '":' + IntToStr(Value); end;
+
+function ResolveExactSaveFile(const FilePath: string): string;
+var
+  ParentDir: string;
+begin
+  Result := FilePath;
+  if Result = '' then Exit;
+  if ExtractFileDrive(Result) = '' then
+    Result := ExpandFileName(ExtractFilePath(ParamStr(0)) + Result);
+  ParentDir := ExtractFileDir(Result);
+  if (ParentDir <> '') and not DirectoryExists(ParentDir) then
+    ForceDirectories(ParentDir);
+end;
 
 function ExtractJsonString(const JsonUtf8, Name: string): string;
 var Key: string; P, I: Integer; Escaped: Boolean;
@@ -305,6 +319,7 @@ end;
 procedure TDelphiProxyServer.LoadRuntimeConfig;
 var ConfigPath, ConfigText, Section, HostText, BasePathText: string;
   SL: TStringList; PortValue: Int64;
+  NetworkCachingValue, LiveCachingValue: Integer;
 begin
   FDelphiServerHost := '127.0.0.1';
   FDelphiServerPort := 8080;
@@ -362,6 +377,18 @@ begin
       FTerminalCallbackPath := BasePathText;
     end;
   end;
+
+  NetworkCachingValue := 150;
+  LiveCachingValue := 150;
+  Section := ExtractJsonObject(ConfigText, 'preview');
+  if Section <> '' then
+  begin
+    if Pos('"rtsp_network_caching_ms"', Section) > 0 then
+      NetworkCachingValue := ExtractJsonInt(Section, 'rtsp_network_caching_ms');
+    if Pos('"rtsp_live_caching_ms"', Section) > 0 then
+      LiveCachingValue := ExtractJsonInt(Section, 'rtsp_live_caching_ms');
+  end;
+  FPreviewManager.SetCachingMs(NetworkCachingValue, LiveCachingValue);
 
   Section := ExtractJsonObject(ConfigText, 'callback_server');
   if Section = '' then Exit;
@@ -534,19 +561,14 @@ begin Result := Prefix + '_' + FormatDateTime('yyyymmddhhnnsszzz', Now); end;
 procedure TDelphiProxyServer.Start;
 begin if FThread <> nil then Exit;
   FLanIp := GetLocalLanIp;
-  FThirdPartyCameraHwnd := 0; FThirdPartyFingerprintHwnd := 0;
+  FThirdPartyCameraHwnd := 0; FThirdPartyFingerprintHwnd := 0; FThirdPartyIrisHwnd := 0;
   DoLog('[信息] [服务] 已检测本机局域网地址：' + FLanIp);
   DoLog('[信息] [终端状态] 当前终端：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
   DoLog('[信息] [服务] 正在启动DLL通信服务：http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
   DoLog('[信息] [服务] DLL通信终端回调=' + GetCallbackBase);
-  // Auto-start camera + fingerprint preview
-  DoLog('[信息] [预览控制] 正在自动启动摄像头和指纹预览。');
-  Include(FActivePreviews, prtCamera);
-  Include(FActivePreviews, prtFingerprint);
-  StartCameraPreviewDirect;
-  StartFingerprintPreviewDirect; end;
+  DoLog('[信息] [预览控制] 服务已启动，等待外部预览窗口请求。'); end;
 
 procedure TDelphiProxyServer.Stop;
 begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
@@ -565,9 +587,9 @@ begin Result := False; if DllCallbackUrl = '' then Exit;
 procedure TDelphiProxyServer.AutoStopPreviews;
 begin
   DoLog('[信息] [终端切换] 切换前正在停止活动预览。');
-  if prtIris in FActivePreviews then StopIrisPreviewDirect;
-  if prtFingerprint in FActivePreviews then StopFingerprintPreviewDirect;
-  if prtCamera in FActivePreviews then StopCameraPreviewDirect;
+  if prtIris in FActivePreviews then FPreviewManager.StopPreview(prtIris);
+  if prtFingerprint in FActivePreviews then FPreviewManager.StopPreview(prtFingerprint);
+  if prtCamera in FActivePreviews then FPreviewManager.StopPreview(prtCamera);
 end;
 
 procedure TDelphiProxyServer.AutoStartPreviews;
@@ -578,6 +600,8 @@ begin
     FPreviewManager.StartPreview(prtCamera, FThirdPartyCameraHwnd, FTerminalManager.CurrentBaseUrl);
   if prtFingerprint in FActivePreviews then
     FPreviewManager.StartPreview(prtFingerprint, FThirdPartyFingerprintHwnd, FTerminalManager.CurrentBaseUrl);
+  if prtIris in FActivePreviews then
+    FPreviewManager.StartPreview(prtIris, FThirdPartyIrisHwnd, FTerminalManager.CurrentBaseUrl);
 end;
 
 // ============================================================
@@ -589,8 +613,6 @@ begin Result := False;
   if FTerminalManager.IsSameTerminal(Index) then begin
     DoLog('[提示] [终端切换] 当前已是终端' + IntToStr(Index) + '，将刷新摄像头和指纹预览。');
     AutoStopPreviews;
-    Include(FActivePreviews, prtCamera);
-    Include(FActivePreviews, prtFingerprint);
     AutoStartPreviews;
     Result := True;
     Exit;
@@ -601,8 +623,6 @@ begin Result := False;
   // Switch
   FTerminalManager.SwitchTo(Index);
   DoLog('[信息] [终端切换] 当前终端已切换为：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
-  Include(FActivePreviews, prtCamera);
-  Include(FActivePreviews, prtFingerprint);
   AutoStartPreviews;
   Result := True; end;
 
@@ -641,8 +661,11 @@ begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUr
   FaceResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
   if not FaceResult.Valid then begin DoLog('[错误] [人脸抓拍] 响应解析失败。'); Exit; end;
   if FaceResult.RequestId = '' then FaceResult.RequestId := ReqId;
-  SavePath := FFileSaver.SaveBase64Image(FaceResult.ImageBase64, FaceResult.ImageMimeType,
-    SafeResolveSaveDir(SaveDir), FaceResult.RequestId, 'face');
+  if ExtractFileExt(SaveDir) <> '' then
+    SavePath := FFileSaver.SaveBase64ImageToFile(FaceResult.ImageBase64, ResolveExactSaveFile(SaveDir))
+  else
+    SavePath := FFileSaver.SaveBase64Image(FaceResult.ImageBase64, FaceResult.ImageMimeType,
+      SafeResolveSaveDir(SaveDir), FaceResult.RequestId, 'face');
   if SavePath = '' then begin DoLog('[错误] [人脸抓拍] 图片保存失败。'); Exit; end;
   DoLog('[信息] [人脸抓拍] 图片保存成功：' + SavePath); Result := True; end;
 
@@ -656,8 +679,11 @@ begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUr
   FpResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
   if not FpResult.Valid then begin DoLog('[错误] [指纹抓拍] 响应解析失败。'); Exit; end;
   if FpResult.RequestId = '' then FpResult.RequestId := ReqId;
-  SavePath := FFileSaver.SaveBase64Image(FpResult.ImageBase64, FpResult.ImageMimeType,
-    SafeResolveSaveDir(SaveDir), FpResult.RequestId, 'fingerprint');
+  if ExtractFileExt(SaveDir) <> '' then
+    SavePath := FFileSaver.SaveBase64ImageToFile(FpResult.ImageBase64, ResolveExactSaveFile(SaveDir))
+  else
+    SavePath := FFileSaver.SaveBase64Image(FpResult.ImageBase64, FpResult.ImageMimeType,
+      SafeResolveSaveDir(SaveDir), FpResult.RequestId, 'fingerprint');
   if SavePath = '' then begin DoLog('[错误] [指纹抓拍] 图片保存失败。'); Exit; end;
   DoLog('[信息] [指纹抓拍] 图片保存成功：' + SavePath); Result := True; end;
 
@@ -697,6 +723,7 @@ begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenReq
 function TDelphiProxyServer.StartCameraPreviewDirect: Boolean;
 var BaseUrl: string;
 begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  FThirdPartyCameraHwnd := 0;
   Result := FPreviewManager.StartPreview(prtCamera, 0, BaseUrl);
   if Result then Include(FActivePreviews, prtCamera); end;
 
@@ -707,6 +734,7 @@ begin Result := FPreviewManager.StopPreview(prtCamera);
 function TDelphiProxyServer.StartFingerprintPreviewDirect: Boolean;
 var BaseUrl: string;
 begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  FThirdPartyFingerprintHwnd := 0;
   Result := FPreviewManager.StartPreview(prtFingerprint, 0, BaseUrl);
   if Result then Include(FActivePreviews, prtFingerprint); end;
 
@@ -717,6 +745,7 @@ begin Result := FPreviewManager.StopPreview(prtFingerprint);
 function TDelphiProxyServer.StartIrisPreviewDirect: Boolean;
 var BaseUrl: string;
 begin BaseUrl := FTerminalManager.CurrentBaseUrl;
+  FThirdPartyIrisHwnd := 0;
   Result := FPreviewManager.StartPreview(prtIris, 0, BaseUrl);
   if Result then Include(FActivePreviews, prtIris); end;
 
@@ -805,42 +834,55 @@ begin
 
   if Path = '/preview/camera/start' then begin
     ThirdPartyHwndVal := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
-    if ThirdPartyHwndVal <> 0 then FThirdPartyCameraHwnd := ThirdPartyHwndVal;
+    if (ThirdPartyHwndVal = 0) or not IsWindow(ThirdPartyHwndVal) then begin
+      DoLog('[错误] [预览控制] 摄像头目标窗口句柄无效：hwnd=' + IntToStr(ThirdPartyHwndVal));
+      Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
+    FThirdPartyCameraHwnd := ThirdPartyHwndVal;
     DoLog('[信息] [DLL请求] DLL下发摄像头预览请求：target_hwnd=' + IntToStr(ThirdPartyHwndVal));
     if FPreviewManager.StartPreview(prtCamera, ThirdPartyHwndVal, TerminalBaseUrl) then begin
       MakeCallback(RequestId, CallbackUrl,
         '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'face_image') + ',' +
         JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtCamera)) + ',' +
         JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtCamera)) + '}');
+      Include(FActivePreviews, prtCamera);
       Result := '{"accepted":true}'; end
     else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
 
-  if Path = '/preview/camera/stop' then begin FPreviewManager.StopPreview(prtCamera); Result := '{"status":"ok"}'; Exit; end;
+  if Path = '/preview/camera/stop' then begin FPreviewManager.StopPreview(prtCamera); Exclude(FActivePreviews, prtCamera); FThirdPartyCameraHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
   if Path = '/preview/fingerprint/start' then begin
     FpHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
-    if FpHwnd <> 0 then FThirdPartyFingerprintHwnd := FpHwnd;
+    if (FpHwnd = 0) or not IsWindow(FpHwnd) then begin
+      DoLog('[错误] [预览控制] 指纹仪目标窗口句柄无效：hwnd=' + IntToStr(FpHwnd));
+      Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
+    FThirdPartyFingerprintHwnd := FpHwnd;
     if FPreviewManager.StartPreview(prtFingerprint, FpHwnd, TerminalBaseUrl) then begin
       MakeCallback(RequestId, CallbackUrl,
         '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'fingerprint_image') + ',' +
         JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtFingerprint)) + ',' +
         JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtFingerprint)) + '}');
+      Include(FActivePreviews, prtFingerprint);
       Result := '{"accepted":true}'; end
     else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
 
-  if Path = '/preview/fingerprint/stop' then begin FPreviewManager.StopPreview(prtFingerprint); Result := '{"status":"ok"}'; Exit; end;
+  if Path = '/preview/fingerprint/stop' then begin FPreviewManager.StopPreview(prtFingerprint); Exclude(FActivePreviews, prtFingerprint); FThirdPartyFingerprintHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
   if Path = '/preview/iris/start' then begin
     IrisHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
+    if (IrisHwnd = 0) or not IsWindow(IrisHwnd) then begin
+      DoLog('[错误] [预览控制] 虹膜目标窗口句柄无效：hwnd=' + IntToStr(IrisHwnd));
+      Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
+    FThirdPartyIrisHwnd := IrisHwnd;
     if FPreviewManager.StartPreview(prtIris, IrisHwnd, TerminalBaseUrl) then begin
       MakeCallback(RequestId, CallbackUrl,
         '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'iris_image') + ',' +
         JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtIris)) + ',' +
         JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtIris)) + '}');
+      Include(FActivePreviews, prtIris);
       Result := '{"accepted":true}'; end
     else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
 
-  if Path = '/preview/iris/stop' then begin FPreviewManager.StopPreview(prtIris); Result := '{"status":"ok"}'; Exit; end;
+  if Path = '/preview/iris/stop' then begin FPreviewManager.StopPreview(prtIris); Exclude(FActivePreviews, prtIris); FThirdPartyIrisHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
   Result := '{"error":true,"code":"not_found","message":"unknown:' + Path + '"}'; end;
 

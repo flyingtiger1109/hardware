@@ -30,15 +30,21 @@
 - `/HZCYKJTHardWare/callback/nfc-card`
 - `/HZCYKJTHardWare/callback/preview-ready`
 
-预览示例返回窗体内黑色 Panel 的 HWND 作为 `vlc_hwnd`，同时返回宿主 Panel 的 `delphi_host_hwnd`，便于 DLL 在停止预览或 ReleaseSdk 时把窗口还回 Delphi 程序。
+预览接口返回实际目标 `render_hwnd`。DLL 传入外部有效 HWND 时，本程序让 libVLC 直接绑定该窗口，并通过原生裁切参数按视频比例居中裁切铺满；不会回退到窗体内 Panel。服务启动时不自动开启预览。
 
 ## 使用顺序
 
 1. 将本程序、`HZCYKJTHardWare.dll` 与两者共用的 `HZCYKJTHardWare.json` 放在同一目录。
 2. 启动 `demo\DelphiThirdPartyDemo` 或其他第三方 Demo。
-3. 第三方调用 DLL 的 `InitSdk`；当 `delphi_server.auto_start=true` 时，DLL 会在 `/ping` 不可用时自动启动本程序。
+3. 第三方调用 DLL 的 `InitSdk`；当 `delphi_server.auto_start=true` 时，DLL 会在 `/ping` 不可用时自动启动本程序；若同路径程序已存在但通信服务在初始化 8 秒内仍不可用，DLL 会重启本程序后重新等待 `/ping`。
 4. 确认日志显示 JSON 所配置的 DLL 通信服务和终端回调监听地址均启动成功。
 5. 调用抓拍、OCR、NFC、预览等接口验证转发链路。
+
+## 保存路径与日志
+
+- 摄像头和指纹同步抓拍收到带扩展名的路径时，按该完整路径覆盖保存，不追加请求编号或设备后缀。
+- 相对保存路径以本程序 EXE 所在目录为基准。
+- 后端日志文件位于 `HZCYKJTHardWareExe_Logs\HZCYKJTHardWareExe_Logs_yyyyMMdd.log`。
 
 ## 端口配置
 

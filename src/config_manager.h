@@ -59,6 +59,8 @@ public:
     int GetOcrTimeoutMs() const;
 
     const std::string& GetSaveDefaultRoot() const;
+    const std::string& GetCameraDefaultPath() const;
+    const std::string& GetFingerprintDefaultPath() const;
     bool GetCreateDateFolder() const;
     bool GetCreateRequestFolder() const;
 
@@ -110,6 +112,8 @@ private:
     int m_ocrTimeoutMs = 20000;
 
     std::string m_saveDefaultRoot;
+    std::string m_cameraDefaultPath = ".\\captures\\camera.jpg";
+    std::string m_fingerprintDefaultPath = ".\\captures\\fingerprint.jpg";
     bool m_createDateFolder = true;
     bool m_createRequestFolder = true;
 

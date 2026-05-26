@@ -54,13 +54,15 @@
   },
   "timeout": {
     "http_connect_ms": 3000,
-    "http_request_ms": 3000,
+    "http_request_ms": 15000,
     "face_capture_ms": 5000,
     "fingerprint_capture_ms": 5000,
     "ocr_ms": 10000
   },
   "save": {
     "default_root": ".\\captures",
+    "camera_default_path": ".\\captures\\camera.jpg",
+    "fingerprint_default_path": ".\\captures\\fingerprint.jpg",
     "create_date_folder": true,
     "create_request_folder": true
   },
@@ -69,8 +71,8 @@
     "auto_reconnect": true,
     "check_hwnd_interval_ms": 500,
     "stop_preview_on_end_process": false,
-    "rtsp_network_caching_ms": 150,
-    "rtsp_live_caching_ms": 150,
+    "rtsp_network_caching_ms": 50,
+    "rtsp_live_caching_ms": 50,
     "rtsp_transport": "tcp"
   },
   "log": {

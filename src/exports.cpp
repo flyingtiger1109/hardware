@@ -41,6 +41,27 @@ static std::string ResolveSaveRoot(const char* saveDir) {
     return root;
 }
 
+static bool HasFileExtension(const std::string& path) {
+    std::string fileName = HZCYKJTHardWare::PathHelper::GetFileName(path);
+    size_t dot = fileName.find_last_of('.');
+    return dot != std::string::npos && dot > 0 && dot + 1 < fileName.size();
+}
+
+static std::string ResolveCaptureTargetPath(const char* requestedPath, bool camera) {
+    std::string targetPath = requestedPath ? requestedPath : "";
+    if (HasFileExtension(targetPath)) {
+        return targetPath;
+    }
+
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    auto lock = HZCYKJTHardWare::ReadLock();
+    targetPath = camera ? ctx.save_camera_default_path : ctx.save_fingerprint_default_path;
+    if (targetPath.empty()) {
+        targetPath = camera ? ".\\captures\\camera.jpg" : ".\\captures\\fingerprint.jpg";
+    }
+    return targetPath;
+}
+
 static void PostCaptureEvent(const std::string& requestId,
                              const std::string& resourceType,
                              int eventType,
@@ -94,42 +115,6 @@ static std::string BuildCallbackUrl(const HZCYKJTHardWare::HzsjkjtContext& ctx,
         ctx.callback_server_base_path + route;
 }
 
-static void TryRestoreCameraPreviewToDelphiHost(const std::string& requestId,
-                                                intptr_t vlcHwndValue,
-                                                intptr_t delphiHostHwndValue) {
-    if (vlcHwndValue == 0) {
-        return;
-    }
-
-    HWND vlcHwnd = reinterpret_cast<HWND>(vlcHwndValue);
-    HWND delphiHostHwnd = reinterpret_cast<HWND>(delphiHostHwndValue);
-    if (!IsWindow(vlcHwnd)) {
-        LOG_WARN("EXPORT", "归还预览窗口跳过：request_id=%s，vlc_hwnd=%p 已无效", requestId.c_str(), vlcHwnd);
-        return;
-    }
-
-    bool hasValidDelphiHost = delphiHostHwndValue != 0 && IsWindow(delphiHostHwnd);
-    HWND restoreParent = hasValidDelphiHost ? delphiHostHwnd : nullptr;
-
-    SetLastError(0);
-    HWND oldParent = SetParent(vlcHwnd, restoreParent);
-    DWORD setParentError = GetLastError();
-
-    RECT rc = {0};
-    BOOL gotRect = hasValidDelphiHost ? GetClientRect(delphiHostHwnd, &rc) : FALSE;
-    BOOL moved = FALSE;
-    DWORD moveError = 0;
-    if (gotRect) {
-        SetLastError(0);
-        moved = MoveWindow(vlcHwnd, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-        moveError = GetLastError();
-    }
-
-    LOG_INFO("EXPORT", "归还预览窗口：request_id=%s，vlc_hwnd=%p，delphi_host_hwnd=%p，restore_parent=%p，old_parent=%p，set_parent_error=%lu，get_rect=%d，move=%d，move_error=%lu",
-             requestId.c_str(), vlcHwnd, delphiHostHwnd, restoreParent, oldParent,
-             setParentError, gotRect, moved, moveError);
-}
-
 static bool IsAbsoluteWindowsPath(const std::string& path) {
     return (path.size() > 1 && path[1] == ':') ||
         (path.size() > 1 && (path[0] == '\\' || path[0] == '/') &&
@@ -144,10 +129,25 @@ static std::string ResolveDelphiExecutablePath(const HZCYKJTHardWare::ConfigMana
         : HZCYKJTHardWare::PathHelper::Join(dllDir, executable);
 }
 
-static bool IsProcessRunningForExecutable(const std::string& executablePath) {
+static std::wstring GetFullWindowsPath(const std::string& path) {
     using namespace HZCYKJTHardWare;
 
+    std::wstring input = PathHelper::Utf8ToWide(path);
+    wchar_t fullPath[MAX_PATH] = {0};
+    DWORD length = GetFullPathNameW(input.c_str(), MAX_PATH, fullPath, nullptr);
+    if (length == 0 || length >= MAX_PATH) {
+        return input;
+    }
+    return std::wstring(fullPath, length);
+}
+
+static bool FindProcessIdsForExecutablePath(const std::string& executablePath,
+                                            std::vector<DWORD>& processIds) {
+    using namespace HZCYKJTHardWare;
+
+    processIds.clear();
     std::wstring executableName = PathHelper::Utf8ToWide(PathHelper::GetFileName(executablePath));
+    std::wstring expectedPath = GetFullWindowsPath(executablePath);
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
         LOG_WARN("EXPORT", "检查Delphi程序进程失败：error=%lu", GetLastError());
@@ -156,17 +156,63 @@ static bool IsProcessRunningForExecutable(const std::string& executablePath) {
 
     PROCESSENTRY32W entry = {};
     entry.dwSize = sizeof(entry);
-    bool found = false;
     if (Process32FirstW(snapshot, &entry)) {
         do {
             if (_wcsicmp(entry.szExeFile, executableName.c_str()) == 0) {
-                found = true;
-                break;
+                HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+                if (!process) {
+                    LOG_WARN("EXPORT", "检查同名Delphi进程路径失败：pid=%lu，error=%lu",
+                             entry.th32ProcessID, GetLastError());
+                    continue;
+                }
+
+                wchar_t actualPath[MAX_PATH] = {0};
+                DWORD actualPathLength = MAX_PATH;
+                if (QueryFullProcessImageNameW(process, 0, actualPath, &actualPathLength) &&
+                    _wcsicmp(actualPath, expectedPath.c_str()) == 0) {
+                    processIds.push_back(entry.th32ProcessID);
+                }
+                CloseHandle(process);
             }
         } while (Process32NextW(snapshot, &entry));
     }
     CloseHandle(snapshot);
-    return found;
+    return true;
+}
+
+static bool TerminateDelphiServiceProcesses(const std::string& executablePath,
+                                            const std::vector<DWORD>& processIds) {
+    for (DWORD processId : processIds) {
+        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, processId);
+        if (!process) {
+            DWORD error = GetLastError();
+            if (error == ERROR_INVALID_PARAMETER) {
+                continue;
+            }
+            LOG_ERROR("EXPORT", "重启Delphi程序失败：无法打开待终止进程，path=%s，pid=%lu，error=%lu",
+                      executablePath.c_str(), processId, error);
+            return false;
+        }
+
+        if (!TerminateProcess(process, 1)) {
+            DWORD error = GetLastError();
+            CloseHandle(process);
+            LOG_ERROR("EXPORT", "重启Delphi程序失败：终止进程失败，path=%s，pid=%lu，error=%lu",
+                      executablePath.c_str(), processId, error);
+            return false;
+        }
+
+        DWORD waitResult = WaitForSingleObject(process, 5000);
+        CloseHandle(process);
+        if (waitResult != WAIT_OBJECT_0) {
+            LOG_ERROR("EXPORT", "重启Delphi程序失败：等待旧进程退出超时，path=%s，pid=%lu，result=%lu",
+                      executablePath.c_str(), processId, waitResult);
+            return false;
+        }
+        LOG_INFO("EXPORT", "通信服务不可用，已终止旧Delphi程序：path=%s，pid=%lu",
+                 executablePath.c_str(), processId);
+    }
+    return true;
 }
 
 static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
@@ -178,12 +224,6 @@ static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
     if (!PathHelper::FileExists(executablePath)) {
         LOG_ERROR("EXPORT", "自动启动Delphi程序失败：可执行文件不存在，path=%s", executablePath.c_str());
         return false;
-    }
-
-    if (IsProcessRunningForExecutable(executablePath)) {
-        LOG_WARN("EXPORT", "检测到Delphi程序已在运行，不重复启动进程；将等待/ping服务就绪：path=%s",
-                 executablePath.c_str());
-        return true;
     }
 
     std::wstring wExecutable = PathHelper::Utf8ToWide(executablePath);
@@ -219,10 +259,26 @@ static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
     return true;
 }
 
+static bool WaitForDelphiService(HZCYKJTHardWare::DelphiProxy& proxy,
+                                 int waitMs,
+                                 int intervalMs) {
+    ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(waitMs);
+    do {
+        Sleep(static_cast<DWORD>(intervalMs));
+        if (proxy.Ping()) {
+            return true;
+        }
+    } while (GetTickCount64() < deadline);
+    return false;
+}
+
 static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
                                          const HZCYKJTHardWare::ConfigManager& cfg,
                                          const std::string& dllDir,
                                          const std::string& delphiServerUrl) {
+    const int existingProcessRecoveryWaitMs = 8000;
+    ULONGLONG checkStartedAt = GetTickCount64();
+
     if (proxy.Ping()) {
         return true;
     }
@@ -232,24 +288,52 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
         return false;
     }
 
-    std::string executablePath;
+    std::string executablePath = ResolveDelphiExecutablePath(cfg, dllDir);
+    if (!HZCYKJTHardWare::PathHelper::FileExists(executablePath)) {
+        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：可执行文件不存在，path=%s", executablePath.c_str());
+        return false;
+    }
+
+    int intervalMs = cfg.GetDelphiPingIntervalMs();
+    std::vector<DWORD> existingProcessIds;
+    if (!FindProcessIdsForExecutablePath(executablePath, existingProcessIds)) {
+        LOG_ERROR("EXPORT", "自动恢复Delphi程序失败：无法检查同路径进程，path=%s",
+                  executablePath.c_str());
+        return false;
+    }
+
+    if (!existingProcessIds.empty()) {
+        ULONGLONG elapsedMs = GetTickCount64() - checkStartedAt;
+        int remainingRecoveryWaitMs = elapsedMs >= static_cast<ULONGLONG>(existingProcessRecoveryWaitMs)
+            ? 0
+            : existingProcessRecoveryWaitMs - static_cast<int>(elapsedMs);
+        LOG_WARN("EXPORT", "检测到Delphi程序已运行但通信服务未监听或不可用，将在初始化检测满8秒后自动重启：path=%s，pid=%lu，delphi_server=%s，remaining_wait_ms=%d",
+                 executablePath.c_str(), existingProcessIds.front(), delphiServerUrl.c_str(), remainingRecoveryWaitMs);
+        if (remainingRecoveryWaitMs > 0 &&
+            WaitForDelphiService(proxy, remainingRecoveryWaitMs, intervalMs)) {
+            LOG_INFO("EXPORT", "已有Delphi程序的通信服务已恢复：delphi_server=%s，path=%s",
+                     delphiServerUrl.c_str(), executablePath.c_str());
+            return true;
+        }
+        LOG_WARN("EXPORT", "Delphi程序已运行但通信服务8秒内仍不可用，正在重启同路径进程：path=%s，delphi_server=%s",
+                 executablePath.c_str(), delphiServerUrl.c_str());
+        if (!TerminateDelphiServiceProcesses(executablePath, existingProcessIds)) {
+            return false;
+        }
+    }
+
     if (!StartDelphiServiceProcess(cfg, dllDir, executablePath)) {
         return false;
     }
 
     int waitMs = cfg.GetDelphiStartWaitMs();
-    int intervalMs = cfg.GetDelphiPingIntervalMs();
-    ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(waitMs);
-    do {
-        Sleep(static_cast<DWORD>(intervalMs));
-        if (proxy.Ping()) {
-            LOG_INFO("EXPORT", "自动启动后的Delphi通信服务已就绪：delphi_server=%s，path=%s",
-                     delphiServerUrl.c_str(), executablePath.c_str());
-            return true;
-        }
-    } while (GetTickCount64() < deadline);
+    if (WaitForDelphiService(proxy, waitMs, intervalMs)) {
+        LOG_INFO("EXPORT", "自动启动后的Delphi通信服务已就绪：delphi_server=%s，path=%s",
+                 delphiServerUrl.c_str(), executablePath.c_str());
+        return true;
+    }
 
-    LOG_ERROR("EXPORT", "自动启动Delphi程序后等待/ping超时：delphi_server=%s，path=%s，wait_ms=%d",
+    LOG_ERROR("EXPORT", "启动Delphi程序后等待/ping超时：delphi_server=%s，path=%s，wait_ms=%d",
               delphiServerUrl.c_str(), executablePath.c_str(), waitMs);
     return false;
 }
@@ -330,6 +414,8 @@ static int InitSdkBody() {
         ctx.ocr_timeout_ms = cfg.GetOcrTimeoutMs();
 
         ctx.save_default_root = cfg.GetSaveDefaultRoot();
+        ctx.save_camera_default_path = cfg.GetCameraDefaultPath();
+        ctx.save_fingerprint_default_path = cfg.GetFingerprintDefaultPath();
         ctx.save_create_date_folder = cfg.GetCreateDateFolder();
         ctx.save_create_request_folder = cfg.GetCreateRequestFolder();
         ctx.callback_server_base_path = cfg.GetCallbackBasePath();
@@ -413,24 +499,36 @@ static int ReleaseSdkBody() {
     }
 
     std::string delphiServerUrl;
-    std::string previewRequestId;
-    intptr_t vlcHwnd = 0;
-    intptr_t delphiHostHwnd = 0;
+    bool cameraRunning = false;
+    bool fingerprintRunning = false;
+    bool irisRunning = false;
+    std::string cameraRequestId;
+    std::string fingerprintRequestId;
+    std::string irisRequestId;
     {
         auto lock = ReadLock();
         delphiServerUrl = ctx.delphi_server_url;
-        previewRequestId = ctx.camera_preview_request_id;
-        vlcHwnd = ctx.camera_preview_vlc_hwnd;
-        delphiHostHwnd = ctx.camera_preview_delphi_host_hwnd;
+        cameraRunning = ctx.camera_preview_running;
+        fingerprintRunning = ctx.fingerprint_preview_running;
+        irisRunning = ctx.iris_preview_running;
+        cameraRequestId = ctx.camera_preview_request_id;
+        fingerprintRequestId = ctx.fingerprint_preview_request_id;
+        irisRequestId = ctx.iris_preview_request_id;
     }
 
-    TryRestoreCameraPreviewToDelphiHost(previewRequestId, vlcHwnd, delphiHostHwnd);
-
-    if (!previewRequestId.empty() && !delphiServerUrl.empty()) {
+    if (!delphiServerUrl.empty()) {
         DelphiProxy proxy(delphiServerUrl);
-        if (!proxy.StopCameraPreview(previewRequestId)) {
-            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi程序停止预览失败：request_id=%s，delphi_server=%s",
-                     previewRequestId.c_str(), delphiServerUrl.c_str());
+        if (cameraRunning && !proxy.StopCameraPreview(cameraRequestId)) {
+            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi程序停止摄像头预览失败：request_id=%s，delphi_server=%s",
+                     cameraRequestId.c_str(), delphiServerUrl.c_str());
+        }
+        if (fingerprintRunning && !proxy.StopFingerprintPreview(fingerprintRequestId)) {
+            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi程序停止指纹预览失败：request_id=%s，delphi_server=%s",
+                     fingerprintRequestId.c_str(), delphiServerUrl.c_str());
+        }
+        if (irisRunning && !proxy.StopIrisPreview(irisRequestId)) {
+            LOG_WARN("EXPORT", "ReleaseSdk通知Delphi程序停止虹膜预览失败：request_id=%s，delphi_server=%s",
+                     irisRequestId.c_str(), delphiServerUrl.c_str());
         }
     }
 
@@ -653,32 +751,35 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
+    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
+    std::string callbackUrl;
+    std::string delphiServerUrl;
+    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
     {
-        auto lock = ReadLock();
+        auto lock = WriteLock();
         if (ctx.camera_preview_running) {
             LOG_WARN("EXPORT", "启动摄像头预览失败：预览已运行，request_id=%s",
                      ctx.camera_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
-    }
-
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
-    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
-    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
-
-    DelphiProxy proxy(ctx.delphi_server_url);
-    if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动摄像头预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
-    }
-
-    {
-        auto lock = WriteLock();
+        callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+        delphiServerUrl = ctx.delphi_server_url;
         ctx.camera_preview_running = true;
         ctx.camera_preview_request_id = requestId;
         ctx.camera_preview_third_party_hwnd = thirdPartyHwnd;
-        ctx.camera_preview_vlc_hwnd = 0;
+    }
+
+    DelphiProxy proxy(delphiServerUrl);
+    if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
+        LOG_ERROR("EXPORT", "启动摄像头预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), delphiServerUrl.c_str());
+        auto lock = WriteLock();
+        if (ctx.camera_preview_request_id == requestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
     LOG_INFO("EXPORT", "摄像头预览请求已转发Delphi程序：request_id=%s，third_party_hwnd=%p，callback_url=%s",
@@ -694,8 +795,6 @@ static int StopCameraPreviewBody() {
 
     std::string requestId;
     std::string delphiServerUrl;
-    intptr_t vlcHwnd = 0;
-    intptr_t delphiHostHwnd = 0;
     {
         auto lock = ReadLock();
         if (!ctx.camera_preview_running) {
@@ -703,28 +802,24 @@ static int StopCameraPreviewBody() {
         }
         requestId = ctx.camera_preview_request_id;
         delphiServerUrl = ctx.delphi_server_url;
-        vlcHwnd = ctx.camera_preview_vlc_hwnd;
-        delphiHostHwnd = ctx.camera_preview_delphi_host_hwnd;
     }
-
-    TryRestoreCameraPreviewToDelphiHost(requestId, vlcHwnd, delphiHostHwnd);
 
     DelphiProxy proxy(delphiServerUrl);
     bool ok = proxy.StopCameraPreview(requestId);
-
-    {
-        auto lock = WriteLock();
-        ctx.camera_preview_running = false;
-        ctx.camera_preview_request_id.clear();
-        ctx.camera_preview_third_party_hwnd = 0;
-        ctx.camera_preview_vlc_hwnd = 0;
-        ctx.camera_preview_delphi_host_hwnd = 0;
-    }
 
     if (!ok) {
         LOG_ERROR("EXPORT", "停止摄像头预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), delphiServerUrl.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        if (ctx.camera_preview_request_id == requestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+        }
     }
 
     LOG_INFO("EXPORT", "摄像头预览已停止：request_id=%s", requestId.c_str());
@@ -742,22 +837,37 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP_PREVIEW");
-    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+    std::string callbackUrl;
+    std::string delphiServerUrl;
     intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+    {
+        auto lock = WriteLock();
+        if (ctx.fingerprint_preview_running) {
+            LOG_WARN("EXPORT", "启动指纹预览失败：预览已运行，request_id=%s",
+                     ctx.fingerprint_preview_request_id.c_str());
+            return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
+        }
+        callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+        delphiServerUrl = ctx.delphi_server_url;
+        ctx.fingerprint_preview_running = true;
+        ctx.fingerprint_preview_request_id = requestId;
+        ctx.fingerprint_preview_third_party_hwnd = thirdPartyHwnd;
+    }
 
-    DelphiProxy proxy(ctx.delphi_server_url);
+    DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartFingerprintPreview(requestId, thirdPartyHwnd, callbackUrl)) {
         LOG_ERROR("EXPORT", "启动指纹预览失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.fingerprint_preview_request_id == requestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+        }
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    {
-        auto lock = WriteLock();
-        ctx.fingerprint_preview_running = true;
-        ctx.camera_preview_request_id = requestId; // reuse for preview tracking
-    }
-
-    LOG_INFO("EXPORT", "指纹预览请求已转发Delphi程序：request_id=%s", requestId.c_str());
+    LOG_INFO("EXPORT", "指纹预览请求已转发Delphi程序：request_id=%s，third_party_hwnd=%p，callback_url=%s",
+             requestId.c_str(), hwnd, callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -774,16 +884,24 @@ static int StopFingerprintPreviewBody() {
         if (!ctx.fingerprint_preview_running) {
             return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
         }
-        requestId = ctx.camera_preview_request_id;
+        requestId = ctx.fingerprint_preview_request_id;
         delphiServerUrl = ctx.delphi_server_url;
     }
 
     DelphiProxy proxy(delphiServerUrl);
-    proxy.StopFingerprintPreview(requestId);
+    if (!proxy.StopFingerprintPreview(requestId)) {
+        LOG_ERROR("EXPORT", "停止指纹预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), delphiServerUrl.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
 
     {
         auto lock = WriteLock();
-        ctx.fingerprint_preview_running = false;
+        if (ctx.fingerprint_preview_request_id == requestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+        }
     }
 
     LOG_INFO("EXPORT", "指纹预览已停止：request_id=%s", requestId.c_str());
@@ -801,16 +919,37 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
-    std::string callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+    std::string callbackUrl;
+    std::string delphiServerUrl;
     intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+    {
+        auto lock = WriteLock();
+        if (ctx.iris_preview_running) {
+            LOG_WARN("EXPORT", "启动虹膜预览失败：预览已运行，request_id=%s",
+                     ctx.iris_preview_request_id.c_str());
+            return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
+        }
+        callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+        delphiServerUrl = ctx.delphi_server_url;
+        ctx.iris_preview_running = true;
+        ctx.iris_preview_request_id = requestId;
+        ctx.iris_preview_third_party_hwnd = thirdPartyHwnd;
+    }
 
-    DelphiProxy proxy(ctx.delphi_server_url);
+    DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartIrisPreview(requestId, thirdPartyHwnd, callbackUrl)) {
         LOG_ERROR("EXPORT", "启动虹膜预览失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.iris_preview_request_id == requestId) {
+            ctx.iris_preview_running = false;
+            ctx.iris_preview_request_id.clear();
+            ctx.iris_preview_third_party_hwnd = 0;
+        }
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "虹膜预览请求已转发Delphi程序：request_id=%s", requestId.c_str());
+    LOG_INFO("EXPORT", "虹膜预览请求已转发Delphi程序：request_id=%s，third_party_hwnd=%p，callback_url=%s",
+             requestId.c_str(), hwnd, callbackUrl.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -824,12 +963,28 @@ static int StopIrisPreviewBody() {
     std::string delphiServerUrl;
     {
         auto lock = ReadLock();
-        requestId = ctx.camera_preview_request_id;
+        if (!ctx.iris_preview_running) {
+            return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
+        }
+        requestId = ctx.iris_preview_request_id;
         delphiServerUrl = ctx.delphi_server_url;
     }
 
     DelphiProxy proxy(delphiServerUrl);
-    proxy.StopIrisPreview(requestId);
+    if (!proxy.StopIrisPreview(requestId)) {
+        LOG_ERROR("EXPORT", "停止虹膜预览失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+                  requestId.c_str(), delphiServerUrl.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        if (ctx.iris_preview_request_id == requestId) {
+            ctx.iris_preview_running = false;
+            ctx.iris_preview_request_id.clear();
+            ctx.iris_preview_third_party_hwnd = 0;
+        }
+    }
 
     LOG_INFO("EXPORT", "虹膜预览已停止：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
@@ -860,7 +1015,7 @@ static int CaptureCameraImageBody(const char* saveDir) {
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FACE");
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string saveRoot = ResolveCaptureTargetPath(saveDir, true);
     std::string savePath;
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
@@ -880,7 +1035,7 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP");
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string saveRoot = ResolveCaptureTargetPath(saveDir, false);
     std::string savePath;
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {

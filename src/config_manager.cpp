@@ -225,6 +225,10 @@ int ConfigManager::ParseJson(const std::string& json) {
     if (!saveObj.empty()) {
         if (JsonHelper::HasKey(saveObj, "default_root"))
             m_saveDefaultRoot = JsonHelper::GetString(saveObj, "default_root");
+        if (JsonHelper::HasKey(saveObj, "camera_default_path"))
+            m_cameraDefaultPath = JsonHelper::GetString(saveObj, "camera_default_path");
+        if (JsonHelper::HasKey(saveObj, "fingerprint_default_path"))
+            m_fingerprintDefaultPath = JsonHelper::GetString(saveObj, "fingerprint_default_path");
         if (JsonHelper::HasKey(saveObj, "create_date_folder"))
             m_createDateFolder = JsonHelper::GetBool(saveObj, "create_date_folder");
         if (JsonHelper::HasKey(saveObj, "create_request_folder"))
@@ -298,6 +302,8 @@ void ConfigManager::ApplyDefaults() {
     m_ocrTimeoutMs = 10000;
 
     m_saveDefaultRoot = ".\\captures";
+    m_cameraDefaultPath = ".\\captures\\camera.jpg";
+    m_fingerprintDefaultPath = ".\\captures\\fingerprint.jpg";
     m_createDateFolder = true;
     m_createRequestFolder = true;
 
@@ -309,7 +315,7 @@ void ConfigManager::ApplyDefaults() {
     m_rtspLiveCachingMs = 150;
     m_rtspTransport = "tcp";
 
-    m_logDir = "HZCYKJTHardWare_Logs";
+    m_logDir = "HZCYKJTHardWareDLL_Logs";
     m_logLevel = "info";
 }
 
@@ -342,6 +348,8 @@ int ConfigManager::GetFaceCaptureTimeoutMs() const { return m_faceCaptureTimeout
 int ConfigManager::GetFingerprintCaptureTimeoutMs() const { return m_fingerprintCaptureTimeoutMs; }
 int ConfigManager::GetOcrTimeoutMs() const { return m_ocrTimeoutMs; }
 const std::string& ConfigManager::GetSaveDefaultRoot() const { return m_saveDefaultRoot; }
+const std::string& ConfigManager::GetCameraDefaultPath() const { return m_cameraDefaultPath; }
+const std::string& ConfigManager::GetFingerprintDefaultPath() const { return m_fingerprintDefaultPath; }
 bool ConfigManager::GetCreateDateFolder() const { return m_createDateFolder; }
 bool ConfigManager::GetCreateRequestFolder() const { return m_createRequestFolder; }
 const std::string& ConfigManager::GetPreviewRenderer() const { return m_previewRenderer; }

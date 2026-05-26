@@ -50,7 +50,7 @@ var
   Y, M, D: Word;
 begin
   DecodeDate(Date, Y, M, D);
-  FLogFile := Format('HZCYKJTHardWare_%.4d%.2d%.2d.log', [Y, M, D]);
+  FLogFile := Format('HZCYKJTHardWareExe_Logs_%.4d%.2d%.2d.log', [Y, M, D]);
   FLogFileFull := FLogPath + '\' + FLogFile;
 end;
 
