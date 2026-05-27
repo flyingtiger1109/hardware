@@ -361,3 +361,12 @@
 - [x] 更新 Delphi 服务端与第三方示例 README，说明覆盖容器、独立会话和第三方启动按钮后台调用方式。
 - [x] 收尾后重新编译 Delphi 主程序、第三方示例和 DLL；Delphi 主程序仅有原有 hint，DLL 为 `0 warning / 0 error`。
 - [x] 将最新 Delphi 服务 EXE 和 DLL 同步到第三方示例部署目录，并纳入最终提交。
+
+### Delphi 服务不可达时立即重启
+
+- [x] 用户确认取消“已存在 Delphi EXE 但 `/ping` 不可用时等待 8 秒”的恢复策略。
+- [x] 建立修改前快照目录 `backup_before_immediate_delphi_restart_20260527_111052`。
+- [x] `src/exports.cpp` 在发现同路径 Delphi EXE 已运行但通信服务不可用时立即终止旧进程并重启。
+- [x] 保留 `delphi_server.start_wait_ms`，用于启动新 Delphi 进程后等待 `/ping` 就绪；该配置不再表示旧进程观察等待。
+- [x] 更新 Delphi 服务端及第三方示例 README 中的初始化自恢复说明。
+- [x] 重新构建 Win32 DLL（`Release|Win32`，`0 warning / 0 error`），并将最新产物同步到第三方部署目录。

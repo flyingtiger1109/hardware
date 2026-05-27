@@ -40,7 +40,7 @@
 
 1. 将本程序、`HZCYKJTHardWare.dll` 与两者共用的 `HZCYKJTHardWare.json` 放在同一目录。
 2. 启动 `demo\DelphiThirdPartyDemo` 或其他第三方 Demo。
-3. 第三方调用 DLL 的 `InitSdk`；当 `delphi_server.auto_start=true` 时，DLL 会在 `/ping` 不可用时自动启动本程序；若同路径程序已存在但通信服务在初始化 8 秒内仍不可用，DLL 会重启本程序后重新等待 `/ping`。
+3. 第三方调用 DLL 的 `InitSdk`；当 `delphi_server.auto_start=true` 时，DLL 会在 `/ping` 不可用时自动启动本程序；若同路径程序已存在但通信服务不可用，DLL 会立即重启本程序，再按 `start_wait_ms` 等待新服务就绪。
 4. 确认日志显示 JSON 所配置的 DLL 通信服务和终端回调监听地址均启动成功。
 5. 调用抓拍、OCR、NFC、预览等接口验证转发链路。
 

@@ -276,9 +276,6 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
                                          const HZCYKJTHardWare::ConfigManager& cfg,
                                          const std::string& dllDir,
                                          const std::string& delphiServerUrl) {
-    const int existingProcessRecoveryWaitMs = 8000;
-    ULONGLONG checkStartedAt = GetTickCount64();
-
     if (proxy.Ping()) {
         return true;
     }
@@ -303,20 +300,8 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
     }
 
     if (!existingProcessIds.empty()) {
-        ULONGLONG elapsedMs = GetTickCount64() - checkStartedAt;
-        int remainingRecoveryWaitMs = elapsedMs >= static_cast<ULONGLONG>(existingProcessRecoveryWaitMs)
-            ? 0
-            : existingProcessRecoveryWaitMs - static_cast<int>(elapsedMs);
-        LOG_WARN("EXPORT", "检测到Delphi程序已运行但通信服务未监听或不可用，将在初始化检测满8秒后自动重启：path=%s，pid=%lu，delphi_server=%s，remaining_wait_ms=%d",
-                 executablePath.c_str(), existingProcessIds.front(), delphiServerUrl.c_str(), remainingRecoveryWaitMs);
-        if (remainingRecoveryWaitMs > 0 &&
-            WaitForDelphiService(proxy, remainingRecoveryWaitMs, intervalMs)) {
-            LOG_INFO("EXPORT", "已有Delphi程序的通信服务已恢复：delphi_server=%s，path=%s",
-                     delphiServerUrl.c_str(), executablePath.c_str());
-            return true;
-        }
-        LOG_WARN("EXPORT", "Delphi程序已运行但通信服务8秒内仍不可用，正在重启同路径进程：path=%s，delphi_server=%s",
-                 executablePath.c_str(), delphiServerUrl.c_str());
+        LOG_WARN("EXPORT", "Delphi程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，delphi_server=%s",
+                 executablePath.c_str(), existingProcessIds.front(), delphiServerUrl.c_str());
         if (!TerminateDelphiServiceProcesses(executablePath, existingProcessIds)) {
             return false;
         }

@@ -7,7 +7,7 @@
 - 本示例只调用 DLL 对外导出接口。
 - 本示例不直接调用终端 HTTP 服务。
 - DLL 会根据 `HZCYKJTHardWare.json` 转发到 Delphi 服务程序；默认地址为 `http://127.0.0.1:8080`。
-- 当 `delphi_server.auto_start=true` 时，`InitSdk` 可在服务未启动时自动启动与 DLL 同目录的 Delphi EXE；如检测到同路径 EXE 已运行但通信服务在初始化 8 秒内仍不可用，DLL 会自动重启该 EXE。
+- 当 `delphi_server.auto_start=true` 时，`InitSdk` 可在服务未启动时自动启动与 DLL 同目录的 Delphi EXE；如检测到同路径 EXE 已运行但通信服务不可用，DLL 会立即重启该 EXE，再按 `start_wait_ms` 等待新服务就绪。
 
 ## 使用顺序
 
