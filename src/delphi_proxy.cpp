@@ -162,6 +162,18 @@ bool DelphiProxy::RequestNfcAsync(const std::string& requestId,
         IsAcceptedResponse(response);
 }
 
+bool DelphiProxy::GetCameraPreviewUrl(const std::string& requestId, std::string& outPreviewUrl) {
+    return GetPreviewUrl("/preview/camera/url", requestId, outPreviewUrl);
+}
+
+bool DelphiProxy::GetFingerprintPreviewUrl(const std::string& requestId, std::string& outPreviewUrl) {
+    return GetPreviewUrl("/preview/fingerprint/url", requestId, outPreviewUrl);
+}
+
+bool DelphiProxy::GetIrisPreviewUrl(const std::string& requestId, std::string& outPreviewUrl) {
+    return GetPreviewUrl("/preview/iris/url", requestId, outPreviewUrl);
+}
+
 bool DelphiProxy::StartCameraPreview(const std::string& requestId,
                                      intptr_t thirdPartyHwnd,
                                      const std::string& callbackUrl) {
@@ -261,7 +273,7 @@ bool DelphiProxy::PostJson(const std::string& path,
     int statusCode = 0;
     HttpClient client;
     std::string url = BuildUrl(path);
-    LOG_DEBUG("DelphiProxy", "DLL正在下发Delphi程序：method=POST，url=%s，body=%s", url.c_str(), body.c_str());
+    LOG_DEBUG("DelphiProxy", "DLL正在下发Delphi程序：method=POST，url=%s", url.c_str());
     bool ok = client.PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
         LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：method=POST，url=%s", url.c_str());
@@ -281,8 +293,8 @@ bool DelphiProxy::PostJson(const std::string& path,
         return false;
     }
 
-    LOG_DEBUG("DelphiProxy", "DLL下发Delphi程序成功：method=POST，url=%s，status=%d，response=%s",
-              url.c_str(), statusCode, response.c_str());
+    LOG_DEBUG("DelphiProxy", "DLL下发Delphi程序成功：method=POST，url=%s，status=%d",
+              url.c_str(), statusCode);
     return true;
 }
 
@@ -331,6 +343,24 @@ bool DelphiProxy::ExtractSavePath(const std::string& response,
     if (outSavePath.empty()) {
         LOG_ERROR("DelphiProxy", "Delphi程序同步抓拍响应缺少save_path：response=%s",
                   response.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool DelphiProxy::GetPreviewUrl(const std::string& path,
+                                const std::string& requestId,
+                                std::string& outPreviewUrl) {
+    std::string response;
+    std::string body = "{" + JsonStringField("request_id", requestId) + "}";
+    if (!PostJson(path, body, response) || !IsOkResponse(response)) {
+        return false;
+    }
+
+    outPreviewUrl = JsonHelper::GetString(response, "preview_url");
+    if (outPreviewUrl.empty()) {
+        LOG_ERROR("DelphiProxy", "Delphi程序预览地址响应为空：path=%s，response=%s",
+                  path.c_str(), response.c_str());
         return false;
     }
     return true;

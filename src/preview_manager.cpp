@@ -69,6 +69,49 @@ int PreviewManager::StartIrisPreview(HWND hwnd) {
                         HZCYKJTHardWare_EVENT_IRIS_PREVIEW_FAILED);
 }
 
+int PreviewManager::StartCameraPreviewFromUrl(HWND hwnd, const std::string& rtspUrl) {
+    return StartRendererFromUrl(hwnd, rtspUrl, m_cameraRunning, m_cameraRenderer, m_cameraHwnd);
+}
+
+int PreviewManager::StartFingerprintPreviewFromUrl(HWND hwnd, const std::string& rtspUrl) {
+    return StartRendererFromUrl(hwnd, rtspUrl, m_fingerprintRunning, m_fingerprintRenderer, m_fingerprintHwnd);
+}
+
+int PreviewManager::StartIrisPreviewFromUrl(HWND hwnd, const std::string& rtspUrl) {
+    return StartRendererFromUrl(hwnd, rtspUrl, m_irisRunning, m_irisRenderer, m_irisHwnd);
+}
+
+int PreviewManager::StartRendererFromUrl(HWND hwnd, const std::string& rtspUrl,
+                                         std::atomic<bool>& runningFlag,
+                                         std::unique_ptr<IRtspRenderer>& renderer,
+                                         HWND& storedHwnd) {
+    CriticalSectionGuard guard(&m_cs);
+    if (!IsWindow(hwnd)) {
+        return HZCYKJTHardWare_RET_INVALID_HWND;
+    }
+    if (runningFlag) {
+        return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
+    }
+
+    renderer = CreateLibVlcRtspRenderer();
+    if (!renderer) {
+        return HZCYKJTHardWare_RET_VLC_INIT_FAILED;
+    }
+
+    int ret = renderer->Start(rtspUrl, hwnd);
+    if (ret != HZCYKJTHardWare_RET_OK) {
+        LOG_ERROR("PreviewMgr", "本进程预览启动失败：ret=%d，detail=%s",
+                  ret, renderer->LastErrorMessage().c_str());
+        renderer.reset();
+        return ret;
+    }
+
+    runningFlag = true;
+    storedHwnd = hwnd;
+    LOG_INFO("PreviewMgr", "本进程预览已启动：hwnd=%p", hwnd);
+    return HZCYKJTHardWare_RET_OK;
+}
+
 int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
                                   std::atomic<bool>& runningFlag,
                                   std::unique_ptr<IRtspRenderer>& renderer,
@@ -126,7 +169,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
         event.event_type = failEvent;
         event.status = HZCYKJTHardWare_RET_HTTP_FAILED;
-        event.message = "Preview HTTP request failed";
+        event.message = "预览地址请求失败";
         FillCurrentTerminal(event);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -140,7 +183,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
         event.event_type = failEvent;
         event.status = HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
-        event.message = "No RTSP URL in preview response";
+        event.message = "预览响应中未返回RTSP地址";
         FillCurrentTerminal(event);
         return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
     }
@@ -156,7 +199,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
         event.event_type = failEvent;
         event.status = HZCYKJTHardWare_RET_VLC_INIT_FAILED;
-        event.message = "Failed to create libVLC renderer";
+        event.message = "创建VLC预览渲染器失败";
         FillCurrentTerminal(event);
         return HZCYKJTHardWare_RET_VLC_INIT_FAILED;
     }
@@ -165,7 +208,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
     if (ret != HZCYKJTHardWare_RET_OK) {
         std::string detail = renderer->LastErrorMessage();
         if (detail.empty()) {
-            detail = "Failed to start RTSP preview.";
+            detail = "启动RTSP预览失败。";
         }
         detail += " RTSP=" + rtspUrl;
         LOG_ERROR("PreviewMgr", "启动 RTSP 预览失败：ret=%d，detail=%s", ret, detail.c_str());
@@ -228,6 +271,40 @@ int PreviewManager::StopFingerprintPreview() {
 int PreviewManager::StopIrisPreview() {
     return StopPreview(m_irisRunning, m_irisRenderer, m_irisHwnd,
                        HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STOPPED, true);
+}
+
+int PreviewManager::StopCameraPreviewRenderer(bool clearStoredHwnd) {
+    return StopRenderer(m_cameraRunning, m_cameraRenderer, m_cameraHwnd, clearStoredHwnd);
+}
+
+int PreviewManager::StopFingerprintPreviewRenderer(bool clearStoredHwnd) {
+    return StopRenderer(m_fingerprintRunning, m_fingerprintRenderer, m_fingerprintHwnd, clearStoredHwnd);
+}
+
+int PreviewManager::StopIrisPreviewRenderer(bool clearStoredHwnd) {
+    return StopRenderer(m_irisRunning, m_irisRenderer, m_irisHwnd, clearStoredHwnd);
+}
+
+int PreviewManager::StopRenderer(std::atomic<bool>& runningFlag,
+                                 std::unique_ptr<IRtspRenderer>& renderer,
+                                 HWND& storedHwnd,
+                                 bool clearStoredHwnd) {
+    CriticalSectionGuard guard(&m_cs);
+    if (renderer) {
+        renderer->Stop();
+        renderer.reset();
+    }
+    runningFlag = false;
+    if (clearStoredHwnd) {
+        storedHwnd = nullptr;
+    }
+    return HZCYKJTHardWare_RET_OK;
+}
+
+void PreviewManager::StopAllRenderers() {
+    StopCameraPreviewRenderer();
+    StopFingerprintPreviewRenderer();
+    StopIrisPreviewRenderer();
 }
 
 int PreviewManager::StopPreview(std::atomic<bool>& runningFlag,

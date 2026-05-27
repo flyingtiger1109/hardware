@@ -127,6 +127,7 @@ bool LibVlcRtspRenderer::TryLoadLibVlcFromDir(const std::string& dir) {
     #undef LOAD_VLC_FUNC
 
     m_libvlc_video_set_aspect_ratio = GetProcAddress(m_hLibVlc, "libvlc_video_set_aspect_ratio");
+    m_libvlc_video_set_crop_geometry = GetProcAddress(m_hLibVlc, "libvlc_video_set_crop_geometry");
     m_libvlc_video_set_scale = GetProcAddress(m_hLibVlc, "libvlc_video_set_scale");
 
     m_vlcDir = dir;
@@ -157,6 +158,7 @@ void LibVlcRtspRenderer::UnloadLibVlc() {
     m_libvlc_media_player_stop = nullptr;
     m_libvlc_media_player_is_playing = nullptr;
     m_libvlc_video_set_aspect_ratio = nullptr;
+    m_libvlc_video_set_crop_geometry = nullptr;
     m_libvlc_video_set_scale = nullptr;
 }
 
@@ -231,10 +233,12 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
         networkCachingMs = ctx.rtsp_network_caching_ms;
         liveCachingMs = ctx.rtsp_live_caching_ms;
         rtspTransport = ctx.rtsp_transport;
+        m_layoutIntervalMs = ctx.preview_check_hwnd_interval_ms;
     }
 
     if (networkCachingMs < 0) networkCachingMs = 0;
     if (liveCachingMs < 0) liveCachingMs = 0;
+    if (m_layoutIntervalMs < 50) m_layoutIntervalMs = 50;
 
     typedef void (*media_add_option_t)(libvlc_media_t*, const char*);
     auto addMediaOption = (media_add_option_t)m_libvlc_media_add_option;
@@ -286,18 +290,20 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     m_lastError.clear();
 
     ApplyWindowFit(hwnd);
-
-    // 延迟再调几次：VLC 子窗口可能异步创建
-    Sleep(100);
-    ApplyWindowFit(hwnd);
-    Sleep(300);
-    ApplyWindowFit(hwnd);
+    m_stopLayout = false;
+    m_layoutThread = std::make_unique<std::thread>(&LibVlcRtspRenderer::LayoutLoop, this);
 
     LOG_DEBUG("LibVlcRenderer", "RTSP 播放已启动：url=%s，hwnd=%p", url.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
 int LibVlcRtspRenderer::Stop() {
+    m_stopLayout = true;
+    if (m_layoutThread && m_layoutThread->joinable()) {
+        m_layoutThread->join();
+    }
+    m_layoutThread.reset();
+
     CriticalSectionGuard guard(&m_cs);
 
     if (!m_running) {
@@ -332,6 +338,7 @@ int LibVlcRtspRenderer::Stop() {
     m_vlcInstance = nullptr;
 
     m_running = false;
+    m_renderHwnd = nullptr;
     LOG_DEBUG("LibVlcRenderer", "RTSP 播放已停止");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -342,6 +349,20 @@ bool LibVlcRtspRenderer::IsRunning() const {
 
 std::string LibVlcRtspRenderer::LastErrorMessage() const {
     return m_lastError;
+}
+
+void LibVlcRtspRenderer::LayoutLoop() {
+    while (!m_stopLayout) {
+        int remainingMs = m_layoutIntervalMs;
+        while (!m_stopLayout && remainingMs > 0) {
+            const int sleepMs = remainingMs > 25 ? 25 : remainingMs;
+            Sleep(static_cast<DWORD>(sleepMs));
+            remainingMs -= sleepMs;
+        }
+        if (!m_stopLayout && m_running) {
+            ApplyWindowFit(m_renderHwnd);
+        }
+    }
 }
 
 void LibVlcRtspRenderer::ApplyWindowFit(HWND hwnd) {
@@ -359,7 +380,12 @@ void LibVlcRtspRenderer::ApplyWindowFit(HWND hwnd) {
         ((set_scale_t)m_libvlc_video_set_scale)(m_mediaPlayer, 0.0f);
     }
 
-    if (m_mediaPlayer && m_libvlc_video_set_aspect_ratio) {
+    if (m_mediaPlayer && m_libvlc_video_set_crop_geometry) {
+        char aspect[32];
+        snprintf(aspect, sizeof(aspect), "%d:%d", width, height);
+        typedef void (*set_crop_t)(libvlc_media_player_t*, const char*);
+        ((set_crop_t)m_libvlc_video_set_crop_geometry)(m_mediaPlayer, aspect);
+    } else if (m_mediaPlayer && m_libvlc_video_set_aspect_ratio) {
         char aspect[32];
         snprintf(aspect, sizeof(aspect), "%d:%d", width, height);
         typedef void (*set_aspect_t)(libvlc_media_player_t*, const char*);

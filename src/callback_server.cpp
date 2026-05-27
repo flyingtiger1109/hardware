@@ -228,9 +228,6 @@ LOG_DEBUG("CallbackServer", "Delphi回调接收线程已启动");
 
                 LOG_INFO("CallbackServer", "收到Delphi程序回调：method=%s，path=%s，remote=%s，body_size=%zu",
                           method.c_str(), path.c_str(), remoteIp, body.size());
-                LOG_DEBUG("CallbackServer", "Delphi程序回调正文预览：%s",
-                          body.substr(0, 500).c_str());
-
                 CallbackData cbData;
                 cbData.path = path;
                 cbData.body = body;

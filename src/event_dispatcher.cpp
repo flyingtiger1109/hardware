@@ -127,16 +127,12 @@ void EventDispatcher::PostCallbackData(const CallbackData& cbData) {
     EnterCriticalSection(&m_cs);
     m_pendingCallbacks.push(cbData);
     LeaveCriticalSection(&m_cs);
-    LOG_DEBUG("EventDispatcher", "Delphi程序回调已投递到事件队列：path=%s，body_size=%zu",
-             cbData.path.c_str(), cbData.body.size());
     WakeConditionVariable(&m_cv);
 }
 
 void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     std::string path = cbData.path;
     std::string body = cbData.body;
-
-    LOG_DEBUG("EventDispatcher", "开始处理Delphi程序回调：path=%s，body_size=%zu", path.c_str(), body.size());
 
     std::string resourceType;
     bool isPreviewReady = false;
@@ -195,7 +191,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                     std::string mrz = JsonHelper::GetString(body, "mrz");
                     std::string savePath = JsonHelper::GetString(body, "save_path");
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
-                              HZCYKJTHardWare_RET_OK, "", "OCR completed successfully",
+                              HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
                               savePath.empty() ? nullptr : savePath.c_str(), body.c_str(),
                               nullptr, mrz.c_str());
                 }
@@ -215,7 +211,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                     if (cardText.empty()) {
                         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "",
-                                  "NFC callback missing card_text", nullptr, body.c_str());
+                                  "IC卡回调缺少card_text", nullptr, body.c_str());
                     } else {
                         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
                                   HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(),
@@ -383,7 +379,7 @@ void EventDispatcher::ProcessFaceCallback(const std::string& requestId,
     auto faceResult = ResultParser::ParseFaceResult(body);
     if (!faceResult.valid) {
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FACE_IMAGE, HZCYKJTHardWare_EVENT_FACE_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "Failed to parse face result");
+                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "人脸抓拍结果解析失败");
         return;
     }
 
@@ -411,12 +407,12 @@ void EventDispatcher::ProcessFaceCallback(const std::string& requestId,
     if (saveRet != HZCYKJTHardWare_RET_OK) {
         LOG_ERROR("EventDispatcher", "人脸回调处理失败：保存图片失败，request_id=%s，path=%s", requestId.c_str(), fullPath.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FACE_IMAGE, HZCYKJTHardWare_EVENT_FACE_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "Failed to save face image");
+                  HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "人脸图片保存失败");
         return;
     }
 
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FACE_IMAGE, HZCYKJTHardWare_EVENT_FACE_CAPTURE_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "Face captured successfully", fullPath.c_str(), body.c_str());
+              HZCYKJTHardWare_RET_OK, "", "人脸抓拍成功", fullPath.c_str(), body.c_str());
 }
 
 void EventDispatcher::ProcessFingerprintCallback(const std::string& requestId,
@@ -425,7 +421,7 @@ void EventDispatcher::ProcessFingerprintCallback(const std::string& requestId,
     auto fpResult = ResultParser::ParseFingerprintResult(body);
     if (!fpResult.valid) {
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE, HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "Failed to parse fingerprint result");
+                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "指纹抓拍结果解析失败");
         return;
     }
 
@@ -447,12 +443,12 @@ void EventDispatcher::ProcessFingerprintCallback(const std::string& requestId,
                                                mimeType, fullPath);
     if (saveRet != HZCYKJTHardWare_RET_OK) {
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE, HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "Failed to save fingerprint image");
+                  HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "指纹图片保存失败");
         return;
     }
 
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE, HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "Fingerprint captured successfully", fullPath.c_str(), body.c_str());
+              HZCYKJTHardWare_RET_OK, "", "指纹抓拍成功", fullPath.c_str(), body.c_str());
 }
 
 void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
@@ -467,7 +463,7 @@ void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
     LOG_INFO("EventDispatcher", "Delphi程序OCR回调处理完成：request_id=%s，save_path=%s，mrz=%s",
              requestId.c_str(), savePath.c_str(), mrz.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "OCR completed successfully",
+              HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
               savePath.c_str(), body.c_str(), nullptr, mrz.c_str());
 }
 
@@ -545,7 +541,7 @@ void EventDispatcher::ProcessOcrCallbackLegacy(const std::string& requestId,
     LOG_INFO("EventDispatcher", "OCR回调处理完成：request_id=%s，save=%s，mrz=%s",
              requestId.c_str(), savePath.c_str(), ocrResult.mrz.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "OCR completed successfully", savePath.c_str(), body.c_str(),
+              HZCYKJTHardWare_RET_OK, "", "OCR识别完成", savePath.c_str(), body.c_str(),
               nullptr, ocrResult.mrz.c_str());
 }
 
@@ -562,7 +558,7 @@ void EventDispatcher::ProcessIrisCallback(const std::string& requestId,
     LOG_INFO("EventDispatcher", "Delphi程序虹膜回调处理完成：request_id=%s，save_path=%s",
              requestId.c_str(), savePath.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "Iris captured successfully",
+              HZCYKJTHardWare_RET_OK, "", "虹膜抓拍成功",
               savePath.c_str(), body.c_str());
 }
 
@@ -573,7 +569,7 @@ void EventDispatcher::ProcessIrisCallbackLegacy(const std::string& requestId,
     auto irisResult = ResultParser::ParseIrisResult(body);
     if (!irisResult.valid) {
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "Failed to parse iris result",
+                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "虹膜抓拍结果解析失败",
                   nullptr, body.c_str());
         return;
     }
@@ -598,7 +594,7 @@ void EventDispatcher::ProcessIrisCallbackLegacy(const std::string& requestId,
             savePath, "iris_left", irisResult.left_iris_base64, leftPath);
         if (saveRet != HZCYKJTHardWare_RET_OK) {
             SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
-                      saveRet, "", "Failed to save left iris image", nullptr, body.c_str());
+                      saveRet, "", "左眼虹膜图片保存失败", nullptr, body.c_str());
             return;
         }
         savedCount++;
@@ -608,7 +604,7 @@ void EventDispatcher::ProcessIrisCallbackLegacy(const std::string& requestId,
             savePath, "iris_right", irisResult.right_iris_base64, rightPath);
         if (saveRet != HZCYKJTHardWare_RET_OK) {
             SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
-                      saveRet, "", "Failed to save right iris image", nullptr, body.c_str());
+                      saveRet, "", "右眼虹膜图片保存失败", nullptr, body.c_str());
             return;
         }
         savedCount++;
@@ -616,12 +612,12 @@ void EventDispatcher::ProcessIrisCallbackLegacy(const std::string& requestId,
 
     if (savedCount == 0) {
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
-                  HZCYKJTHardWare_RET_BASE64_FAILED, "", "No iris image saved", nullptr, body.c_str());
+                  HZCYKJTHardWare_RET_BASE64_FAILED, "", "未保存到虹膜图片", nullptr, body.c_str());
         return;
     }
 
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_SUCCESS,
-              HZCYKJTHardWare_RET_OK, "", "Iris captured successfully", savePath.c_str(), body.c_str());
+              HZCYKJTHardWare_RET_OK, "", "虹膜抓拍成功", savePath.c_str(), body.c_str());
 }
 
 #endif
@@ -637,7 +633,7 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         LOG_ERROR("NFC", "Delphi程序IC卡回调缺少card_text：request_id=%s，body=%s",
                   requestId.c_str(), body.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
-                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "NFC callback missing card_text",
+                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "IC卡回调缺少card_text",
                   nullptr, body.c_str());
         return;
     }
@@ -661,7 +657,7 @@ void EventDispatcher::ProcessNfcCardCallbackLegacy(const std::string& requestId,
     if (!nfcResult.valid) {
         LOG_ERROR("NFC", "IC卡识别回调解析失败：request_id=%s", requestId.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
-                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "Failed to parse NFC card result",
+                  HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "IC卡识别结果解析失败",
                   nullptr, body.c_str());
         return;
     }

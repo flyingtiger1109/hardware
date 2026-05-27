@@ -872,6 +872,23 @@ begin
       else begin DoLog('[错误] [终端调用] DLL下发的IC卡识别请求转交终端失败。'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
+  if Path = '/preview/camera/url' then begin
+    if FPreviewManager.RequestPreviewUrl(prtCamera, TerminalBaseUrl, ResponseUtf8) then
+      Result := '{"status":"ok",' + JsonStr('preview_url', ResponseUtf8) + '}'
+    else Result := '{"error":true,"code":"preview_url_failed"}';
+    Exit; end;
+
+  if Path = '/preview/fingerprint/url' then begin
+    if FPreviewManager.RequestPreviewUrl(prtFingerprint, TerminalBaseUrl, ResponseUtf8) then
+      Result := '{"status":"ok",' + JsonStr('preview_url', ResponseUtf8) + '}'
+    else Result := '{"error":true,"code":"preview_url_failed"}';
+    Exit; end;
+
+  if Path = '/preview/iris/url' then begin
+    if FPreviewManager.RequestPreviewUrl(prtIris, TerminalBaseUrl, ResponseUtf8) then
+      Result := '{"status":"ok",' + JsonStr('preview_url', ResponseUtf8) + '}'
+    else Result := '{"error":true,"code":"preview_url_failed"}';
+    Exit; end;
   if Path = '/preview/camera/start' then begin
     ThirdPartyHwndVal := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
     if (ThirdPartyHwndVal = 0) or not IsWindow(ThirdPartyHwndVal) then begin

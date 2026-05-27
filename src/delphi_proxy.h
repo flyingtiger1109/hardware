@@ -36,6 +36,11 @@ public:
                          const std::string& saveDir,
                          const std::string& callbackUrl);
 
+    bool GetCameraPreviewUrl(const std::string& requestId, std::string& outPreviewUrl);
+    bool GetFingerprintPreviewUrl(const std::string& requestId, std::string& outPreviewUrl);
+    bool GetIrisPreviewUrl(const std::string& requestId, std::string& outPreviewUrl);
+
+    // Legacy server-rendered preview endpoints retained for mixed-version deployment.
     bool StartCameraPreview(const std::string& requestId,
                             intptr_t thirdPartyHwnd,
                             const std::string& callbackUrl);
@@ -66,6 +71,9 @@ private:
     bool IsAcceptedResponse(const std::string& response);
     bool ExtractSavePath(const std::string& response,
                          std::string& outSavePath);
+    bool GetPreviewUrl(const std::string& path,
+                       const std::string& requestId,
+                       std::string& outPreviewUrl);
 
     std::string BuildUrl(const std::string& path) const;
 };

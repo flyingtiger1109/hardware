@@ -58,6 +58,7 @@ public:
     int rtsp_network_caching_ms = 150;
     int rtsp_live_caching_ms = 150;
     std::string rtsp_transport = "tcp";
+    int preview_check_hwnd_interval_ms = 500;
 
     // 流程状态
     bool process_active = false;

@@ -47,6 +47,7 @@ void HzsjkjtContext::Reset() {
     rtsp_network_caching_ms = 150;
     rtsp_live_caching_ms = 150;
     rtsp_transport = "tcp";
+    preview_check_hwnd_interval_ms = 500;
     process_active = false;
 }
 

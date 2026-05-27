@@ -27,6 +27,15 @@ public:
     int StartIrisPreview(HWND hwnd);
     int StopIrisPreview();
 
+    // Third-party preview path: URL is acquired through Delphi, rendering lives in this process.
+    int StartCameraPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
+    int StartFingerprintPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
+    int StartIrisPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
+    int StopCameraPreviewRenderer(bool clearStoredHwnd = true);
+    int StopFingerprintPreviewRenderer(bool clearStoredHwnd = true);
+    int StopIrisPreviewRenderer(bool clearStoredHwnd = true);
+    void StopAllRenderers();
+
     void StopAll();
 
     ActivePreviewSnapshot CaptureActivePreviewSnapshot() const;
@@ -54,6 +63,14 @@ private:
                     HWND& storedHwnd,
                     int stoppedEvent,
                     bool clearStoredHwnd);
+    int StartRendererFromUrl(HWND hwnd, const std::string& rtspUrl,
+                             std::atomic<bool>& runningFlag,
+                             std::unique_ptr<IRtspRenderer>& renderer,
+                             HWND& storedHwnd);
+    int StopRenderer(std::atomic<bool>& runningFlag,
+                     std::unique_ptr<IRtspRenderer>& renderer,
+                     HWND& storedHwnd,
+                     bool clearStoredHwnd);
 
     mutable CRITICAL_SECTION m_cs;
 

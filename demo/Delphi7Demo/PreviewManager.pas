@@ -62,6 +62,8 @@ type
     procedure SetCachingMs(NetworkCachingMs, LiveCachingMs: Integer);
     // Local and external sessions own separate VLC players for each resource.
     // TargetHwnd: if 0, use Delphi panel; otherwise render relative to it.
+    function RequestPreviewUrl(ResType: TPreviewResourceType;
+      const TerminalBaseUrl: string; var PreviewUrl: string): Boolean;
     function StartPreview(ResType: TPreviewResourceType;
       SessionType: TPreviewSessionType; TargetHwnd: HWND;
       const TerminalBaseUrl: string): Boolean;
@@ -327,6 +329,38 @@ begin
   Result := (Vlc <> nil) and Vlc.Running;
 end;
 
+function TPreviewManager.RequestPreviewUrl(ResType: TPreviewResourceType;
+  const TerminalBaseUrl: string; var PreviewUrl: string): Boolean;
+var
+  Client: TTerminalClient;
+  ResponseUtf8, Status, TerminalPath: string;
+begin
+  Result := False;
+  PreviewUrl := '';
+  TerminalPath := ResTypeToTerminalPath(ResType);
+  if TerminalPath = '' then Exit;
+
+  Client := TTerminalClient.Create;
+  try
+    DoLog('[信息] [终端调用] 正在为DLL请求预览地址：' + TerminalBaseUrl + TerminalPath);
+    if not Client.PostJson(TerminalBaseUrl, TerminalPath, '{}', ResponseUtf8) then
+    begin
+      DoLog('[错误] [终端调用] 为DLL请求预览地址失败。');
+      Exit;
+    end;
+    Status := ExtractJsonField(ResponseUtf8, 'status');
+    PreviewUrl := ExtractJsonField(ResponseUtf8, 'preview_url');
+    if (Status <> 'ok') or (PreviewUrl = '') then
+    begin
+      DoLog('[错误] [终端调用] 终端返回的预览地址无效。');
+      PreviewUrl := '';
+      Exit;
+    end;
+  finally
+    Client.Free;
+  end;
+  Result := True;
+end;
 function TPreviewManager.StartPreview(ResType: TPreviewResourceType;
   SessionType: TPreviewSessionType; TargetHwnd: HWND;
   const TerminalBaseUrl: string): Boolean;

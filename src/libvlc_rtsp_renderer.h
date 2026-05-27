@@ -27,6 +27,7 @@ private:
     bool TryLoadLibVlcFromDir(const std::string& dir);
     void SetLastErrorMessage(const std::string& message);
     void ApplyWindowFit(HWND hwnd);
+    void LayoutLoop();
 
     HMODULE m_hLibVlcCore = nullptr;
     HMODULE m_hLibVlc = nullptr;
@@ -44,6 +45,7 @@ private:
     void* m_libvlc_media_player_stop = nullptr;
     void* m_libvlc_media_player_is_playing = nullptr;
     void* m_libvlc_video_set_aspect_ratio = nullptr;
+    void* m_libvlc_video_set_crop_geometry = nullptr;
     void* m_libvlc_video_set_scale = nullptr;
 
     libvlc_instance_t* m_vlcInstance = nullptr;
@@ -55,9 +57,9 @@ private:
     CRITICAL_SECTION m_cs;
     std::string m_lastError;
     std::string m_vlcDir;
-
-    // 初始化事件等待
-    std::atomic<bool> m_initDone{false};
+    std::unique_ptr<std::thread> m_layoutThread;
+    std::atomic<bool> m_stopLayout{false};
+    int m_layoutIntervalMs = 500;
 };
 
 } // namespace HZCYKJTHardWare
