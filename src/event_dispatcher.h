@@ -54,6 +54,8 @@ private:
                                 const RequestSession& session);
     void ProcessPreviewReadyCallback(const std::string& requestId,
                                      const std::string& body);
+    void ProcessAuthorizeCallback(const std::string& requestId,
+                                  const std::string& body);
 
     void SendEvent(const std::string& requestId,
                    const std::string& resourceType,
@@ -85,6 +87,14 @@ private:
         std::string raw_json;
         std::string ic_number;
         std::string mrz;
+        std::string auth_zjhm;
+        std::string auth_zjlb;
+        std::string auth_gjdqdm;
+        std::string auth_xm;
+        std::string auth_xb;
+        std::string auth_csrq;
+        std::string auth_kadm;
+        std::string auth_result;
         std::vector<char> data;
     };
     std::queue<EventStrings> m_stringsQueue;

@@ -1148,6 +1148,47 @@ static int RequestNfcCardBody(const char* saveDir) {
     return HZCYKJTHardWare_RET_OK;
 }
 
+static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
+                                const char* GJDQDM, const char* XM,
+                                const char* XB, const char* CSRQ,
+                                const char* KADM) {
+    using namespace HZCYKJTHardWare;
+    LOG_INFO("EXPORT", "第三方调用：RequestAuthorize(ZJHM=%s, XM=%s, XB=%s)",
+             ZJHM ? ZJHM : "NULL", XM ? XM : "NULL", XB ? XB : "NULL");
+
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    int timeoutMs = ctx.ocr_timeout_ms;
+    std::string requestId = RequestSessionManager::Instance().CreateSession(
+        HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
+
+    std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
+
+    DelphiProxy proxy(ctx.delphi_server_url);
+    if (!proxy.RequestAuthorize(requestId,
+                                ZJHM ? ZJHM : "",
+                                ZJLB ? ZJLB : "",
+                                GJDQDM ? GJDQDM : "",
+                                XM ? XM : "",
+                                XB ? XB : "",
+                                CSRQ ? CSRQ : "",
+                                KADM ? KADM : "",
+                                callbackUrl)) {
+        LOG_ERROR("EXPORT", "授权请求提交失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
+        PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
+                         HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
+                         HZCYKJTHardWare_RET_HTTP_FAILED, "",
+                         "Authorization request HTTP failed",
+                         nullptr, nullptr);
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    RequestSessionManager::Instance().MarkAccepted(requestId);
+    LOG_INFO("EXPORT", "Delphi程序已受理授权请求：request_id=%s", requestId.c_str());
+    return HZCYKJTHardWare_RET_OK;
+}
+
 static int RegisterEventCallbackBody(THZCYKJTHardWareEventCallback callback) {
     using namespace HZCYKJTHardWare;
     if (!callback) return HZCYKJTHardWare_RET_INVALID_PARAM;
@@ -1249,6 +1290,14 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestOCR(const 
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestNfcCard(const char* saveDir) {
     __try { return RequestNfcCardBody(saveDir) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestAuthorize(
+    const char* ZJHM, const char* ZJLB, const char* GJDQDM,
+    const char* XM, const char* XB, const char* CSRQ, const char* KADM)
+{
+    __try { return RequestAuthorizeBody(ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ, KADM) == HZCYKJTHardWare_RET_OK ? 1 : 0; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 

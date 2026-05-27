@@ -231,6 +231,30 @@ bool DelphiProxy::StopIrisPreview(const std::string& requestId) {
     return PostJson("/preview/iris/stop", body, response) && IsOkResponse(response);
 }
 
+bool DelphiProxy::RequestAuthorize(const std::string& requestId,
+                                    const std::string& ZJHM,
+                                    const std::string& ZJLB,
+                                    const std::string& GJDQDM,
+                                    const std::string& XM,
+                                    const std::string& XB,
+                                    const std::string& CSRQ,
+                                    const std::string& KADM,
+                                    const std::string& callbackUrl) {
+    std::string body = "{" +
+        JsonStringField("request_id", requestId) + "," +
+        JsonStringField("ZJHM", ZJHM) + "," +
+        JsonStringField("ZJLB", ZJLB) + "," +
+        JsonStringField("GJDQDM", GJDQDM) + "," +
+        JsonStringField("XM", XM) + "," +
+        JsonStringField("XB", XB) + "," +
+        JsonStringField("CSRQ", CSRQ) + "," +
+        JsonStringField("KADM", KADM) + "," +
+        JsonStringField("callback_url", callbackUrl) +
+        "}";
+    std::string response;
+    return PostJson("/authorize", body, response) && IsAcceptedResponse(response);
+}
+
 bool DelphiProxy::Get(const std::string& path, std::string& response) {
     if (baseUrl_.empty()) {
         LOG_ERROR("DelphiProxy", "DLL下发Delphi程序失败：base_url为空，method=GET，path=%s", path.c_str());

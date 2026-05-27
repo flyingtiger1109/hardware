@@ -797,7 +797,7 @@ begin Result := FPreviewManager.StopPreview(prtIris, pstLocal);
 // HTTP HANDLER (for DLL requests)
 // ============================================================
 function TDelphiProxyServer.HandleRequest(const Method, Path, BodyUtf8: string): string;
-var RequestId, SaveDir, CallbackUrl, TerminalBaseUrl, SavePath, ResponseUtf8, DllCallbackUrl: string;
+var RequestId, SaveDir, CallbackUrl, TerminalBaseUrl, SavePath, ResponseUtf8, DllCallbackUrl, PayloadUtf8: string;
   TerminalIndex: Integer; Client: TTerminalClient;
   ThirdPartyHwndVal, FpHwnd, IrisHwnd: HWND;
 begin
@@ -940,6 +940,23 @@ begin
     else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
 
   if Path = '/preview/iris/stop' then begin FPreviewManager.StopPreview(prtIris, pstExternal); Exclude(FExternalActivePreviews, prtIris); FThirdPartyIrisHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
+
+  if Path = '/authorize' then begin
+    RequestId := ExtractJsonString(BodyUtf8, 'request_id');
+    CallbackUrl := ExtractJsonString(BodyUtf8, 'callback_url');
+    DoLog('[' + Utf8ToAnsi(#$E6#$8E#$88#$E6#$9D#$83) + '] request_id=' + RequestId);
+    PayloadUtf8 := '{"request_id":"' + RequestId + '","resource_type":"authorization","auth_result":1' +
+      ',"ZJHM":"' + ExtractJsonString(BodyUtf8, 'ZJHM') + '"' +
+      ',"ZJLB":"' + ExtractJsonString(BodyUtf8, 'ZJLB') + '"' +
+      ',"GJDQDM":"' + ExtractJsonString(BodyUtf8, 'GJDQDM') + '"' +
+      ',"XM":"' + ExtractJsonString(BodyUtf8, 'XM') + '"' +
+      ',"XB":"' + ExtractJsonString(BodyUtf8, 'XB') + '"' +
+      ',"CSRQ":"' + ExtractJsonString(BodyUtf8, 'CSRQ') + '"' +
+      ',"KADM":"' + ExtractJsonString(BodyUtf8, 'KADM') + '"' +
+      ',"message":"' + #$E5#$90#$8C#$E6#$84#$8F#$E6#$8E#$88#$E6#$9D#$83 + '"}';
+    MakeCallback(RequestId, CallbackUrl, PayloadUtf8);
+    Result := '{"accepted":true}'; Exit;
+  end;
 
   Result := '{"error":true,"code":"not_found","message":"unknown:' + Path + '"}'; end;
 

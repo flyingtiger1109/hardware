@@ -79,6 +79,9 @@ extern "C" {
 
 #define HZCYKJTHardWare_EVENT_ERROR                        1999
 
+#define HZCYKJTHardWare_EVENT_AUTHORIZE_SUCCESS            2001
+#define HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED             2002
+
 /* Resource types */
 #define HZCYKJTHardWare_RESOURCE_FACE_IMAGE        "face_image"
 #define HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE "fingerprint_image"
@@ -86,6 +89,7 @@ extern "C" {
 #define HZCYKJTHardWare_RESOURCE_IRIS_IMAGE        "iris_image"
 #define HZCYKJTHardWare_RESOURCE_NFC_CARD          "nfc_card"
 #define HZCYKJTHardWare_RESOURCE_PLATE_IMAGE      "plate_image"
+#define HZCYKJTHardWare_RESOURCE_AUTHORIZATION    "authorization"
 
 /*
  * Unified event data.

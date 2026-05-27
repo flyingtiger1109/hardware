@@ -33,6 +33,21 @@ type
     BtnOCR: TButton;
     BtnNFC: TButton;
     BtnIrisCapture: TButton;
+    LblAuthSample: TLabel;
+    LblAuthZJHM: TLabel;
+    LblAuthZJLB: TLabel;
+    LblAuthGJDQDM: TLabel;
+    LblAuthXM: TLabel;
+    LblAuthXB: TLabel;
+    LblAuthCSRQ: TLabel;
+    LblAuthKADM: TLabel;
+    EdtAuthZJHM: TEdit;
+    EdtAuthZJLB: TEdit;
+    EdtAuthGJDQDM: TEdit;
+    EdtAuthXM: TEdit;
+    EdtAuthXB: TEdit;
+    EdtAuthCSRQ: TEdit;
+    EdtAuthKADM: TEdit;
     PanelCamera: TPanel;
     PanelFingerprint: TPanel;
     PanelIris: TPanel;
@@ -54,6 +69,7 @@ type
     procedure BtnOCRClick(Sender: TObject);
     procedure BtnNFCClick(Sender: TObject);
     procedure BtnIrisCaptureClick(Sender: TObject);
+    procedure BtnAuthorizeClick(Sender: TObject);
   private
     FInitialized: Boolean;
     procedure Log(const S: string);
@@ -92,6 +108,7 @@ function HZCYKJTHardWare_CaptureFingerprintImage(SaveDir: PAnsiChar): Integer; s
 function HZCYKJTHardWare_CaptureIrisImage(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestOCR(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestNfcCard(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
+function HZCYKJTHardWare_RequestAuthorize(ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ, KADM: PAnsiChar): Integer; stdcall; external DLL_NAME;
 
 type
   PStringData = ^string;
@@ -146,6 +163,11 @@ begin
   SetLength(Result, AnsiLen);
   if AnsiLen > 0 then
     WideCharToMultiByte(CP_ACP, 0, PWideChar(WideText), WideLen, PChar(Result), AnsiLen, nil, nil);
+end;
+
+function Cn(const Utf8Text: AnsiString): string;
+begin
+  Result := SafeUtf8ToStr(PAnsiChar(Utf8Text));
 end;
 
 function ExtractJsonStr(const Json, Key: string): string;
@@ -291,6 +313,17 @@ begin
     Log('  Save: ' + SavePath);
   if Msg <> '' then
     Log('  Msg: ' + Msg);
+  if ResType = 'authorization' then
+  begin
+    Log('  auth_result=' + IntToStr(ExtractJsonInt(Json, 'auth_result')));
+    Log('  ZJHM=' + ExtractJsonStr(Json, 'ZJHM'));
+    Log('  ZJLB=' + ExtractJsonStr(Json, 'ZJLB'));
+    Log('  GJDQDM=' + ExtractJsonStr(Json, 'GJDQDM'));
+    Log('  XM=' + ExtractJsonStr(Json, 'XM'));
+    Log('  XB=' + ExtractJsonStr(Json, 'XB'));
+    Log('  CSRQ=' + ExtractJsonStr(Json, 'CSRQ'));
+    Log('  KADM=' + ExtractJsonStr(Json, 'KADM'));
+  end;
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
@@ -451,6 +484,34 @@ end;
 procedure TFormMain.BtnIrisCaptureClick(Sender: TObject);
 begin
   LogRet('CaptureIrisImage', HZCYKJTHardWare_CaptureIrisImage(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
+
+procedure TFormMain.BtnAuthorizeClick(Sender: TObject);
+var
+  Ret: Integer;
+  ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ, KADM: AnsiString;
+begin
+  ZJHM := AnsiString(EdtAuthZJHM.Text);
+  ZJLB := AnsiString(EdtAuthZJLB.Text);
+  GJDQDM := AnsiString(EdtAuthGJDQDM.Text);
+  XM := AnsiString(EdtAuthXM.Text);
+  XB := AnsiString(EdtAuthXB.Text);
+  CSRQ := AnsiString(EdtAuthCSRQ.Text);
+  KADM := AnsiString(EdtAuthKADM.Text);
+  Log(Cn(#$E5#$B7#$B2#$E6#$8F#$90#$E4#$BA#$A4#$E6#$8E#$88#$E6#$9D#$83#$E6#$A8#$A1#$E6#$8B#$9F#$E5#$8F#$82#$E6#$95#$B0#$EF#$BC#$9A) +
+    'ZJHM=' + string(ZJHM) + ', XM=' + string(XM) +
+    ', ZJLB=' + string(ZJLB) + ', GJDQDM=' + string(GJDQDM) +
+    ', XB=' + string(XB) + ', CSRQ=' + string(CSRQ) + ', KADM=' + string(KADM));
+  Ret := HZCYKJTHardWare_RequestAuthorize(
+    PAnsiChar(ZJHM),
+    PAnsiChar(ZJLB),
+    PAnsiChar(GJDQDM),
+    PAnsiChar(XM),
+    PAnsiChar(XB),
+    PAnsiChar(CSRQ),
+    PAnsiChar(KADM)
+  );
+  LogRet('RequestAuthorize', Ret);
 end;
 
 end.

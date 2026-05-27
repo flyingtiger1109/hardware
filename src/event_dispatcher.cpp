@@ -145,6 +145,8 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         resourceType = HZCYKJTHardWare_RESOURCE_IRIS_IMAGE;
     } else if (path.find("/nfc-card") != std::string::npos || path.find("/nfc") != std::string::npos) {
         resourceType = HZCYKJTHardWare_RESOURCE_NFC_CARD;
+    } else if (path.find("/authorize") != std::string::npos) {
+        resourceType = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
     } else {
         LOG_WARN("EventDispatcher", "收到未知Delphi程序回调路径：path=%s", path.c_str());
         return;
@@ -264,6 +266,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                       nullptr, body.c_str());
         } else {
             ProcessNfcCardCallback(requestId, body, *session);
+        }
+    } else if (resourceType == HZCYKJTHardWare_RESOURCE_AUTHORIZATION) {
+        if (isError) {
+            SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
+                      HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
+                      nullptr, body.c_str());
+        } else {
+            ProcessAuthorizeCallback(requestId, body);
         }
     }
 }
@@ -838,6 +848,22 @@ LOG_DEBUG("EventDispatcher", "第三方回调分发线程已启动");
                         json += ",\"ic_number\":\"" + strs.ic_number + "\"";
                     if (!strs.mrz.empty())
                         json += ",\"mrz\":\"" + strs.mrz + "\"";
+                    if (!strs.auth_result.empty())
+                        json += ",\"auth_result\":\"" + strs.auth_result + "\"";
+                    if (!strs.auth_zjhm.empty())
+                        json += ",\"ZJHM\":\"" + strs.auth_zjhm + "\"";
+                    if (!strs.auth_zjlb.empty())
+                        json += ",\"ZJLB\":\"" + strs.auth_zjlb + "\"";
+                    if (!strs.auth_gjdqdm.empty())
+                        json += ",\"GJDQDM\":\"" + strs.auth_gjdqdm + "\"";
+                    if (!strs.auth_xm.empty())
+                        json += ",\"XM\":\"" + strs.auth_xm + "\"";
+                    if (!strs.auth_xb.empty())
+                        json += ",\"XB\":\"" + strs.auth_xb + "\"";
+                    if (!strs.auth_csrq.empty())
+                        json += ",\"CSRQ\":\"" + strs.auth_csrq + "\"";
+                    if (!strs.auth_kadm.empty())
+                        json += ",\"KADM\":\"" + strs.auth_kadm + "\"";
                     json += "}";
                     cb(json.c_str());
                 } else {
@@ -854,6 +880,52 @@ LOG_DEBUG("EventDispatcher", "第三方回调分发线程已启动");
     }
 
 LOG_DEBUG("EventDispatcher", "第三方回调分发线程已退出");
+}
+
+void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
+                                               const std::string& body) {
+    int authResult = JsonHelper::GetInt(body, "auth_result", 0);
+    std::string message = JsonHelper::GetString(body, "message");
+    if (message.empty()) {
+        message = (authResult == 1) ? "授权通过" : "授权未通过";
+    }
+
+    // Build the basic event
+    auto& ctx = HzsjkjtContext::Instance();
+    HZCYKJTHardWare_EVENT event;
+    memset(&event, 0, sizeof(event));
+    event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
+    event.event_type = (authResult == 1)
+        ? HZCYKJTHardWare_EVENT_AUTHORIZE_SUCCESS
+        : HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED;
+    event.request_id = requestId.c_str();
+    event.resource_type = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
+    event.status = (authResult == 1) ? HZCYKJTHardWare_RET_OK : HZCYKJTHardWare_RET_FAILED;
+    event.message = message.c_str();
+    event.terminal_base_url = ctx.current_terminal_base_url.c_str();
+    event.terminal_index = ctx.current_terminal_index;
+    event.raw_json = body.c_str();
+
+    // Build EventStrings with auth fields
+    EnterCriticalSection(&m_cs);
+    EventStrings strs;
+    strs.request_id = requestId;
+    strs.resource_type = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
+    strs.message = message;
+    strs.terminal_base_url = ctx.current_terminal_base_url;
+    strs.raw_json = body;
+    strs.auth_result = std::to_string(authResult);
+    strs.auth_zjhm = JsonHelper::GetString(body, "ZJHM");
+    strs.auth_zjlb = JsonHelper::GetString(body, "ZJLB");
+    strs.auth_gjdqdm = JsonHelper::GetString(body, "GJDQDM");
+    strs.auth_xm = JsonHelper::GetString(body, "XM");
+    strs.auth_xb = JsonHelper::GetString(body, "XB");
+    strs.auth_csrq = JsonHelper::GetString(body, "CSRQ");
+    strs.auth_kadm = JsonHelper::GetString(body, "KADM");
+    m_stringsQueue.push(std::move(strs));
+    m_queue.push(event);
+    WakeConditionVariable(&m_cv);
+    LeaveCriticalSection(&m_cs);
 }
 
 } // namespace HZCYKJTHardWare

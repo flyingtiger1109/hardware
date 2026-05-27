@@ -56,6 +56,17 @@ extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestNfcCard(const 
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartProcess(const char* saveDir);
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_EndProcess(void);
 
+/* Authorization request [async] */
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestAuthorize(
+    const char* ZJHM,
+    const char* ZJLB,
+    const char* GJDQDM,
+    const char* XM,
+    const char* XB,
+    const char* CSRQ,
+    const char* KADM
+);
+
 /* Terminal selection [sync] */
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_SwitchTerminal(int terminalIndex);
 

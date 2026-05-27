@@ -59,6 +59,16 @@ public:
 
     bool StopIrisPreview(const std::string& requestId);
 
+    bool RequestAuthorize(const std::string& requestId,
+                          const std::string& ZJHM,
+                          const std::string& ZJLB,
+                          const std::string& GJDQDM,
+                          const std::string& XM,
+                          const std::string& XB,
+                          const std::string& CSRQ,
+                          const std::string& KADM,
+                          const std::string& callbackUrl);
+
 private:
     std::string baseUrl_;
 

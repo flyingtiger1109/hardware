@@ -19,4 +19,5 @@ EXPORTS
     HZCYKJTHardWare_CaptureIrisImage
     HZCYKJTHardWare_RequestOCR
     HZCYKJTHardWare_RequestNfcCard
+    HZCYKJTHardWare_RequestAuthorize
     HZCYKJTHardWare_RegisterEventCallback
