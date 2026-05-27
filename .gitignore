@@ -28,3 +28,12 @@ backup_*/
 
 # One-off generation or repair scripts
 demo/Delphi7Demo/_*.py
+
+# Delphi IDE generated metadata, backups and local output
+demo/Delphi7Demo/*.cfg
+demo/Delphi7Demo/*.dof
+demo/Delphi7Demo/*.ddp
+demo/Delphi7Demo/*.~*
+demo/Delphi7Demo/HZCYKJTHardWare.dll
+demo/DelphiThirdPartyDemo/*.ddp
+demo/DelphiThirdPartyDemo/*.~*
