@@ -88,7 +88,7 @@ int NetworkDetector::Detect(const std::string& preferredSubnet) {
     LOG_DEBUG("NetDetector", "网卡检测结果：IPv4总数=%zu，192.168有效地址=%zu",
              allIps.size(), valid192Ips.size());
     for (const auto& ip : valid192Ips) {
-        LOG_DEBUG("NetDetector", "  192.168 candidate: %s", ip.c_str());
+        LOG_DEBUG("NetDetector", "192.168可选地址：ip=%s", ip.c_str());
     }
 
     if (valid192Ips.empty()) {

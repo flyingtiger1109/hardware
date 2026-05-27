@@ -80,7 +80,7 @@ object FormMain: TFormMain
       Left = 8
       Top = 42
       Width = 500
-      Height = 25
+      Height = 22
       TabOrder = 6
       Text = '.\captures'
     end

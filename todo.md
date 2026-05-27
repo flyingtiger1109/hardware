@@ -277,3 +277,87 @@
 - 修改前基线为 Git 提交 `ec88dff backup-before-ui-log-review`；提交本轮变更后，可使用 Git 对本轮提交执行反向提交回退。
 - 如尚未提交本轮变更，可将工作区恢复到上述基线提交以撤销本轮 UI/日志修改。
 - 已识别但本轮未处理的风险：摄像头预览启动路径中，DLL 保存 preview `request_id` 的时机可能晚于 Delphi 程序同步回调，存在预览就绪回调被判定为不匹配的竞态；该项涉及已验证的预览流程，需单独确认后处理。
+
+## 切换终端卡顿诊断（2026-05-27）
+
+### 已确认现象与证据
+
+- [x] 第三方跨进程预览场景下，切换终端请求已进入 `TDelphiProxyServer.SwitchTerminalDirect`。
+- [x] 现有日志显示 `20:43:24.286` 开始停止活动预览，`20:44:00.077` 才记录首路预览停止完成，首个 `StopPreview` 阶段阻塞约 `35.8s`。
+- [x] 两路预览停止完成后才执行终端索引更新，因此当前卡顿优先定位于 `StopPreview` / VLC 释放 / 视频窗口销毁链路，而非 `TTerminalManager.SwitchTo`。
+- [x] 已确认 DLL HTTP 请求由 `TDelphiHttpServerThread` 执行；第三方按钮调用 `SwitchTerminal` 仍为同步调用。
+
+### 本轮诊断改动
+
+- [x] 修改前建立快照目录 `backup_before_switch_terminal_diagnostics_20260527_005447`。
+- [x] 在 `DelphiProxyServer.pas` 的切换、停止活动预览及恢复预览阶段增加逐资源耗时和线程 ID 日志。
+- [x] 在 `PreviewManager.pas` 的 `StopPreview` 增加资源类型、`Vlc.Stop`、`Vlc.Free` 前后耗时日志。
+- [x] 在 `VlcPlayer.pas` 的 `Stop` / `Destroy` 增加 VLC stop/release、`DestroyWindow`、`UnloadLibVlc` 前后耗时以及 HWND 所属进程/线程日志。
+- [x] 本轮不恢复 `TLayoutThread`，不改变 DLL 接口、第三方调用方式、释放顺序或窗口架构。
+
+### 待验证
+
+- [x] 构建 `demo/Delphi7Demo/HZCYKJTHardWare.dpr`，确认诊断日志改动可由 Delphi 7 编译。
+- [ ] 使用第三方 Demo 启动摄像头/指纹预览后切换终端，采集新增 `[Diag]` 日志。
+- [ ] 根据日志确认阻塞具体位于 `libvlc_media_player_stop`、`libvlc_media_player_release`、`libvlc_release`、`DestroyWindow` 或析构卸载阶段。
+- [ ] 定位明确后再制定最小修复方案；未确认卡点前不引入线程迁移、防重入状态或顶层覆盖窗口改造。
+
+### 复现定位结果
+
+- [x] 单摄像头切换：VLC stop/release 约 `94ms`，`DestroyWindow` 阻塞约 `19.1s`。
+- [x] 单指纹切换：VLC stop/release 约 `110ms`，`DestroyWindow` 阻塞约 `21.9s`。
+- [x] 双路预览切换：先停止的指纹在 `DestroyWindow` 阻塞约 `38.4s`；随后摄像头释放快速完成。
+- [x] 另一次摄像头停止场景中，`DestroyWindow` 阻塞约 `62.5s`。
+- [x] 根因确认：主程序创建的 VLC 子窗口被挂到第三方进程 Panel 下，跨进程子窗口销毁会同步阻塞；VLC release 并非主要耗时点。
+
+### 同进程覆盖容器修复
+
+- [x] 建立修复前快照目录 `backup_before_overlay_container_fix_20260527_012538`。
+- [x] `VlcPlayer.pas` 对跨进程目标 HWND 改为创建主程序自有的无边框覆盖容器，VLC 视频子窗口只挂在本进程容器中。
+- [x] 第三方传入的 HWND 保持为定位锚点，覆盖容器根据其屏幕客户区保持原有 cover 铺满效果。
+- [x] 使用主程序 UI 定时器跟随外部目标位置和可见状态；不恢复后台布局线程，不对第三方 Panel 进行 `SetParent`、`MoveWindow` 或 `DestroyWindow`。
+- [x] `PreviewManager.pas` 将 VLC `Play` / `Stop` / `Free` 统一通过 Delphi 主线程执行，保证本进程窗口的创建、移动和销毁线程一致。
+- [x] 使用 Delphi 7 编译主程序通过；仅存在原有未使用变量 hint，无 error。
+- [ ] 验证跨进程启动预览、单路切换、双路切换、停止预览和第三方窗体移动/最小化场景。
+
+### 覆盖窗口可见性策略调整
+
+- [x] 运行验证确认预览启动和终端切换不再卡顿。
+- [x] 发现覆盖容器原逻辑在第三方窗口失去前台时主动隐藏预览，导致被其他程序遮挡后预览不可见。
+- [x] 建立修复前快照目录 `backup_before_overlay_visibility_fix_20260527_092110`。
+- [x] `VlcPlayer.pas` 移除“目标窗体必须为前台”的显示条件；仅在锚点失效、不可见或目标顶层窗体最小化时隐藏覆盖预览。
+- [x] 覆盖容器不再使用 `HWND_TOPMOST`；改为排列在第三方顶层窗体之上且位于其他更高层窗口之下，使其随第三方窗口自然被遮挡。
+- [ ] 复测其他程序部分/完全遮挡第三方窗体后移开遮挡，确认预览仍存在且不会覆盖其他应用。
+- [ ] 复测第三方窗体最小化/恢复、移动，以及切换终端/停止预览仍不卡顿。
+
+### 覆盖窗口层级更新优化
+
+- [x] 日志确认点击返回第三方窗口时未产生新的 `PreviewUi Play`、`VLC预览已启动` 或 `Vlc.Stop`，视觉刷新并非重启预览。
+- [x] 定位视觉刷新来源为覆盖容器定时执行 `SetWindowPos(..., SWP_SHOWWINDOW)` 进行层级修正与显示更新。
+- [x] 建立修复前快照目录 `backup_before_overlay_zorder_optimization_20260527_095228`。
+- [x] `VlcPlayer.pas` 缓存覆盖窗口显示状态与上次屏幕矩形，层级、位置和可见状态均未改变时不再重复调用 `SetWindowPos`。
+- [x] 仅在首次显示、隐藏后恢复、Panel 移动/缩放或 Z-order 确实改变时更新覆盖窗口；仅尺寸变化时不重新调整层级。
+- [ ] 复测在其他窗口之间反复切换并点击回第三方窗体时的视觉闪变程度，确认不存在持续或重复刷新。
+
+### 本地与第三方并发预览会话拆分
+
+- [x] 确认终端支持并发流，问题根因是 Delphi 本地按钮与 DLL 外部请求共用每类资源的单一 `TVlcPlayer` 和活动状态。
+- [x] 建立修改前快照目录 `backup_before_independent_preview_sessions_20260527_100557`。
+- [x] `PreviewManager.pas` 新增 `local` / `external` 会话维度；摄像头、指纹、虹膜分别维护本地与第三方独立播放器和目标窗口状态。
+- [x] `DelphiProxyServer.pas` 将活动预览状态拆为本地集合与第三方集合；主程序按钮仅操作本地会话，DLL HTTP 预览接口仅操作第三方会话。
+- [x] 终端切换流程同时停止并恢复切换前处于活动状态的本地和第三方会话，第三方覆盖容器方案及 DLL 对外接口保持不变。
+- [x] 日志中的预览启动、停止和终端切换阶段增加 `camera/local`、`camera/external` 等会话标识。
+- [x] 使用 Delphi 7 `DCC32.EXE` 编译 `demo/Delphi7Demo/HZCYKJTHardWare.dpr` 成功；仅有原有未使用变量 hint，无 error。
+- [ ] 验证主程序和第三方同时预览同一摄像头/指纹时，两路画面均持续显示且互不影响停止和重启。
+- [ ] 验证本地及第三方会话同时运行时切换终端，两类会话均可在新终端恢复且不产生卡顿。
+
+### 最终收尾与日志清理
+
+- [x] 用户运行确认同进程覆盖容器与独立会话方案当前无明显问题，确定作为本版本方案。
+- [x] 建立收尾前快照目录 `backup_before_final_log_cleanup_20260527_103449`。
+- [x] 移除 `DelphiProxyServer.pas`、`PreviewManager.pas`、`VlcPlayer.pas` 中为定位卡顿临时增加的 `[Diag]` 耗时与线程日志。
+- [x] 保留覆盖容器启用的业务日志并改为中文；不恢复 `TLayoutThread`，不改变覆盖窗口或独立会话结构。
+- [x] 检查 DLL 源码运行日志，并将遗留的英文调试信息改为中文；字段名、API 名和配置值保留技术原文。
+- [x] 更新 Delphi 服务端与第三方示例 README，说明覆盖容器、独立会话和第三方启动按钮后台调用方式。
+- [x] 收尾后重新编译 Delphi 主程序、第三方示例和 DLL；Delphi 主程序仅有原有 hint，DLL 为 `0 warning / 0 error`。
+- [x] 将最新 Delphi 服务 EXE 和 DLL 同步到第三方示例部署目录，并纳入最终提交。

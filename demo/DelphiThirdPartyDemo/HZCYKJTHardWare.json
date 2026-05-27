@@ -54,10 +54,10 @@
   },
   "timeout": {
     "http_connect_ms": 15000,
-    "http_request_ms": 15000,
+    "http_request_ms": 60000,
     "face_capture_ms": 15000,
     "fingerprint_capture_ms": 15000,
-    "ocr_ms": 10000
+    "ocr_ms": 15000
   },
   "save": {
     "default_root": ".\\captures",

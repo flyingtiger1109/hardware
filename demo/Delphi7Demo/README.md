@@ -20,6 +20,10 @@
 - `POST /nfc`
 - `POST /preview/camera/start`
 - `POST /preview/camera/stop`
+- `POST /preview/fingerprint/start`
+- `POST /preview/fingerprint/stop`
+- `POST /preview/iris/start`
+- `POST /preview/iris/stop`
 
 ## 回调 DLL
 
@@ -30,7 +34,7 @@
 - `/HZCYKJTHardWare/callback/nfc-card`
 - `/HZCYKJTHardWare/callback/preview-ready`
 
-预览接口返回实际目标 `render_hwnd`。DLL 传入外部有效 HWND 时，本程序让 libVLC 直接绑定该窗口，并通过原生裁切参数按视频比例居中裁切铺满；不会回退到窗体内 Panel。服务启动时不自动开启预览。
+预览接口返回第三方提供的目标锚点 `render_hwnd`。DLL 传入外部有效 HWND 时，本程序创建自身进程内的无边框覆盖容器，按外部窗口客户区位置进行跟随，并将 libVLC 子窗口挂载到该本地容器中。该方式保持视觉上的居中裁切铺满，同时避免跨进程子窗口销毁导致的阻塞。Delphi 界面预览和第三方预览维护独立播放会话，可并发显示同一资源。服务启动时不自动开启预览。
 
 ## 使用顺序
 
@@ -58,4 +62,4 @@
 - 该示例使用 WinSock 实现最小 HTTP 服务，目的是兼容 Delphi 7 并演示协议。
 - `terminal_callback_server.public_host` 留空时，终端回调地址自动使用检测到的本机局域网 IP；不要把 `0.0.0.0` 作为发送给终端的回调地址。
 - 示例保存的是 `.txt` 占位文件，不是真实图片。
-- 真实服务端建议补充 UTF-8 路径处理、终端异常码映射、VLC 句柄生命周期管理和更完整的日志。
+- 覆盖容器仅在锚点不可见或所属顶层窗口最小化时隐藏，并遵循第三方窗口的自然遮挡层级。

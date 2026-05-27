@@ -9,6 +9,9 @@ uses
 const
   DLL_NAME = 'HZCYKJTHardWare.dll';
 
+  WM_DLL_EVENT_JSON = WM_USER + 101;
+  WM_PREVIEW_DLL_RESULT = WM_USER + 102;
+
 type
   THZCYKJTHardWareEventCallback = procedure(EventJson: PAnsiChar); stdcall;
 
@@ -55,7 +58,11 @@ type
     FInitialized: Boolean;
     procedure Log(const S: string);
     procedure LogRet(const Name: string; Ret: Integer);
-    procedure OnEvent(EventJson: PAnsiChar);
+    procedure OnEventJson(const Json: string);
+    procedure RunPreviewDllCallAsync(const Name: string; TargetHwnd: HWND; IsCamera: Boolean);
+
+    procedure WMDllEventJson(var Msg: TMessage); message WM_DLL_EVENT_JSON;
+    procedure WMPreviewDllResult(var Msg: TMessage); message WM_PREVIEW_DLL_RESULT;
   end;
 
 var
@@ -86,9 +93,25 @@ function HZCYKJTHardWare_CaptureIrisImage(SaveDir: PAnsiChar): Integer; stdcall;
 function HZCYKJTHardWare_RequestOCR(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestNfcCard(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 
+type
+  PStringData = ^string;
 
+  PPreviewResult = ^TPreviewResult;
+  TPreviewResult = record
+    Name: string;
+    Ret: Integer;
+  end;
 
-
+  TPreviewCallThread = class(TThread)
+  private
+    FName: string;
+    FTargetHwnd: HWND;
+    FIsCamera: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AName: string; ATargetHwnd: HWND; AIsCamera: Boolean);
+  end;
 
 function SafeUtf8ToStr(P: PAnsiChar): string;
 var
@@ -96,13 +119,29 @@ var
   WideText: WideString;
   S: AnsiString;
 begin
-  if P = nil then begin Result := ''; Exit; end;
+  if P = nil then
+  begin
+    Result := '';
+    Exit;
+  end;
+
   S := AnsiString(P);
-  if S = '' then begin Result := ''; Exit; end;
+  if S = '' then
+  begin
+    Result := '';
+    Exit;
+  end;
+
   WideLen := MultiByteToWideChar(CP_UTF8, 0, PAnsiChar(S), Length(S), nil, 0);
-  if WideLen <= 0 then begin Result := string(S); Exit; end;
+  if WideLen <= 0 then
+  begin
+    Result := string(S);
+    Exit;
+  end;
+
   SetLength(WideText, WideLen);
   MultiByteToWideChar(CP_UTF8, 0, PAnsiChar(S), Length(S), PWideChar(WideText), WideLen);
+
   AnsiLen := WideCharToMultiByte(CP_ACP, 0, PWideChar(WideText), WideLen, nil, 0, nil, nil);
   SetLength(Result, AnsiLen);
   if AnsiLen > 0 then
@@ -116,54 +155,125 @@ var
 begin
   Result := '';
   K := Pos('"' + Key + '"', Json);
-  if K = 0 then Exit;
+  if K = 0 then
+    Exit;
+
   K := K + Length(Key) + 2;
-  while (K <= Length(Json)) and (Json[K] in [' ', ':', #9, #10, #13]) do Inc(K);
-  if (K > Length(Json)) or (Json[K] <> '"') then Exit;
+  while (K <= Length(Json)) and (Json[K] in [' ', ':', #9, #10, #13]) do
+    Inc(K);
+
+  if (K > Length(Json)) or (Json[K] <> '"') then
+    Exit;
+
   Inc(K);
   Escaped := False;
+
   for I := K to Length(Json) do
   begin
-    if Escaped then begin
+    if Escaped then
+    begin
       case Json[I] of
         'n': Result := Result + #10;
         'r': Result := Result + #13;
         't': Result := Result + #9;
-      else Result := Result + Json[I]; end;
+      else
+        Result := Result + Json[I];
+      end;
       Escaped := False;
     end
-    else if Json[I] = '' then Escaped := True
-    else if Json[I] = '"' then Exit
-    else Result := Result + Json[I];
+    else if Json[I] = '\' then
+      Escaped := True
+    else if Json[I] = '"' then
+      Exit
+    else
+      Result := Result + Json[I];
   end;
 end;
 
 function ExtractJsonInt(const Json, Key: string): Integer;
-var S: string; K: Integer;
+var
+  S: string;
+  K: Integer;
 begin
   S := ExtractJsonStr(Json, Key);
-  if S <> '' then begin Result := StrToIntDef(S, 0); Exit; end;
+  if S <> '' then
+  begin
+    Result := StrToIntDef(S, 0);
+    Exit;
+  end;
+
   Result := 0;
-  K := Pos('"' + Key + '"', Json); if K = 0 then Exit;
+  K := Pos('"' + Key + '"', Json);
+  if K = 0 then
+    Exit;
+
   K := K + Length(Key) + 2;
-  while (K <= Length(Json)) and (Json[K] in [' ', ':', #9, #10, #13]) do Inc(K);
+  while (K <= Length(Json)) and (Json[K] in [' ', ':', #9, #10, #13]) do
+    Inc(K);
+
   S := '';
-  while (K <= Length(Json)) and (Json[K] in ['0'..'9', '-']) do begin S := S + Json[K]; Inc(K); end;
+  while (K <= Length(Json)) and (Json[K] in ['0'..'9', '-']) do
+  begin
+    S := S + Json[K];
+    Inc(K);
+  end;
+
   Result := StrToIntDef(S, 0);
 end;
 
-procedure EventCallback(EventJson: PAnsiChar); stdcall;
-var Json: string;
+constructor TPreviewCallThread.Create(const AName: string; ATargetHwnd: HWND; AIsCamera: Boolean);
 begin
-  if (EventJson = nil) or (GSelf = nil) then Exit;
-  Json := SafeUtf8ToStr(EventJson);
-  GSelf.OnEvent(PAnsiChar(AnsiString(Json)));
+  inherited Create(True);
+  FreeOnTerminate := True;
+
+  FName := AName;
+  FTargetHwnd := ATargetHwnd;
+  FIsCamera := AIsCamera;
 end;
 
-procedure TFormMain.OnEvent(EventJson: PAnsiChar);
-var Json, ResType, Msg, Mrz, IcNum, SavePath: string; EvtType, Status: Integer;
+procedure TPreviewCallThread.Execute;
+var
+  Ret: Integer;
+  P: PPreviewResult;
 begin
-  Json := string(EventJson);
+  if FIsCamera then
+    Ret := HZCYKJTHardWare_StartCameraPreview(Pointer(FTargetHwnd))
+  else
+    Ret := HZCYKJTHardWare_StartFingerprintPreview(Pointer(FTargetHwnd));
+
+  if GSelf = nil then
+    Exit;
+
+  New(P);
+  P^.Name := FName;
+  P^.Ret := Ret;
+
+  if not PostMessage(GSelf.Handle, WM_PREVIEW_DLL_RESULT, 0, Longint(P)) then
+    Dispose(P);
+end;
+
+procedure EventCallback(EventJson: PAnsiChar); stdcall;
+var
+  Json: string;
+  P: PStringData;
+begin
+  if (EventJson = nil) or (GSelf = nil) then
+    Exit;
+
+  Json := SafeUtf8ToStr(EventJson);
+
+  New(P);
+  P^ := Json;
+
+  if not PostMessage(GSelf.Handle, WM_DLL_EVENT_JSON, 0, Longint(P)) then
+    Dispose(P);
+end;
+
+procedure TFormMain.OnEventJson(const Json: string);
+var
+  ResType, Msg, Mrz, IcNum, SavePath: string;
+  EvtType, Status: Integer;
+begin
   EvtType := ExtractJsonInt(Json, 'event_type');
   Status := ExtractJsonInt(Json, 'status');
   ResType := ExtractJsonStr(Json, 'resource_type');
@@ -171,11 +281,16 @@ begin
   Mrz := ExtractJsonStr(Json, 'mrz');
   IcNum := ExtractJsonStr(Json, 'ic_number');
   SavePath := ExtractJsonStr(Json, 'save_path');
+
   Log(Format('[Event] type=%d status=%d resource=%s', [EvtType, Status, ResType]));
-  if Mrz <> '' then Log('  MRZ: ' + Mrz);
-  if IcNum <> '' then Log('  IC: ' + IcNum);
-  if SavePath <> '' then Log('  Save: ' + SavePath);
-  if Msg <> '' then Log('  Msg: ' + Msg);
+  if Mrz <> '' then
+    Log('  MRZ: ' + Mrz);
+  if IcNum <> '' then
+    Log('  IC: ' + IcNum);
+  if SavePath <> '' then
+    Log('  Save: ' + SavePath);
+  if Msg <> '' then
+    Log('  Msg: ' + Msg);
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
@@ -189,7 +304,9 @@ end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
 begin
-  if FInitialized then HZCYKJTHardWare_ReleaseSdk;
+  GSelf := nil;
+  if FInitialized then
+    HZCYKJTHardWare_ReleaseSdk;
 end;
 
 procedure TFormMain.Log(const S: string);
@@ -202,13 +319,59 @@ begin
   Log(Format('%s = %d', [Name, Ret]));
 end;
 
+procedure TFormMain.WMDllEventJson(var Msg: TMessage);
+var
+  P: PStringData;
+begin
+  P := PStringData(Msg.LParam);
+  if P = nil then
+    Exit;
+
+  try
+    OnEventJson(P^);
+  finally
+    Dispose(P);
+  end;
+end;
+
+procedure TFormMain.WMPreviewDllResult(var Msg: TMessage);
+var
+  P: PPreviewResult;
+begin
+  P := PPreviewResult(Msg.LParam);
+  if P = nil then
+    Exit;
+
+  try
+    LogRet(P^.Name, P^.Ret);
+  finally
+    Dispose(P);
+  end;
+end;
+
+procedure TFormMain.RunPreviewDllCallAsync(const Name: string; TargetHwnd: HWND; IsCamera: Boolean);
+var
+  Th: TPreviewCallThread;
+begin
+  Log(Format('%s submit to worker thread: hwnd=%s', [Name, IntToStr(Integer(TargetHwnd))]));
+
+  Th := TPreviewCallThread.Create(Name, TargetHwnd, IsCamera);
+  Th.Resume;
+end;
 
 procedure TFormMain.BtnInitClick(Sender: TObject);
-var Ret: Integer;
+var
+  Ret: Integer;
 begin
-  if FInitialized then begin Log('Already initialized'); Exit; end;
+  if FInitialized then
+  begin
+    Log('Already initialized');
+    Exit;
+  end;
+
   Ret := HZCYKJTHardWare_InitSdk;
   LogRet('InitSdk', Ret);
+
   if Ret = 1 then
   begin
     FInitialized := True;
@@ -218,48 +381,76 @@ end;
 
 procedure TFormMain.BtnReleaseClick(Sender: TObject);
 begin
-  if not FInitialized then Exit;
+  if not FInitialized then
+    Exit;
+
   LogRet('ReleaseSdk', HZCYKJTHardWare_ReleaseSdk);
   FInitialized := False;
 end;
 
 procedure TFormMain.BtnSwitch1Click(Sender: TObject);
-begin LogRet('SwitchTerminal(1)', HZCYKJTHardWare_SwitchTerminal(1)); end;
+begin
+  LogRet('SwitchTerminal(1)', HZCYKJTHardWare_SwitchTerminal(1));
+end;
 
 procedure TFormMain.BtnSwitch2Click(Sender: TObject);
-begin LogRet('SwitchTerminal(2)', HZCYKJTHardWare_SwitchTerminal(2)); end;
+begin
+  LogRet('SwitchTerminal(2)', HZCYKJTHardWare_SwitchTerminal(2));
+end;
 
 procedure TFormMain.BtnStartProcessClick(Sender: TObject);
-begin LogRet('StartProcess', HZCYKJTHardWare_StartProcess(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('StartProcess', HZCYKJTHardWare_StartProcess(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 procedure TFormMain.BtnEndProcessClick(Sender: TObject);
-begin LogRet('EndProcess', HZCYKJTHardWare_EndProcess); end;
+begin
+  LogRet('EndProcess', HZCYKJTHardWare_EndProcess);
+end;
 
 procedure TFormMain.BtnCameraPreviewClick(Sender: TObject);
-begin LogRet('StartCameraPreview', HZCYKJTHardWare_StartCameraPreview(Pointer(PanelCamera.Handle))); end;
+begin
+  RunPreviewDllCallAsync('StartCameraPreview', PanelCamera.Handle, True);
+end;
 
 procedure TFormMain.BtnStopCamPreviewClick(Sender: TObject);
-begin LogRet('StopCameraPreview', HZCYKJTHardWare_StopCameraPreview); end;
+begin
+  LogRet('StopCameraPreview', HZCYKJTHardWare_StopCameraPreview);
+end;
 
 procedure TFormMain.BtnFpPreviewClick(Sender: TObject);
-begin LogRet('StartFingerprintPreview', HZCYKJTHardWare_StartFingerprintPreview(Pointer(PanelFingerprint.Handle))); end;
+begin
+  RunPreviewDllCallAsync('StartFingerprintPreview', PanelFingerprint.Handle, False);
+end;
 
 procedure TFormMain.BtnStopFpPreviewClick(Sender: TObject);
-begin LogRet('StopFingerprintPreview', HZCYKJTHardWare_StopFingerprintPreview); end;
+begin
+  LogRet('StopFingerprintPreview', HZCYKJTHardWare_StopFingerprintPreview);
+end;
 
 procedure TFormMain.BtnFaceCaptureClick(Sender: TObject);
-begin LogRet('CaptureCameraImage', HZCYKJTHardWare_CaptureCameraImage(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('CaptureCameraImage', HZCYKJTHardWare_CaptureCameraImage(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 procedure TFormMain.BtnFpCaptureClick(Sender: TObject);
-begin LogRet('CaptureFingerprintImage', HZCYKJTHardWare_CaptureFingerprintImage(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('CaptureFingerprintImage', HZCYKJTHardWare_CaptureFingerprintImage(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 procedure TFormMain.BtnOCRClick(Sender: TObject);
-begin LogRet('RequestOCR', HZCYKJTHardWare_RequestOCR(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('RequestOCR', HZCYKJTHardWare_RequestOCR(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 procedure TFormMain.BtnNFCClick(Sender: TObject);
-begin LogRet('RequestNfcCard', HZCYKJTHardWare_RequestNfcCard(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('RequestNfcCard', HZCYKJTHardWare_RequestNfcCard(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 procedure TFormMain.BtnIrisCaptureClick(Sender: TObject);
-begin LogRet('CaptureIrisImage', HZCYKJTHardWare_CaptureIrisImage(PAnsiChar(AnsiString(EdtSaveDir.Text)))); end;
+begin
+  LogRet('CaptureIrisImage', HZCYKJTHardWare_CaptureIrisImage(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+end;
 
 end.

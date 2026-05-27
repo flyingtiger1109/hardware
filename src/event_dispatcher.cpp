@@ -313,17 +313,17 @@ void EventDispatcher::ProcessCallbackLegacy(const CallbackData& cbData) {
 
     // 检查会话状态
     if (session->status == RequestStatus::Expired) {
-        LOG_DEBUG("EventDispatcher", "Request %s is expired (terminal switched), callback ignored",
-                 requestId.c_str());
+        LOG_DEBUG("EventDispatcher", "请求已过期，已忽略回调：request_id=%s，原因=终端切换",
+                  requestId.c_str());
         return;
     }
     if (session->status == RequestStatus::Cancelled) {
-        LOG_DEBUG("EventDispatcher", "Request %s is cancelled (process ended), callback ignored",
-                 requestId.c_str());
+        LOG_DEBUG("EventDispatcher", "请求已取消，已忽略回调：request_id=%s，原因=流程结束",
+                  requestId.c_str());
         return;
     }
     if (session->status == RequestStatus::Timeout) {
-        LOG_DEBUG("EventDispatcher", "Request %s is timed out, callback ignored", requestId.c_str());
+        LOG_DEBUG("EventDispatcher", "请求已超时，已忽略回调：request_id=%s", requestId.c_str());
         return;
     }
 

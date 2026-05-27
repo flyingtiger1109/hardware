@@ -103,7 +103,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
 
     std::string body = "{\"request_id\":\"" + requestId + "\"}";
     std::string url = TerminalManager::Instance().BuildUrl(previewPath);
-    LOG_DEBUG("PreviewMgr", "Requesting preview: %s", url.c_str());
+    LOG_DEBUG("PreviewMgr", "正在请求预览地址：url=%s", url.c_str());
 
     HttpClient client;
     std::string responseBody;
@@ -145,7 +145,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
     }
 
-    LOG_DEBUG("PreviewMgr", "Got RTSP URL: %s", rtspUrl.c_str());
+    LOG_DEBUG("PreviewMgr", "已收到RTSP预览地址：url=%s", rtspUrl.c_str());
 
     renderer = CreateLibVlcRtspRenderer();
     if (!renderer) {
