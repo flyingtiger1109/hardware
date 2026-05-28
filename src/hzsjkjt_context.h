@@ -62,6 +62,7 @@ public:
 
     // 流程状态
     bool process_active = false;
+    std::atomic<bool> http_busy{false};  // 防止 Delphi 代理请求重入
 
     // DLL 模块路径
     std::string dll_dir;

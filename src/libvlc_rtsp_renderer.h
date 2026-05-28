@@ -26,6 +26,8 @@ private:
     void UnloadLibVlc();
     bool TryLoadLibVlcFromDir(const std::string& dir);
     void SetLastErrorMessage(const std::string& message);
+    void CaptureExistingChildWindows(HWND parentHwnd);
+    bool IsExistingChildWindow(HWND hwnd) const;
     void ApplyWindowFit(HWND hwnd);
     void LayoutLoop();
 
@@ -54,12 +56,15 @@ private:
 
     std::atomic<bool> m_running{false};
     HWND m_renderHwnd = nullptr;
+    std::vector<HWND> m_existingChildWindows;
     CRITICAL_SECTION m_cs;
     std::string m_lastError;
     std::string m_vlcDir;
     std::unique_ptr<std::thread> m_layoutThread;
     std::atomic<bool> m_stopLayout{false};
     int m_layoutIntervalMs = 500;
+    int m_lastWidth = -1;
+    int m_lastHeight = -1;
 };
 
 } // namespace HZCYKJTHardWare

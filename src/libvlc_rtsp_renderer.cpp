@@ -166,6 +166,26 @@ void LibVlcRtspRenderer::SetLastErrorMessage(const std::string& message) {
     m_lastError = message;
 }
 
+void LibVlcRtspRenderer::CaptureExistingChildWindows(HWND parentHwnd) {
+    m_existingChildWindows.clear();
+    if (!IsWindow(parentHwnd)) {
+        return;
+    }
+
+    EnumChildWindows(parentHwnd, [](HWND child, LPARAM lParam) -> BOOL {
+        auto* children = reinterpret_cast<std::vector<HWND>*>(lParam);
+        children->push_back(child);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&m_existingChildWindows));
+    m_lastWidth = -1;
+    m_lastHeight = -1;
+}
+
+bool LibVlcRtspRenderer::IsExistingChildWindow(HWND hwnd) const {
+    return std::find(m_existingChildWindows.begin(), m_existingChildWindows.end(), hwnd) !=
+        m_existingChildWindows.end();
+}
+
 int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     CriticalSectionGuard guard(&m_cs);
 
@@ -267,6 +287,7 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     }
 
     // 设置渲染窗口
+    CaptureExistingChildWindows(hwnd);
     typedef void (*set_hwnd_t)(libvlc_media_player_t*, void*);
     ((set_hwnd_t)m_libvlc_media_player_set_hwnd)(m_mediaPlayer, hwnd);
 
@@ -282,6 +303,7 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
         m_media = nullptr;
         ((void(*)(libvlc_instance_t*))m_libvlc_release)(m_vlcInstance);
         m_vlcInstance = nullptr;
+        m_existingChildWindows.clear();
         return HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED;
     }
 
@@ -289,6 +311,8 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     m_renderHwnd = hwnd;
     m_lastError.clear();
 
+    m_lastWidth = -1;
+    m_lastHeight = -1;
     ApplyWindowFit(hwnd);
     m_stopLayout = false;
     m_layoutThread = std::make_unique<std::thread>(&LibVlcRtspRenderer::LayoutLoop, this);
@@ -305,10 +329,6 @@ int LibVlcRtspRenderer::Stop() {
     m_layoutThread.reset();
 
     CriticalSectionGuard guard(&m_cs);
-
-    if (!m_running) {
-        return HZCYKJTHardWare_RET_OK;
-    }
 
     // 停止播放
     if (m_mediaPlayer && m_libvlc_media_player_stop) {
@@ -339,6 +359,7 @@ int LibVlcRtspRenderer::Stop() {
 
     m_running = false;
     m_renderHwnd = nullptr;
+    m_existingChildWindows.clear();
     LOG_DEBUG("LibVlcRenderer", "RTSP 播放已停止");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -375,28 +396,48 @@ void LibVlcRtspRenderer::ApplyWindowFit(HWND hwnd) {
     int height = rc.bottom - rc.top;
     if (width <= 0 || height <= 0) return;
 
-    if (m_mediaPlayer && m_libvlc_video_set_scale) {
+    bool sizeChanged = (width != m_lastWidth || height != m_lastHeight);
+
+    if (sizeChanged && m_mediaPlayer && m_libvlc_video_set_scale) {
         typedef void (*set_scale_t)(libvlc_media_player_t*, float);
         ((set_scale_t)m_libvlc_video_set_scale)(m_mediaPlayer, 0.0f);
     }
 
-    if (m_mediaPlayer && m_libvlc_video_set_crop_geometry) {
+    if (sizeChanged && m_mediaPlayer && m_libvlc_video_set_crop_geometry) {
         char aspect[32];
         snprintf(aspect, sizeof(aspect), "%d:%d", width, height);
         typedef void (*set_crop_t)(libvlc_media_player_t*, const char*);
         ((set_crop_t)m_libvlc_video_set_crop_geometry)(m_mediaPlayer, aspect);
-    } else if (m_mediaPlayer && m_libvlc_video_set_aspect_ratio) {
+    } else if (sizeChanged && m_mediaPlayer && m_libvlc_video_set_aspect_ratio) {
         char aspect[32];
         snprintf(aspect, sizeof(aspect), "%d:%d", width, height);
         typedef void (*set_aspect_t)(libvlc_media_player_t*, const char*);
         ((set_aspect_t)m_libvlc_video_set_aspect_ratio)(m_mediaPlayer, aspect);
     }
 
+    struct LayoutContext {
+        LibVlcRtspRenderer* self;
+        int width;
+        int height;
+        bool sizeChanged;
+    } context{this, width, height, sizeChanged};
+
     EnumChildWindows(hwnd, [](HWND child, LPARAM lParam) -> BOOL {
-        RECT* prc = (RECT*)lParam;
-        MoveWindow(child, 0, 0, prc->right - prc->left, prc->bottom - prc->top, TRUE);
+        auto* context = reinterpret_cast<LayoutContext*>(lParam);
+        if (context->self->IsExistingChildWindow(child)) {
+            return TRUE;
+        }
+
+        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW;
+        if (!context->sizeChanged) {
+            flags |= SWP_NOMOVE | SWP_NOSIZE;
+        }
+        SetWindowPos(child, HWND_BOTTOM, 0, 0, context->width, context->height, flags);
         return TRUE;
-    }, (LPARAM)&rc);
+    }, reinterpret_cast<LPARAM>(&context));
+
+    m_lastWidth = width;
+    m_lastHeight = height;
 
     LOG_DEBUG("LibVlcRenderer", "预览窗口已按客户区铺满：hwnd=%p，width=%d，height=%d",
               hwnd, width, height);

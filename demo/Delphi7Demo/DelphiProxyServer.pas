@@ -483,7 +483,7 @@ procedure TDelphiHttpServerThread.StopServer;
 begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; end; end;
 
 procedure TDelphiHttpServerThread.Execute;
-var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..8191] of Char;
+var WSA: TWSAData; Addr: TSockAddrIn; Client, DrainClient: TSocket; Buf: array[0..8191] of Char; Mode: Integer; Resp503: string;
   RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen: Integer;
   Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string; P1, P2, CLPos, LineEnd: Integer;
 begin if WSAStartup($0202, WSA) <> 0 then Exit;
@@ -528,6 +528,26 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
           'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
         send(Client, Response[1], Length(Response), 0);
       finally closesocket(Client); end;
+      // Drain queued connections to prevent backlog overflow
+      try
+        Mode := 1;
+        ioctlsocket(FListenSocket, FIONBIO, Mode);
+        while True do begin
+          DrainClient := accept(FListenSocket, nil, nil);
+          if DrainClient = INVALID_SOCKET then Break;
+          Resp503 := 'HTTP/1.1 503 Service Busy'#13#10 +
+            'Content-Type: application/json; charset=utf-8'#13#10 +
+            'Content-Length: 25'#13#10 +
+            'Connection: close'#13#10#13#10 +
+            '{"error":true,"code":"busy"}';
+          send(DrainClient, Resp503[1], Length(Resp503), 0);
+          closesocket(DrainClient);
+        end;
+        Mode := 0;
+        ioctlsocket(FListenSocket, FIONBIO, Mode);
+      except
+        // Ignore drain errors
+      end;
     end;
   finally if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; WSACleanup; end;
 end;
@@ -593,7 +613,9 @@ var
   SessionType: TPreviewSessionType;
   ResType: TPreviewResourceType;
   ActivePreviews: TPreviewResourceSet;
+  TotalTick, ItemTick: DWORD;
 begin
+  TotalTick := GetTickCount;
   DoLog('[信息] [终端切换] 切换前正在停止活动预览。');
   for SessionType := pstLocal to pstExternal do
   begin
@@ -607,17 +629,24 @@ begin
     end;
     for ResType := High(TPreviewResourceType) downto Low(TPreviewResourceType) do
       if ResType in ActivePreviews then
+      begin
+        ItemTick := GetTickCount;
         FPreviewManager.StopPreview(ResType, SessionType);
+        DoLog(Format('[PERF] AutoStop preview resource=%d session=%d cost_ms=%d',
+          [Ord(ResType), Ord(SessionType), Integer(GetTickCount - ItemTick)]));
+      end;
   end;
+  DoLog(Format('[PERF] AutoStop total cost_ms=%d', [Integer(GetTickCount - TotalTick)]));
 end;
-
 procedure TDelphiProxyServer.AutoStartPreviews;
 var
   SessionType: TPreviewSessionType;
   ResType: TPreviewResourceType;
   ActivePreviews: TPreviewResourceSet;
   TargetHwnd: HWND;
+  TotalTick, ItemTick: DWORD;
 begin
+  TotalTick := GetTickCount;
   DoLog(Format('[信息] [终端切换] 正在终端%d上恢复活动预览。', [FTerminalManager.CurrentIndex]));
   for SessionType := pstLocal to pstExternal do
   begin
@@ -639,36 +668,51 @@ begin
             prtFingerprint: TargetHwnd := FThirdPartyFingerprintHwnd;
             prtIris: TargetHwnd := FThirdPartyIrisHwnd;
           end;
+        ItemTick := GetTickCount;
         FPreviewManager.StartPreview(ResType, SessionType, TargetHwnd,
           FTerminalManager.CurrentBaseUrl);
+        DoLog(Format('[PERF] AutoStart preview resource=%d session=%d cost_ms=%d',
+          [Ord(ResType), Ord(SessionType), Integer(GetTickCount - ItemTick)]));
       end;
   end;
+  DoLog(Format('[PERF] AutoStart total cost_ms=%d', [Integer(GetTickCount - TotalTick)]));
 end;
-
 // ============================================================
 // DIRECT METHODS
 // ============================================================
 function TDelphiProxyServer.SwitchTerminalDirect(Index: Integer): Boolean;
+var
+  TotalTick, PhaseTick: DWORD;
 begin
   Result := False;
+  TotalTick := GetTickCount;
   if (Index < 1) or (Index > 2) then Exit;
   if FTerminalManager.IsSameTerminal(Index) then begin
     DoLog('[提示] [终端切换] 当前已是终端' + IntToStr(Index) + '，将刷新摄像头和指纹预览。');
+    PhaseTick := GetTickCount;
     AutoStopPreviews;
+    DoLog(Format('[PERF] Switch same-terminal stop cost_ms=%d', [Integer(GetTickCount - PhaseTick)]));
+    PhaseTick := GetTickCount;
     AutoStartPreviews;
+    DoLog(Format('[PERF] Switch same-terminal start cost_ms=%d', [Integer(GetTickCount - PhaseTick)]));
+    DoLog(Format('[PERF] Switch same-terminal total cost_ms=%d', [Integer(GetTickCount - TotalTick)]));
     Result := True;
     Exit;
   end;
   DoLog('[信息] [终端切换] 正在切换：终端' + IntToStr(FTerminalManager.CurrentIndex) + ' -> 终端' + IntToStr(Index));
-  // Stop all running previews
+  PhaseTick := GetTickCount;
   AutoStopPreviews;
-  // Switch
+  DoLog(Format('[PERF] Switch stop cost_ms=%d', [Integer(GetTickCount - PhaseTick)]));
+  PhaseTick := GetTickCount;
   FTerminalManager.SwitchTo(Index);
+  DoLog(Format('[PERF] Switch manager cost_ms=%d', [Integer(GetTickCount - PhaseTick)]));
   DoLog('[信息] [终端切换] 当前终端已切换为：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  PhaseTick := GetTickCount;
   AutoStartPreviews;
+  DoLog(Format('[PERF] Switch start cost_ms=%d', [Integer(GetTickCount - PhaseTick)]));
+  DoLog(Format('[PERF] Switch total cost_ms=%d', [Integer(GetTickCount - TotalTick)]));
   Result := True;
 end;
-
 function TDelphiProxyServer.StartProcessDirect(const SaveDir: string): Boolean;
 var BaseUrl, BodyUtf8, ResponseUtf8, ResolvedSaveDir: string;
 begin

@@ -8,15 +8,6 @@ type
   TVlcLogCallback = procedure(const Msg: string) of object;
   TVlcPlayer = class;
 
-  TLayoutThread = class(TThread)
-  private
-    FPlayer: TVlcPlayer;
-  protected
-    procedure Execute; override;
-  public
-    constructor Create(APlayer: TVlcPlayer);
-  end;
-
   TVlcPlayer = class
   private
     FhLibVlcCore: HMODULE;
@@ -27,12 +18,6 @@ type
     FRunning: Boolean;
     FHostHwnd: HWND;
     FVideoHwnd: HWND;
-    FAnchorHwnd: HWND;
-    FOverlayHwnd: HWND;
-    FOverlayTimer: TTimer;
-    FUsingOverlay: Boolean;
-    FOverlayVisible: Boolean;
-    FLastOverlayRect: TRect;
     FSourceWidth: Integer;
     FSourceHeight: Integer;
     FSwapLayoutDimensions: Boolean;
@@ -40,7 +25,6 @@ type
     FLastHostHeight: Integer;
     FLastSourceWidth: Integer;
     FLastSourceHeight: Integer;
-    FLayoutThread: TLayoutThread;
     FVlcDir: string;
     FLastError: string;
     FLogProc: TVlcLogCallback;
@@ -60,10 +44,6 @@ type
     function LoadLibVlc: Boolean;
     procedure UnloadLibVlc;
     function TryLoadFromDir(const Dir: string): Boolean;
-    function GetAnchorScreenRect(var R: TRect): Boolean;
-    function CreateOverlayHost: Boolean;
-    procedure DestroyOverlayHost;
-    procedure UpdateOverlayPosition(Sender: TObject);
     function CreateVideoWindow: Boolean;
     procedure ApplyCoverLayout;
   public
@@ -78,26 +58,6 @@ type
   end;
 
 implementation
-
-const
-  WS_EX_NOACTIVATE_COMPAT = $08000000;
-
-constructor TLayoutThread.Create(APlayer: TVlcPlayer);
-begin
-  inherited Create(False);
-  FreeOnTerminate := False;
-  FPlayer := APlayer;
-end;
-
-procedure TLayoutThread.Execute;
-begin
-  while not Terminated do
-  begin
-    Sleep(250);
-    if not Terminated then
-      FPlayer.ApplyCoverLayout;
-  end;
-end;
 
 procedure TVlcPlayer.ApplyCoverLayout;
 var
@@ -114,10 +74,6 @@ begin
   HostHeight := R.Bottom - R.Top;
   if (HostWidth <= 0) or (HostHeight <= 0) then Exit;
 
-  { Diagnostic version:
-    1. Do not poll libvlc_video_get_size in a background layout thread.
-    2. Use the configured source size first to avoid waiting for VLC video size.
-    3. MoveWindow uses repaint=False to avoid synchronous cross-process repaint. }
   SourceWidth := FSourceWidth;
   SourceHeight := FSourceHeight;
   if (SourceWidth <= 0) or (SourceHeight <= 0) then
@@ -138,7 +94,6 @@ begin
   end;
   if (DisplayWidth <= 0) or (DisplayHeight <= 0) then Exit;
 
-  AspectRatio := 'unavailable';
   if @Flibvlc_video_set_scale <> nil then
     Flibvlc_video_set_scale(FMediaPlayer, 0.0);
   if @Flibvlc_video_set_aspect_ratio <> nil then
@@ -180,12 +135,6 @@ begin
   FRunning := False;
   FHostHwnd := 0;
   FVideoHwnd := 0;
-  FAnchorHwnd := 0;
-  FOverlayHwnd := 0;
-  FOverlayTimer := nil;
-  FUsingOverlay := False;
-  FOverlayVisible := False;
-  SetRectEmpty(FLastOverlayRect);
   FSourceWidth := 0;
   FSourceHeight := 0;
   FSwapLayoutDimensions := False;
@@ -193,7 +142,6 @@ begin
   FLastHostHeight := -1;
   FLastSourceWidth := -1;
   FLastSourceHeight := -1;
-  FLayoutThread := nil;
   FVlcDir := '';
   FLastError := '';
   FLogProc := nil;
@@ -299,7 +247,7 @@ begin
       Exit;
     end;
   end;
-  FLastError := 'Œ¥’“µΩø…”√µƒ32ŒªlibVLC£¨«Î‘⁄≥Ã–Úƒø¬ºµƒvlc◊”ƒø¬º≤ø libvlc.dll°¢libvlccore.dll∫Õplugins°£';
+  FLastError := 'Êú™ÊâæÂà∞ÂèØÁî®ÁöÑ32‰ΩçlibVLCÔºàÈúÄÂú®Á®ãÂ∫èÁõÆÂΩïÊàñvlcÂ≠êÁõÆÂΩïÊîæÁΩÆlibvlc.dll„ÄÅlibvlccore.dll„ÄÅpluginsÔºâ';
   Result := False;
 end;
 
@@ -330,126 +278,6 @@ begin
   Flibvlc_video_set_scale := nil;
 end;
 
-function TVlcPlayer.GetAnchorScreenRect(var R: TRect): Boolean;
-var
-  Origin: TPoint;
-begin
-  Result := False;
-  if (FAnchorHwnd = 0) or not IsWindow(FAnchorHwnd) then Exit;
-  if not GetClientRect(FAnchorHwnd, R) then Exit;
-  Origin.X := R.Left;
-  Origin.Y := R.Top;
-  if not ClientToScreen(FAnchorHwnd, Origin) then Exit;
-  OffsetRect(R, Origin.X - R.Left, Origin.Y - R.Top);
-  Result := (R.Right > R.Left) and (R.Bottom > R.Top);
-end;
-
-function TVlcPlayer.CreateOverlayHost: Boolean;
-var
-  R: TRect;
-begin
-  Result := False;
-  if not GetAnchorScreenRect(R) then Exit;
-  FOverlayHwnd := CreateWindowEx(WS_EX_TOOLWINDOW or WS_EX_NOACTIVATE_COMPAT,
-    'STATIC', '', WS_POPUP or WS_CLIPSIBLINGS or WS_CLIPCHILDREN,
-    R.Left, R.Top, R.Right - R.Left, R.Bottom - R.Top, 0, 0, HInstance, nil);
-  if FOverlayHwnd = 0 then Exit;
-  FHostHwnd := FOverlayHwnd;
-  FUsingOverlay := True;
-  FOverlayVisible := False;
-  SetRectEmpty(FLastOverlayRect);
-  Result := True;
-end;
-
-procedure TVlcPlayer.DestroyOverlayHost;
-begin
-  if FOverlayTimer <> nil then
-  begin
-    FOverlayTimer.Enabled := False;
-    FOverlayTimer.Free;
-    FOverlayTimer := nil;
-  end;
-  if FOverlayHwnd <> 0 then
-  begin
-    DestroyWindow(FOverlayHwnd);
-    FOverlayHwnd := 0;
-  end;
-  FUsingOverlay := False;
-  FOverlayVisible := False;
-  SetRectEmpty(FLastOverlayRect);
-  FAnchorHwnd := 0;
-end;
-
-procedure TVlcPlayer.UpdateOverlayPosition(Sender: TObject);
-var
-  R: TRect;
-  TargetRoot, InsertAfter: HWND;
-  PositionFlags: UINT;
-  OverlayAboveTarget, RectChanged, WasVisible: Boolean;
-begin
-  if not FUsingOverlay or (FOverlayHwnd = 0) then Exit;
-  if (FAnchorHwnd = 0) or not IsWindow(FAnchorHwnd) or
-     not IsWindowVisible(FAnchorHwnd) then
-  begin
-    if FOverlayVisible then
-    begin
-      ShowWindow(FOverlayHwnd, SW_HIDE);
-      FOverlayVisible := False;
-    end;
-    Exit;
-  end;
-  TargetRoot := GetAncestor(FAnchorHwnd, GA_ROOT);
-  if (TargetRoot = 0) or IsIconic(TargetRoot) then
-  begin
-    if FOverlayVisible then
-    begin
-      ShowWindow(FOverlayHwnd, SW_HIDE);
-      FOverlayVisible := False;
-    end;
-    Exit;
-  end;
-  if not GetAnchorScreenRect(R) then
-  begin
-    if FOverlayVisible then
-    begin
-      ShowWindow(FOverlayHwnd, SW_HIDE);
-      FOverlayVisible := False;
-    end;
-    Exit;
-  end;
-
-  { Keep the local overlay immediately above the external application,
-    while allowing unrelated applications above it to occlude the preview. }
-  WasVisible := FOverlayVisible;
-  RectChanged := not EqualRect(R, FLastOverlayRect);
-  OverlayAboveTarget := GetWindow(TargetRoot, GW_HWNDPREV) = FOverlayHwnd;
-  if OverlayAboveTarget and not RectChanged and WasVisible then Exit;
-
-  PositionFlags := SWP_NOACTIVATE;
-  if not WasVisible then
-    PositionFlags := PositionFlags or SWP_SHOWWINDOW;
-  if OverlayAboveTarget then
-  begin
-    if RectChanged then
-      SetWindowPos(FOverlayHwnd, 0, R.Left, R.Top,
-        R.Right - R.Left, R.Bottom - R.Top, PositionFlags or SWP_NOZORDER)
-    else
-      ShowWindow(FOverlayHwnd, SW_SHOWNOACTIVATE);
-  end
-  else
-  begin
-  InsertAfter := GetWindow(TargetRoot, GW_HWNDPREV);
-  if InsertAfter = 0 then
-    InsertAfter := HWND_TOP;
-  SetWindowPos(FOverlayHwnd, InsertAfter, R.Left, R.Top,
-      R.Right - R.Left, R.Bottom - R.Top, PositionFlags);
-  end;
-  FOverlayVisible := True;
-  FLastOverlayRect := R;
-  if FRunning and (RectChanged or not WasVisible) then
-    ApplyCoverLayout;
-end;
-
 function TVlcPlayer.CreateVideoWindow: Boolean;
 begin
   FVideoHwnd := CreateWindowEx(0, 'STATIC', '', WS_CHILD or WS_VISIBLE or
@@ -463,17 +291,12 @@ var
   PluginsPath, PluginArg, NetworkOption, LiveOption: string;
   Argv: array[0..3] of PChar;
   ArgCount: Integer;
-  HostProcessId, CurrentProcessId: DWORD;
 begin
   Result := False;
   if FRunning then Stop;
-  if Url = '' then begin FLastError := '‘§¿¿µÿ÷∑Œ™ø’°£'; Exit; end;
-  if not IsWindow(Hwnd) then begin FLastError := '‘§¿¿ƒø±Í¥∞ø⁄æ‰±˙Œﬁ–ß°£'; Exit; end;
+  if Url = '' then begin FLastError := 'È¢ÑËßàÂú∞ÂùÄ‰∏∫Á©∫„ÄÇ'; Exit; end;
+  if not IsWindow(Hwnd) then begin FLastError := 'È¢ÑËßàÁõÆÊ†áÁ™óÂè£Âè•ÊüÑÊó†Êïà„ÄÇ'; Exit; end;
   if not LoadLibVlc then Exit;
-
-  HostProcessId := 0;
-  GetWindowThreadProcessId(Hwnd, HostProcessId);
-  CurrentProcessId := GetCurrentProcessId;
 
   if NetworkCachingMs < 0 then NetworkCachingMs := 0;
   if LiveCachingMs < 0 then LiveCachingMs := 0;
@@ -488,11 +311,11 @@ begin
     Argv[ArgCount] := PChar(PluginArg); Inc(ArgCount);
   end;
   FVlcInstance := Flibvlc_new(ArgCount, @Argv[0]);
-  if FVlcInstance = nil then begin FLastError := '¥¥Ω® VLC  µ¿˝ ß∞‹°£'; Exit; end;
+  if FVlcInstance = nil then begin FLastError := 'ÂàõÂª∫ VLC ÂÆû‰æãÂ§±Ë¥•„ÄÇ'; Exit; end;
   FMedia := Flibvlc_media_new_location(FVlcInstance, PChar(Url));
   if FMedia = nil then
   begin
-    FLastError := '¥¥Ω®‘§¿¿√ΩÃÂ ß∞‹°£';
+    FLastError := 'ÂàõÂª∫È¢ÑËßàÂ™í‰ΩìÂ§±Ë¥•„ÄÇ';
     Flibvlc_release(FVlcInstance);
     FVlcInstance := nil;
     Exit;
@@ -502,37 +325,30 @@ begin
   LiveOption := ':live-caching=' + IntToStr(LiveCachingMs);
   Flibvlc_media_add_option(FMedia, PChar(NetworkOption));
   Flibvlc_media_add_option(FMedia, PChar(LiveOption));
+
+  Flibvlc_media_add_option(FMedia, ':drop-late-frames');
+  Flibvlc_media_add_option(FMedia, ':skip-frames');
+  Flibvlc_media_add_option(FMedia, ':clock-jitter=0');
+  Flibvlc_media_add_option(FMedia, ':clock-synchro=0');
+  Flibvlc_media_add_option(FMedia, ':no-audio');
+
   if Assigned(FLogProc) then
-    FLogProc('[–≈œ¢] [‘§¿¿‰÷»æ] VLCª∫¥Ê≤Œ ˝“—”¶”√£∫network-caching=' + IntToStr(NetworkCachingMs) +
-      '£¨live-caching=' + IntToStr(LiveCachingMs));
+    FLogProc('[‰ø°ÊÅØ] [È¢ÑËßàÊ∏≤Êüì] VLC‰ΩéÂª∂ËøüÂèÇÊï∞Â∑≤Â∫îÁî®Ôºönetwork-caching=' + IntToStr(NetworkCachingMs) +
+      'Ôºålive-caching=' + IntToStr(LiveCachingMs));
 
   FMediaPlayer := Flibvlc_media_player_new_from_media(FMedia);
   if FMediaPlayer = nil then
   begin
-    FLastError := '¥¥Ω®‘§¿¿≤•∑≈∆˜ ß∞‹°£';
+    FLastError := 'ÂàõÂª∫È¢ÑËßàÊí≠ÊîæÂô®Â§±Ë¥•„ÄÇ';
     Flibvlc_media_release(FMedia);
     FMedia := nil;
     Flibvlc_release(FVlcInstance);
     FVlcInstance := nil;
     Exit;
   end;
-  FAnchorHwnd := Hwnd;
-  if HostProcessId <> CurrentProcessId then
-  begin
-    if not CreateOverlayHost then
-    begin
-      FLastError := '¥¥Ω®øÁΩ¯≥Ã‘§¿¿∏≤∏«¥∞ø⁄ ß∞‹°£';
-      Flibvlc_media_player_release(FMediaPlayer); FMediaPlayer := nil;
-      Flibvlc_media_release(FMedia); FMedia := nil;
-      Flibvlc_release(FVlcInstance); FVlcInstance := nil;
-      Exit;
-    end;
-    if Assigned(FLogProc) then
-      FLogProc('[–≈œ¢] [‘§¿¿‰÷»æ] µ⁄»˝∑Ωƒø±Í π”√±æΩ¯≥Ã∏≤∏«»›∆˜£∫target_hwnd=' +
-        IntToStr(Integer(Hwnd)) + '£¨overlay_hwnd=' + IntToStr(Integer(FOverlayHwnd)));
-  end
-  else
-    FHostHwnd := Hwnd;
+
+  FHostHwnd := Hwnd;
+
   FSourceWidth := SourceWidth;
   FSourceHeight := SourceHeight;
   FSwapLayoutDimensions := SwapLayoutDimensions;
@@ -542,52 +358,31 @@ begin
   FLastSourceHeight := -1;
   if not CreateVideoWindow then
   begin
-    FLastError := '¥¥Ω®‘§¿¿ ”∆µ◊”¥∞ø⁄ ß∞‹°£';
+    FLastError := 'ÂàõÂª∫È¢ÑËßàËßÜÈ¢ëÂ≠êÁ™óÂè£Â§±Ë¥•„ÄÇ';
     Flibvlc_media_player_release(FMediaPlayer); FMediaPlayer := nil;
     Flibvlc_media_release(FMedia); FMedia := nil;
     Flibvlc_release(FVlcInstance); FVlcInstance := nil;
     FHostHwnd := 0;
-    DestroyOverlayHost;
     Exit;
   end;
   Flibvlc_media_player_set_hwnd(FMediaPlayer, Pointer(FVideoHwnd));
   if Flibvlc_media_player_play(FMediaPlayer) <> 0 then
   begin
-    FLastError := '∆Ù∂Ø‘§¿¿≤•∑≈ ß∞‹°£';
+    FLastError := 'ÂêØÂä®È¢ÑËßàÊí≠ÊîæÂ§±Ë¥•„ÄÇ';
     Flibvlc_media_player_release(FMediaPlayer); FMediaPlayer := nil;
     Flibvlc_media_release(FMedia); FMedia := nil;
     Flibvlc_release(FVlcInstance); FVlcInstance := nil;
     DestroyWindow(FVideoHwnd); FVideoHwnd := 0; FHostHwnd := 0;
-    DestroyOverlayHost;
     Exit;
   end;
   FRunning := True;
   ApplyCoverLayout;
-  if FUsingOverlay then
-  begin
-    FOverlayTimer := TTimer.Create(nil);
-    FOverlayTimer.Interval := 200;
-    FOverlayTimer.OnTimer := UpdateOverlayPosition;
-    FOverlayTimer.Enabled := True;
-    UpdateOverlayPosition(nil);
-  end;
-  { ∏≤∏«¥∞ø⁄≤ª π”√∫ÛÃ®≤ºæ÷œﬂ≥Ã£¨±‹√‚¥∞ø⁄≤Ÿ◊˜”Î≤•∑≈ Õ∑≈≤˙…˙æ∫’˘°£ }
-  FLayoutThread := nil;
   FLastError := '';
   Result := True;
 end;
 
 procedure TVlcPlayer.Stop;
 begin
-  if FOverlayTimer <> nil then
-    FOverlayTimer.Enabled := False;
-  if FLayoutThread <> nil then
-  begin
-    FLayoutThread.Terminate;
-    FLayoutThread.WaitFor;
-    FLayoutThread.Free;
-    FLayoutThread := nil;
-  end;
   if FMediaPlayer <> nil then
   begin
     if @Flibvlc_media_player_stop <> nil then
@@ -610,9 +405,7 @@ begin
     DestroyWindow(FVideoHwnd);
     FVideoHwnd := 0;
   end;
-  DestroyOverlayHost;
   FHostHwnd := 0;
-  FAnchorHwnd := 0;
   FRunning := False;
 end;
 
