@@ -247,7 +247,7 @@ begin
       Exit;
     end;
   end;
-  FLastError := 'æœªæ‰¾åˆ°å¯ç”¨çš„32ä½libVLCï¼ˆéœ€åœ¨ç¨‹åºç›®å½•æˆ–vlcå­ç›®å½•æ”¾ç½®libvlc.dllã€libvlccore.dllã€pluginsï¼‰';
+  FLastError := 'Î´ÕÒµ½¿ÉÓÃµÄ32Î»libVLC£¨ĞèÔÚ³ÌĞòÄ¿Â¼»òvlc×ÓÄ¿Â¼·ÅÖÃlibvlc.dll¡¢libvlccore.dll¡¢plugins£©';
   Result := False;
 end;
 
@@ -294,8 +294,8 @@ var
 begin
   Result := False;
   if FRunning then Stop;
-  if Url = '' then begin FLastError := 'é¢„è§ˆåœ°å€ä¸ºç©ºã€‚'; Exit; end;
-  if not IsWindow(Hwnd) then begin FLastError := 'é¢„è§ˆç›®æ ‡çª—å£å¥æŸ„æ— æ•ˆã€‚'; Exit; end;
+  if Url = '' then begin FLastError := 'Ô¤ÀÀµØÖ·Îª¿Õ¡£'; Exit; end;
+  if not IsWindow(Hwnd) then begin FLastError := 'Ô¤ÀÀÄ¿±ê´°¿Ú¾ä±úÎŞĞ§¡£'; Exit; end;
   if not LoadLibVlc then Exit;
 
   if NetworkCachingMs < 0 then NetworkCachingMs := 0;
@@ -311,11 +311,11 @@ begin
     Argv[ArgCount] := PChar(PluginArg); Inc(ArgCount);
   end;
   FVlcInstance := Flibvlc_new(ArgCount, @Argv[0]);
-  if FVlcInstance = nil then begin FLastError := 'åˆ›å»º VLC å®ä¾‹å¤±è´¥ã€‚'; Exit; end;
+  if FVlcInstance = nil then begin FLastError := '´´½¨ VLC ÊµÀıÊ§°Ü¡£'; Exit; end;
   FMedia := Flibvlc_media_new_location(FVlcInstance, PChar(Url));
   if FMedia = nil then
   begin
-    FLastError := 'åˆ›å»ºé¢„è§ˆåª’ä½“å¤±è´¥ã€‚';
+    FLastError := '´´½¨Ô¤ÀÀÃ½ÌåÊ§°Ü¡£';
     Flibvlc_release(FVlcInstance);
     FVlcInstance := nil;
     Exit;
@@ -333,13 +333,13 @@ begin
   Flibvlc_media_add_option(FMedia, ':no-audio');
 
   if Assigned(FLogProc) then
-    FLogProc('[ä¿¡æ¯] [é¢„è§ˆæ¸²æŸ“] VLCä½å»¶è¿Ÿå‚æ•°å·²åº”ç”¨ï¼šnetwork-caching=' + IntToStr(NetworkCachingMs) +
-      'ï¼Œlive-caching=' + IntToStr(LiveCachingMs));
+    FLogProc('[ĞÅÏ¢] [Ô¤ÀÀäÖÈ¾] VLCµÍÑÓ³Ù²ÎÊıÒÑÓ¦ÓÃ£ºnetwork-caching=' + IntToStr(NetworkCachingMs) +
+      '£¬live-caching=' + IntToStr(LiveCachingMs));
 
   FMediaPlayer := Flibvlc_media_player_new_from_media(FMedia);
   if FMediaPlayer = nil then
   begin
-    FLastError := 'åˆ›å»ºé¢„è§ˆæ’­æ”¾å™¨å¤±è´¥ã€‚';
+    FLastError := '´´½¨Ô¤ÀÀ²¥·ÅÆ÷Ê§°Ü¡£';
     Flibvlc_media_release(FMedia);
     FMedia := nil;
     Flibvlc_release(FVlcInstance);
@@ -358,7 +358,7 @@ begin
   FLastSourceHeight := -1;
   if not CreateVideoWindow then
   begin
-    FLastError := 'åˆ›å»ºé¢„è§ˆè§†é¢‘å­çª—å£å¤±è´¥ã€‚';
+    FLastError := '´´½¨Ô¤ÀÀÊÓÆµ×Ó´°¿ÚÊ§°Ü¡£';
     Flibvlc_media_player_release(FMediaPlayer); FMediaPlayer := nil;
     Flibvlc_media_release(FMedia); FMedia := nil;
     Flibvlc_release(FVlcInstance); FVlcInstance := nil;
@@ -368,7 +368,7 @@ begin
   Flibvlc_media_player_set_hwnd(FMediaPlayer, Pointer(FVideoHwnd));
   if Flibvlc_media_player_play(FMediaPlayer) <> 0 then
   begin
-    FLastError := 'å¯åŠ¨é¢„è§ˆæ’­æ”¾å¤±è´¥ã€‚';
+    FLastError := 'Æô¶¯Ô¤ÀÀ²¥·ÅÊ§°Ü¡£';
     Flibvlc_media_player_release(FMediaPlayer); FMediaPlayer := nil;
     Flibvlc_media_release(FMedia); FMedia := nil;
     Flibvlc_release(FVlcInstance); FVlcInstance := nil;
