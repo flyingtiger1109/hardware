@@ -4,7 +4,7 @@ interface
 
 uses
   Windows, SysUtils, Classes, ExtCtrls, Controls,
-  TerminalClient, VlcPlayer;
+  TerminalClient, VlcPlayer, SyncObjs;
 
 type
   TPreviewResourceType = (prtCamera, prtFingerprint, prtIris);
@@ -31,6 +31,7 @@ type
     FExternalIrisTargetHwnd: HWND;
     FNetworkCachingMs: Integer;
     FLiveCachingMs: Integer;
+    FPlayLock: TCriticalSection;
     FLogProc: TPreviewLogCallback;
     FCommandVlc: TVlcPlayer;
     FCommandUrl: string;
@@ -126,6 +127,7 @@ begin
   FCommandSourceHeight := 0;
   FCommandSwapLayoutDimensions := False;
   FCommandPlayResult := False;
+  FPlayLock := TCriticalSection.Create;
 end;
 
 destructor TPreviewManager.Destroy;
@@ -137,6 +139,7 @@ begin
   StopPreview(prtFingerprint, pstExternal);
   StopPreview(prtIris, pstExternal);
   inherited Destroy;
+  FPlayLock.Free;
 end;
 
 procedure TPreviewManager.SetLogProc(ALogProc: TPreviewLogCallback);
@@ -432,6 +435,7 @@ begin
   // 视频子窗口采用 cover 布局，由父窗口在中心位置裁剪溢出内容。
   Vlc := TVlcPlayer.Create;
   Vlc.SetLogProc(FLogProc);
+  FPlayLock.Enter;
   FCommandVlc := Vlc;
   FCommandUrl := PreviewUrl;
   FCommandHwnd := RenderHwnd;
@@ -445,10 +449,12 @@ begin
     RunOnMainThread(ExecuteFreeCommand);
     FCommandVlc := nil;
     FCommandUrl := '';
+    FPlayLock.Leave;
     Exit;
   end;
   FCommandVlc := nil;
   FCommandUrl := '';
+  FPlayLock.Leave;
 
   SetVlcPlayer(ResType, SessionType, Vlc);
   SetTargetHwnd(ResType, SessionType, TargetHwnd);
