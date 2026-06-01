@@ -103,16 +103,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             if (_libVlcHandle != IntPtr.Zero) return true;
 
+            // Priority 1: local vlc directory in output (same as Delphi — full plugins)
+            var localVlcDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vlc");
+            if (System.IO.Directory.Exists(localVlcDir))
+            {
+                if (TryLoadFromDir(localVlcDir)) return true;
+            }
+
+            // Priority 2: try extracted embedded resources (backward compat)
             var extractedDir = VlcResourceExtractor.EnsureExtracted();
             if (!string.IsNullOrEmpty(extractedDir) && System.IO.Directory.Exists(extractedDir))
             {
                 if (TryLoadFromDir(extractedDir)) return true;
             }
 
+            // Priority 3: external VLC installations
             var searchDirs = new[]
             {
                 vlcDir,
-                System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vlc"),
                 @"C:\Program Files\VideoLAN\VLC",
                 @"C:\Program Files (x86)\VideoLAN\VLC",
                 @"D:\VLC",
@@ -185,14 +193,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             try
             {
-                // 1) Create VLC instance (same as Delphi, with configurable rtsp_transport)
+                // 1) Create VLC instance (exact same args as Delphi)
                 var args = new System.Collections.Generic.List<string>
                 {
                     "--no-video-title-show", "--no-xlib", "--quiet"
                 };
-                var rtspTransport = AppConfig.Instance.RtspTransport;
-                if (!string.IsNullOrEmpty(rtspTransport))
-                    args.Add("--rtsp-" + rtspTransport);
 
                 var pluginsPath = System.IO.Path.Combine(_vlcDir ?? "", "plugins");
                 if (System.IO.Directory.Exists(pluginsPath))

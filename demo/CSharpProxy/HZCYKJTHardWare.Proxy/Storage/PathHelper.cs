@@ -16,6 +16,22 @@ namespace HZCYKJTHardWare.Proxy.Storage
             return Path.GetFullPath(saveDir);
         }
 
+        /// <summary>
+        /// Resolve a file path (make absolute, create parent dir). Used when saveDir is a full file name.
+        /// </summary>
+        public static string ResolveExactSaveFile(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return filePath;
+            var resolved = filePath;
+            if (!Path.IsPathRooted(resolved))
+                resolved = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, resolved);
+            resolved = Path.GetFullPath(resolved);
+            var parentDir = Path.GetDirectoryName(resolved);
+            if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                Directory.CreateDirectory(parentDir);
+            return resolved;
+        }
+
         public static string ResolveExactSaveFile(string saveDir, string requestId, string prefix, string extension)
         {
             var dir = EnsureRequestFolder(saveDir, requestId);

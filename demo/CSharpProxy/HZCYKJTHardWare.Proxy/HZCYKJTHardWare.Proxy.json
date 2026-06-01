@@ -34,7 +34,7 @@
   "preview": {
     "rtsp_network_caching_ms": 50,
     "rtsp_live_caching_ms": 50,
-    "rtsp_transport": "tcp"
+    "rtsp_transport": ""
   },
   "save": {
     "default_dir": ".\\captures",

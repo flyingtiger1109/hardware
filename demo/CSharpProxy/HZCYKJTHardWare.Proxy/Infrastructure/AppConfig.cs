@@ -35,7 +35,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         // Preview settings
         public int RtspNetworkCachingMs { get; set; } = 50;
         public int RtspLiveCachingMs { get; set; } = 50;
-        public string RtspTransport { get; set; } = "tcp";   // "tcp" / "udp" / ""
+        public string RtspTransport { get; set; } = "";   // ""=auto(同Delphi), "tcp" 强制TCP(需live555)
         // Save settings
         public string DefaultSaveDir { get; set; } = @".\captures";
         public bool CreateDateFolder { get; set; } = true;

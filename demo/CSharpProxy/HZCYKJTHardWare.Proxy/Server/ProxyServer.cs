@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Parsing;
 using HZCYKJTHardWare.Proxy.Preview;
@@ -20,15 +21,13 @@ namespace HZCYKJTHardWare.Proxy.Server
         private TcpListener _callbackListener;
         private CancellationTokenSource _cts;
 
-        // Concurrency limit: prevent thread-pool exhaustion under high-frequency DLL requests
-        private readonly SemaphoreSlim _requestLimit = new SemaphoreSlim(20, 20);
-
         private readonly TerminalManager _terminalManager;
         private readonly TerminalClient _terminalClient;
         private readonly DllCallbackSender _dllCallback;
         private readonly PreviewManager _previewManager;
         private readonly DllCommandHandler _commandHandler;
         private readonly TerminalCallbackHandler _callbackHandler;
+        private readonly QueueManager _queueManager;
 
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<string, string> _requestCallbacks = new ConcurrentDictionary<string, string>();
@@ -37,6 +36,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private string _lanIp;
 
         public string LanIp => _lanIp;
+        public QueueManager QueueManager => _queueManager;
 
         public string GetTerminalCallbackBaseUrl()
         {
@@ -50,11 +50,22 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalClient = new TerminalClient();
             _dllCallback = new DllCallbackSender();
             _previewManager = new PreviewManager(_terminalClient);
+            _queueManager = new QueueManager();
+
+            // Wire up queue worker handlers
+            _queueManager.SwitchHandler = ExecuteSwitchInternal;
+            _queueManager.FaceCaptureHandler = (task) => ExecuteCaptureFace(task);
+            _queueManager.FingerprintCaptureHandler = (task) => ExecuteCaptureFingerprint(task);
+            _queueManager.OcrHandler = (task) => ExecuteOcrInternal(task);
+            _queueManager.NfcHandler = (task) => ExecuteNfcInternal(task);
+            _queueManager.FacePreviewHandler = (task) => ExecuteFacePreview(task);
+            _queueManager.FingerprintPreviewHandler = (task) => ExecuteFingerprintPreview(task);
+            _queueManager.MiscHandler = (task) => ExecuteMiscInternal(task);
 
             _commandHandler = new DllCommandHandler(
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
                 _requestSaveDirs, _requestCallbacks, _log,
-                GetTerminalCallbackBaseUrl);
+                GetTerminalCallbackBaseUrl, _queueManager);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _dllCallback,
@@ -112,23 +123,13 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             _cts?.Cancel();
             _previewManager?.StopAll();
+            _queueManager?.Dispose();
 
             try { _dllListener?.Stop(); } catch { }
             try { _callbackListener?.Stop(); } catch { }
 
-            // Wait for in-flight requests to complete (up to 5s)
-            try
-            {
-                var waitMs = 0;
-                while (_requestLimit.CurrentCount < 20 && waitMs < 5000)
-                {
-                    System.Threading.Thread.Sleep(100);
-                    waitMs += 100;
-                }
-            }
-            catch { }
-
             _log("服务已停止");
+            _log("[队列统计]\n" + (_queueManager?.GetAllStats() ?? "无"));
         }
 
         private async Task AcceptLoop(TcpListener listener, Func<TcpClient, Task> handler, CancellationToken ct)
@@ -138,32 +139,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                 try
                 {
                     var client = await listener.AcceptTcpClientAsync();
-
-                    // Acquire concurrency slot before spawning task (prevents thread-pool exhaustion)
-                    await _requestLimit.WaitAsync(ct);
                     _ = Task.Run(async () =>
                     {
-                        try
-                        {
-                            await handler(client);
-                        }
-                        catch (Exception ex)
-                        {
-                            _log($"Request handler error: {ex.Message}");
-                        }
-                        finally
-                        {
-                            _requestLimit.Release();
-                        }
+                        try { await handler(client); }
+                        catch (Exception ex) { _log($"请求处理异常: {ex.Message}"); }
                     }, ct);
                 }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException) { break; }
                 catch (OperationCanceledException) { break; }
-                catch (Exception ex)
-                {
-                    _log($"AcceptLoop error: {ex.Message}");
-                }
+                catch (Exception ex) { _log($"AcceptLoop 异常: {ex.Message}"); }
             }
         }
 
@@ -174,12 +159,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 using (client)
                 using (var stream = client.GetStream())
                 {
-                    stream.ReadTimeout = 30000;
-                    stream.WriteTimeout = 30000;
+                    stream.ReadTimeout = 2000;   // Fast fail: don't hang on slow clients
+                    stream.WriteTimeout = 2000;
 
                     var (method, path, bodyUtf8) = await ReadHttpRequest(stream);
-
-                    _log($"[DLL请求] {method} {path}");
 
                     var result = await _commandHandler.HandleAsync(method, path, bodyUtf8);
 
@@ -405,16 +388,29 @@ namespace HZCYKJTHardWare.Proxy.Server
             var (ok, response) = task.Result;
             if (!ok) return (false, "");
 
-            var savePath = ResultParser.ExtractSavePath(response);
-            if (string.IsNullOrEmpty(savePath))
+            // Delphi logic: if saveDir has file extension, save directly to that path
+            string savePath = "";
+            if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
             {
                 var result = CallbackParser.ParseImageCapture(response, "face_image");
                 if (!string.IsNullOrEmpty(result.ImageBase64))
+                    savePath = FileSaver.SaveBase64ImageToFile(result.ImageBase64,
+                        Storage.PathHelper.ResolveExactSaveFile(saveDir));
+            }
+            else
+            {
+                savePath = ResultParser.ExtractSavePath(response);
+                if (string.IsNullOrEmpty(savePath))
                 {
-                    var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/bmp";
-                    savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "face");
+                    var result = CallbackParser.ParseImageCapture(response, "face_image");
+                    if (!string.IsNullOrEmpty(result.ImageBase64))
+                    {
+                        var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/bmp";
+                        savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "face");
+                    }
                 }
             }
+            _log($"[人脸抓拍] 图片保存成功：{savePath}");
             return (!string.IsNullOrEmpty(savePath), savePath);
         }
 
@@ -427,16 +423,29 @@ namespace HZCYKJTHardWare.Proxy.Server
             var (ok, response) = task.Result;
             if (!ok) return (false, "");
 
-            var savePath = ResultParser.ExtractSavePath(response);
-            if (string.IsNullOrEmpty(savePath))
+            // Delphi logic: if saveDir has file extension, save directly to that path
+            string savePath = "";
+            if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
             {
                 var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
                 if (!string.IsNullOrEmpty(result.ImageBase64))
+                    savePath = FileSaver.SaveBase64ImageToFile(result.ImageBase64,
+                        Storage.PathHelper.ResolveExactSaveFile(saveDir));
+            }
+            else
+            {
+                savePath = ResultParser.ExtractSavePath(response);
+                if (string.IsNullOrEmpty(savePath))
                 {
-                    var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/jpeg";
-                    savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "fingerprint");
+                    var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
+                    if (!string.IsNullOrEmpty(result.ImageBase64))
+                    {
+                        var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/jpeg";
+                        savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "fingerprint");
+                    }
                 }
             }
+            _log($"[指纹抓拍] 图片保存成功：{savePath}");
             return (!string.IsNullOrEmpty(savePath), savePath);
         }
 
@@ -524,6 +533,174 @@ namespace HZCYKJTHardWare.Proxy.Server
             _previewManager.StopPreview(resType, PreviewSessionType.Local);
         }
 
+        // ====== Internal worker methods (run on queue worker threads) ======
+
+        private ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingResults
+            = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
+
+        private void ExecuteSwitchInternal(SwitchRequest req)
+        {
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                _previewManager.StopAll();
+                _log($"[性能] 终端切换停止 耗时={sw.ElapsedMilliseconds}ms");
+
+                var phase = sw.ElapsedMilliseconds;
+                _terminalManager.SwitchTo(req.TerminalIndex);
+                _log($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
+                _log("[终端切换] 当前终端=" + _terminalManager.CurrentName);
+
+                phase = sw.ElapsedMilliseconds;
+                _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl).GetAwaiter().GetResult();
+                _log($"[性能] 终端切换启动 耗时={sw.ElapsedMilliseconds - phase}ms");
+                _log($"[性能] 终端切换总耗时={sw.ElapsedMilliseconds}ms");
+            }
+            catch (Exception ex)
+            {
+                _log("[终端切换] 失败: " + ex.Message);
+            }
+            finally
+            {
+                _queueManager.ClearSwitching();
+            }
+        }
+
+        private void ExecuteCaptureFace(QueueTask<object> task)
+        {
+            var data = task.Data as CaptureTaskData;
+            var tcs = data?.Tcs;
+            try
+            {
+                var saveDir = data?.SaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+                var (ok, path) = CaptureFace(saveDir);
+                tcs?.TrySetResult(ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
+                    : "{\"error\":true,\"code\":\"capture_failed\"}");
+            }
+            catch
+            {
+                tcs?.TrySetResult("{\"error\":true,\"code\":\"capture_failed\"}");
+            }
+        }
+
+        private void ExecuteCaptureFingerprint(QueueTask<object> task)
+        {
+            var data = task.Data as CaptureTaskData;
+            var tcs = data?.Tcs;
+            try
+            {
+                var saveDir = data?.SaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+                var (ok, path) = CaptureFingerprint(saveDir);
+                tcs?.TrySetResult(ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
+                    : "{\"error\":true,\"code\":\"capture_failed\"}");
+            }
+            catch
+            {
+                tcs?.TrySetResult("{\"error\":true,\"code\":\"capture_failed\"}");
+            }
+        }
+
+        private void ExecuteOcrInternal(QueueTask<object> task)
+        {
+            var tcs = task.Data as TaskCompletionSource<string>;
+            try
+            {
+                var saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+                var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
+                var callbackBase = GetTerminalCallbackBaseUrl();
+                var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
+                var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
+                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+                _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
+                Logger.Info($"[OCR] 存储回调映射: {requestId} → {dllCallbackUrl}");
+                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body);
+                tt.Wait();
+                if (tt.Result.ok)
+                {
+                    _log($"OCR 已转发至终端: request_id={requestId}");
+                    tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
+                }
+                else
+                {
+                    tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
+                }
+            }
+            catch (Exception ex)
+            {
+                tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
+            }
+        }
+
+        private void ExecuteNfcInternal(QueueTask<object> task)
+        {
+            var tcs = task.Data as TaskCompletionSource<string>;
+            try
+            {
+                var saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+                var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
+                var callbackBase = GetTerminalCallbackBaseUrl();
+                var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
+                var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
+                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+                _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
+                Logger.Info($"[NFC] 存储回调映射: {requestId} → {dllCallbackUrl}");
+                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body);
+                tt.Wait();
+                if (tt.Result.ok)
+                {
+                    _log($"NFC 已转发至终端: request_id={requestId}");
+                    tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
+                }
+                else
+                {
+                    tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
+                }
+            }
+            catch (Exception ex)
+            {
+                tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
+            }
+        }
+
+        private void ExecuteFacePreview(QueueTask<object> task)
+        {
+            var tcs = task.Data as TaskCompletionSource<string>;
+            try
+            {
+                var result = "{\"accepted\":true}";
+                tcs?.TrySetResult(result);
+            }
+            catch { tcs?.TrySetResult("{\"error\":true,\"code\":\"preview_failed\"}"); }
+        }
+
+        private void ExecuteFingerprintPreview(QueueTask<object> task)
+        {
+            var tcs = task.Data as TaskCompletionSource<string>;
+            try
+            {
+                var result = "{\"accepted\":true}";
+                tcs?.TrySetResult(result);
+            }
+            catch { tcs?.TrySetResult("{\"error\":true,\"code\":\"preview_failed\"}"); }
+        }
+
+        private void ExecuteMiscInternal(QueueTask<object> task)
+        {
+            var tcs = task.Data as TaskCompletionSource<string>;
+            try
+            {
+                var result = "{\"accepted\":true}";
+                tcs?.TrySetResult(result);
+            }
+            catch { tcs?.TrySetResult("{\"error\":true,\"code\":\"failed\"}"); }
+        }
+
         public void Dispose()
         {
             Stop();
@@ -531,7 +708,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalClient?.Dispose();
             _dllCallback?.Dispose();
             _cts?.Dispose();
-            _requestLimit?.Dispose();
         }
     }
 }

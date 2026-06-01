@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Concurrent;
-using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Windows.Forms;
+using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Parsing;
 using HZCYKJTHardWare.Proxy.Preview;
@@ -24,8 +25,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ConcurrentDictionary<string, string> _requestCallbacks;
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
-        private volatile bool _switchingTerminal;
-        private int _requestCount;  // For periodic dictionary cleanup
+        private readonly QueueManager _queueManager;
+        private int _requestCount;
 
         public DllCommandHandler(
             TerminalManager terminalManager,
@@ -35,7 +36,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             ConcurrentDictionary<string, string> requestSaveDirs,
             ConcurrentDictionary<string, string> requestCallbacks,
             Action<string> log,
-            Func<string> getCallbackBaseUrl)
+            Func<string> getCallbackBaseUrl,
+            QueueManager queueManager)
         {
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
@@ -45,163 +47,176 @@ namespace HZCYKJTHardWare.Proxy.Server
             _requestCallbacks = requestCallbacks;
             _log = log;
             _getCallbackBaseUrl = getCallbackBaseUrl;
+            _queueManager = queueManager;
         }
 
         public async Task<string> HandleAsync(string method, string path, string bodyUtf8)
         {
-            // /ping
+            // /ping — fast path, no queuing
             if (path == "/ping")
                 return "{\"status\":\"ok\"}";
 
-            // Terminal switch guard: reject new operations during async switch (same as Delphi FSwitchingTerminal)
-            if (_switchingTerminal)
-            {
-                _log("[终端切换] 正在切换终端，拦截请求: " + path);
+            // Fast reject during terminal switch
+            if (_queueManager.SwitchingTerminal)
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
-            }
 
-            // Periodic cleanup: prevent unbounded dictionary growth (memory leak protection)
+            // Dictionary cleanup
             if (++_requestCount % 500 == 0)
             {
-                var maxEntries = 2000;
-                if (_requestSaveDirs.Count > maxEntries) _requestSaveDirs.Clear();
-                if (_requestCallbacks.Count > maxEntries) _requestCallbacks.Clear();
+                if (_requestSaveDirs.Count > 2000) _requestSaveDirs.Clear();
+                if (_requestCallbacks.Count > 2000) _requestCallbacks.Clear();
             }
 
+            // Parse request fields
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
             var saveDir = JsonHelper.ExtractString(bodyUtf8, "save_dir");
             var callbackUrl = JsonHelper.ExtractString(bodyUtf8, "callback_url");
+            if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+            if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
-            if (string.IsNullOrEmpty(saveDir))
-                saveDir = _terminalManager.ProcessSaveDir;
-            if (string.IsNullOrEmpty(saveDir))
-                saveDir = AppConfig.Instance.DefaultSaveDir;
-
-            // Store request data
             if (!string.IsNullOrEmpty(callbackUrl) && !string.IsNullOrEmpty(requestId))
             {
                 _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
                 _requestCallbacks[requestId] = callbackUrl;
             }
 
-            var terminalBaseUrl = _terminalManager.CurrentBaseUrl;
+            var gen = _queueManager.TerminalGeneration;
 
-            // Route by path
             switch (path)
             {
+                // === Terminal Switch (highest priority, immediate response) ===
                 case "/terminal/switch":
-                    return HandleTerminalSwitch(bodyUtf8);
+                    return HandleSwitch(bodyUtf8, gen);
 
-                case "/process/start":
-                    return await HandleProcessStart(saveDir);
-
-                case "/process/end":
-                    return HandleProcessEnd();
-
+                // === Sync captures (wait for result, pass saveDir from third-party) ===
                 case "/capture/face":
-                    return await HandleCaptureFace(requestId, saveDir);
+                    return await EnqueueCapture(_queueManager.FaceCaptureQueue, gen, saveDir);
 
                 case "/capture/fingerprint":
-                    return await HandleCaptureFingerprint(requestId, saveDir);
+                    return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, gen, saveDir);
 
-                case "/capture/iris":
-                    return await HandleCaptureIris(requestId, saveDir, callbackUrl, terminalBaseUrl);
-
+                // === Async operations (return "accepted" immediately after terminal forwards) ===
                 case "/ocr":
-                    return await HandleOcr(requestId, saveDir, callbackUrl, terminalBaseUrl);
+                    return await EnqueueWithResult(_queueManager.OcrQueue, gen, path, 10000);
 
                 case "/nfc":
-                    return await HandleNfc(requestId, saveDir, callbackUrl, terminalBaseUrl);
+                    return await EnqueueWithResult(_queueManager.NfcQueue, gen, path, 10000);
 
-                case "/authorize":
-                    return await HandleAuthorize(bodyUtf8, requestId, callbackUrl, terminalBaseUrl);
+                case "/capture/iris":
+                    return await EnqueueWithResult(_queueManager.MiscQueue, gen, path, 10000);
 
+                // === Previews (replace mode, immediate "accepted") ===
                 case "/preview/camera/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Camera, PreviewSessionType.External);
-
-                case "/preview/camera/stop":
-                    return HandlePreviewStop(PreviewResourceType.Camera, PreviewSessionType.External);
+                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Camera, gen);
 
                 case "/preview/fingerprint/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Fingerprint, PreviewSessionType.External);
-
-                case "/preview/fingerprint/stop":
-                    return HandlePreviewStop(PreviewResourceType.Fingerprint, PreviewSessionType.External);
+                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Fingerprint, gen);
 
                 case "/preview/iris/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Iris, PreviewSessionType.External);
+                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Iris, gen);
 
+                case "/preview/camera/stop":
+                    return HandlePreviewStop(PreviewResourceType.Camera);
+                case "/preview/fingerprint/stop":
+                    return HandlePreviewStop(PreviewResourceType.Fingerprint);
                 case "/preview/iris/stop":
-                    return HandlePreviewStop(PreviewResourceType.Iris, PreviewSessionType.External);
+                    return HandlePreviewStop(PreviewResourceType.Iris);
 
+                // === Preview URL queries (synchronous, no queue) ===
                 case "/preview/camera/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Camera, terminalBaseUrl);
-
+                    return await HandlePreviewUrl(PreviewResourceType.Camera);
                 case "/preview/fingerprint/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Fingerprint, terminalBaseUrl);
-
+                    return await HandlePreviewUrl(PreviewResourceType.Fingerprint);
                 case "/preview/iris/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Iris, terminalBaseUrl);
+                    return await HandlePreviewUrl(PreviewResourceType.Iris);
+
+                // === Misc (process, authorize) ===
+                case "/process/start":
+                    return await HandleProcessStart(bodyUtf8, gen);
+                case "/process/end":
+                    return HandleProcessEnd();
+                case "/authorize":
+                    return await HandleAuthorizeDirect(bodyUtf8, requestId, callbackUrl);
 
                 default:
-                    return "{\"error\":true,\"code\":\"not_found\",\"message\":\"unknown:" + JsonHelper.EscapeString(path) + "\"}";
+                    return "{\"error\":true,\"code\":\"not_found\"}";
             }
         }
 
-        private string HandleTerminalSwitch(string bodyUtf8)
+        /// <summary>
+        /// Enqueue a capture task with saveDir from the third-party request (matching Delphi logic).
+        /// If saveDir has a file extension, it's used directly as the save path.
+        /// </summary>
+        private async Task<string> EnqueueCapture(WorkerQueue<object> queue, int generation, string saveDir)
         {
-            var terminalIndex = JsonHelper.ExtractInt(bodyUtf8, "terminal_index");
+            var tcs = new TaskCompletionSource<string>();
+            var data = new CaptureTaskData { Tcs = tcs, SaveDir = saveDir };
+            if (!queue.Enqueue(data, generation))
+            {
+                Logger.Warn($"[队列] {queue.Name} 队列满");
+                return "{\"error\":true,\"code\":\"busy\"}";
+            }
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
+            if (completed == tcs.Task && tcs.Task.IsCompleted)
+                return await tcs.Task;
+            Logger.Error($"[队列] {queue.Name} 请求超时");
+            return "{\"error\":true,\"code\":\"timeout\"}";
+        }
+
+        /// <summary>
+        /// Enqueue a task to a worker queue and wait for the result.
+        /// </summary>
+        private async Task<string> EnqueueWithResult(WorkerQueue<object> queue, int generation, string path, int timeoutMs)
+        {
+            var tcs = new TaskCompletionSource<string>();
+            if (!queue.Enqueue(tcs, generation))
+            {
+                // Queue full — immediate busy response
+                Logger.Warn($"[队列] {queue.Name} 队列满, 拒绝请求: {path}");
+                return "{\"error\":true,\"code\":\"busy\"}";
+            }
+
+            // Wait for worker to complete (with timeout)
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+            if (completed == tcs.Task && tcs.Task.IsCompleted)
+            {
+                return await tcs.Task;
+            }
+
+            // Timeout
+            Logger.Error($"[队列] {queue.Name} 请求超时({timeoutMs}ms): {path}");
+            return "{\"error\":true,\"code\":\"timeout\"}";
+        }
+
+        // ====== Switch (immediate response, async execution) ======
+
+        private string HandleSwitch(string bodyUtf8, int gen)
+        {
+            var terminalIndex = (int)JsonHelper.ExtractInt(bodyUtf8, "terminal_index");
             if (terminalIndex < 1 || terminalIndex > 2)
                 return "{\"error\":true,\"code\":\"invalid_terminal_index\"}";
 
-            var isSame = _terminalManager.IsSameTerminal(terminalIndex);
-            if (isSame)
-            {
+            if (_terminalManager.IsSameTerminal(terminalIndex))
                 return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + ",\"same_terminal\":true}";
-            }
 
-            // Set switching guard to block new requests during async switch (same as Delphi FSwitchingTerminal)
-            _switchingTerminal = true;
-            _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + terminalIndex);
+            _log("[终端切换] 下发切换请求: " + _terminalManager.CurrentIndex + " -> " + terminalIndex);
 
-            // Fire and forget: switch terminal and restart previews asynchronously
-            Task.Run(async () =>
-            {
-                try
-                {
-                    var stopWatch = System.Diagnostics.Stopwatch.StartNew();
-
-                    // Phase 1: Stop all active previews
-                    _previewManager.StopAll();
-                    _log(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
-
-                    var phaseTick = stopWatch.ElapsedMilliseconds;
-                    _terminalManager.SwitchTo(terminalIndex);
-                    _log(string.Format("[性能] 终端管理器切换 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
-                    _log("[终端切换] 当前终端已切换为：" + _terminalManager.CurrentName + " " + _terminalManager.CurrentBaseUrl);
-
-                    // Phase 2: Restart previews on new terminal
-                    phaseTick = stopWatch.ElapsedMilliseconds;
-                    _log("[终端切换] 正在" + _terminalManager.CurrentName + "上恢复活动预览");
-                    await _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl);
-                    _log(string.Format("[性能] 终端切换启动 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
-                    _log(string.Format("[性能] 终端切换总耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
-                }
-                catch (Exception ex)
-                {
-                    _log("终端切换失败: " + ex.Message);
-                }
-                finally
-                {
-                    _switchingTerminal = false;
-                }
-            });
+            // Enqueue to switch worker (immediate return, don't wait)
+            _queueManager.RequestSwitch(terminalIndex, gen);
 
             return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + "}";
         }
 
-        private async Task<string> HandleProcessStart(string saveDir)
+        // ====== Process / Authorize (direct execution, no queue needed — they're quick) ======
+
+        private async Task<string> HandleProcessStart(string bodyUtf8, int gen)
         {
+            var saveDir = JsonHelper.ExtractString(bodyUtf8, "save_dir");
+            if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+            if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+
+            _terminalManager.ProcessSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
+
             var callbackBase = _getCallbackBaseUrl();
             var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"," +
@@ -210,14 +225,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                 $"\"ocr_event_status\":\"{callbackBase}\"," +
                 $"\"nfc_card\":\"{callbackBase}\"}}}}";
 
-            _terminalManager.ProcessSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
-            _log("[流程] 正在向终端开始流程，url=" + _terminalManager.CurrentBaseUrl + "/process/start，save_dir=" + _terminalManager.ProcessSaveDir);
+            _log("[流程] 开始流程: url=" + _terminalManager.CurrentBaseUrl + "/process/start, save_dir=" + _terminalManager.ProcessSaveDir);
 
             var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body);
             if (ok)
             {
                 _terminalManager.ProcessActive = true;
-                _log("[流程] 终端流程已开始，save_dir=" + _terminalManager.ProcessSaveDir);
+                _log("[流程] 流程已开始, save_dir=" + _terminalManager.ProcessSaveDir);
                 return "{\"status\":\"ok\"}";
             }
             return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
@@ -233,117 +247,20 @@ namespace HZCYKJTHardWare.Proxy.Server
             return "{\"status\":\"ok\"}";
         }
 
-        private async Task<string> HandleCaptureFace(string requestId, string saveDir)
+        private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId, string callbackUrl)
         {
-            var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body);
-
-            if (!ok) return "{\"error\":true,\"code\":\"capture_failed\"}";
-
-            var savePath = ResultParser.ExtractSavePath(response);
-            if (string.IsNullOrEmpty(savePath))
-            {
-                // Try resource-specific field names (same as Delphi)
-                var result = CallbackParser.ParseImageCapture(response, "face_image");
-                if (!string.IsNullOrEmpty(result.ImageBase64))
-                {
-                    var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/bmp";
-                    savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "face");
-                }
-            }
-
-            _log($"[人脸抓拍] save_path={savePath}");
-            return "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(savePath) + "\"}";
-        }
-
-        private async Task<string> HandleCaptureFingerprint(string requestId, string saveDir)
-        {
-            var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body);
-
-            if (!ok) return "{\"error\":true,\"code\":\"capture_failed\"}";
-
-            var savePath = ResultParser.ExtractSavePath(response);
-            if (string.IsNullOrEmpty(savePath))
-            {
-                // Try resource-specific field names (same as Delphi)
-                var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
-                if (!string.IsNullOrEmpty(result.ImageBase64))
-                {
-                    var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/jpeg";
-                    savePath = FileSaver.SaveBase64Image(result.ImageBase64, mimeType, saveDir, requestId, "fingerprint");
-                }
-            }
-
-            _log($"[指纹抓拍] save_path={savePath}");
-            return "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(savePath) + "\"}";
-        }
-
-        private async Task<string> HandleCaptureIris(string requestId, string saveDir, string callbackUrl, string terminalBaseUrl)
-        {
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-            _requestCallbacks[requestId] = callbackUrl;
-
-            var callbackBase = _getCallbackBaseUrl();
-            var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
-
-            var (ok, _) = await _terminalClient.PostJsonAsync(terminalBaseUrl, "/resources/iris/request", body);
-            if (ok) { _log($"Iris capture forwarded: request_id={requestId}"); return "{\"accepted\":true}"; }
-            return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
-        }
-
-        private async Task<string> HandleOcr(string requestId, string saveDir, string callbackUrl, string terminalBaseUrl)
-        {
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-            _requestCallbacks[requestId] = callbackUrl;
-
-            var callbackBase = _getCallbackBaseUrl();
-            var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
-
-            var (ok, _) = await _terminalClient.PostJsonAsync(terminalBaseUrl, "/resources/ocr-document/request", body);
-            if (ok) { _log($"OCR forwarded: request_id={requestId}"); return "{\"accepted\":true}"; }
-            return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
-        }
-
-        private async Task<string> HandleNfc(string requestId, string saveDir, string callbackUrl, string terminalBaseUrl)
-        {
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-            _requestCallbacks[requestId] = callbackUrl;
-
-            var callbackBase = _getCallbackBaseUrl();
-            var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
-
-            var (ok, _) = await _terminalClient.PostJsonAsync(terminalBaseUrl, "/resources/nfc-card/request", body);
-            if (ok) { _log($"NFC forwarded: request_id={requestId}"); return "{\"accepted\":true}"; }
-            return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
-        }
-
-        private async Task<string> HandleAuthorize(string bodyUtf8, string requestId, string callbackUrl, string terminalBaseUrl)
-        {
-            // 2.21 请求协议签订: 转发至终端 /resources/protocol/request
-            // DLL 字段 (ZJHM,ZJLB,GJDQDM,XM,XB,CSRQ,KADM) → 终端协议字段 (id_no,doc_type,nationality,name,sex,birthday,port_code)
-            // 2.22 协议签订结果推送由 TerminalCallbackHandler 处理并回传 DLL
-
-            // Store DLL callback URL for later forwarding when terminal calls back with 2.22 result
             if (!string.IsNullOrEmpty(callbackUrl) && !string.IsNullOrEmpty(requestId))
-            {
                 _requestCallbacks[requestId] = callbackUrl;
-            }
 
-            // Map third-party fields to terminal protocol 2.21 fields
             var name = JsonHelper.ExtractString(bodyUtf8, "XM");
             var sex = JsonHelper.ExtractString(bodyUtf8, "XB");
             var idNo = JsonHelper.ExtractString(bodyUtf8, "ZJHM");
             var docType = JsonHelper.ExtractString(bodyUtf8, "ZJLB");
             var birthday = JsonHelper.ExtractString(bodyUtf8, "CSRQ");
             var nationality = JsonHelper.ExtractString(bodyUtf8, "GJDQDM");
-            var portCode = JsonHelper.ExtractString(bodyUtf8, "KADM");  // KADM → port_code
+            var portCode = JsonHelper.ExtractString(bodyUtf8, "KADM");
 
             var callbackBase = _getCallbackBaseUrl();
-
-            // Build 2.21 request body following protocol document field names
             var terminalBody = "{" +
                 "\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\"," +
                 "\"name\":\"" + JsonHelper.EscapeString(name) + "\"," +
@@ -356,19 +273,20 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"" +
                 "}";
 
-            _log("[授权] 转发协议签订请求至终端: request_id=" + requestId
-                + ", name=" + name + ", id_no=" + idNo + ", port_code=" + portCode);
+            _log("[授权] 转发至终端: request_id=" + requestId);
 
-            var (ok, _) = await _terminalClient.PostJsonAsync(terminalBaseUrl, "/resources/protocol/request", terminalBody);
+            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody);
             if (ok)
             {
-                _log("[授权] 协议签订请求已受理: request_id=" + requestId);
+                _log("[授权] 已受理: request_id=" + requestId);
                 return "{\"accepted\":true}";
             }
             return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
         }
 
-        private async Task<string> HandlePreviewStart(string bodyUtf8, PreviewResourceType resType, PreviewSessionType sessionType)
+        // ====== Preview Start (replace mode, immediate "accepted") ======
+
+        private async Task<string> HandlePreviewStart(string bodyUtf8, PreviewResourceType resType, int gen)
         {
             var hwndValue = JsonHelper.ExtractInt(bodyUtf8, "hwnd");
             var hwnd = new IntPtr(hwndValue);
@@ -377,10 +295,12 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             {
-                _log("[预览管理] 目标窗口句柄无效，hwnd=" + hwndValue);
+                _log("[预览管理] 目标窗口句柄无效, hwnd=" + hwndValue);
                 return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
             }
 
+            // Start preview on thread pool (not blocking HTTP), then send callback
+            var terminalBaseUrl = _terminalManager.CurrentBaseUrl;
             var resourceName = resType switch
             {
                 PreviewResourceType.Camera => "face_image",
@@ -389,49 +309,85 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _ => "unknown"
             };
 
-            var terminalBaseUrl = _terminalManager.CurrentBaseUrl;
-            var ok = await _previewManager.StartPreview(resType, sessionType, hwnd, terminalBaseUrl);
-
-            if (ok)
+            // Execute preview start asynchronously (don't block HTTP response)
+            _ = Task.Run(async () =>
             {
-                // Success callback (same as Delphi TAsyncStartPreviewThread)
-                if (!string.IsNullOrEmpty(callbackUrl))
-                    await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero);
+                try
+                {
+                    var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl);
+                    if (ok)
+                    {
+                        if (!string.IsNullOrEmpty(callbackUrl))
+                            await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero);
+                        _log($"Preview started: {resType} external -> hwnd={hwnd}");
 
-                _log($"Preview started: {resType} external -> hwnd={hwnd}");
-                return "{\"accepted\":true}";
-            }
+                        // DLL-triggered preview success → minimize proxy window to taskbar
+                        MinimizeMainForm();
+                    }
+                    else
+                    {
+                        if (!string.IsNullOrEmpty(callbackUrl))
+                        {
+                            var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" + hwndValue + ",\"error\":true,\"code\":\"preview_failed\"}";
+                            await _dllCallback.PostCallbackRaw("/preview-ready", errPayload);
+                        }
+                        _log($"Preview failed: {resType} external -> hwnd={hwnd}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log($"Preview start error: {ex.Message}");
+                }
+            });
 
-            // Failure callback (same as Delphi TAsyncStartPreviewThread error path)
-            // DLL's ProcessPreviewReadyCallback checks error:true and dispatches PREVIEW_FAILED event
-            if (!string.IsNullOrEmpty(callbackUrl))
-            {
-                var errorPayload = "{" +
-                    "\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\"," +
-                    "\"resource_type\":\"" + JsonHelper.EscapeString(resourceName) + "\"," +
-                    "\"render_hwnd\":" + hwndValue + "," +
-                    "\"error\":true," +
-                    "\"code\":\"preview_failed\"" +
-                    "}";
-                await _dllCallback.PostCallbackRaw("/preview-ready", errorPayload);
-            }
-
-            _log($"Preview failed: {resType} external -> hwnd={hwnd}");
-            return "{\"error\":true,\"code\":\"preview_failed\"}";
+            return "{\"accepted\":true}";
         }
 
-        private string HandlePreviewStop(PreviewResourceType resType, PreviewSessionType sessionType)
+        private string HandlePreviewStop(PreviewResourceType resType)
         {
-            _previewManager.StopPreview(resType, sessionType);
+            _previewManager.StopPreview(resType, PreviewSessionType.External);
             return "{\"status\":\"ok\"}";
         }
 
-        private async Task<string> HandlePreviewUrl(PreviewResourceType resType, string terminalBaseUrl)
+        private async Task<string> HandlePreviewUrl(PreviewResourceType resType)
         {
+            var terminalBaseUrl = _terminalManager.CurrentBaseUrl;
             var previewUrl = await _previewManager.RequestPreviewUrl(resType, terminalBaseUrl);
             if (!string.IsNullOrEmpty(previewUrl))
                 return "{\"status\":\"ok\",\"preview_url\":\"" + JsonHelper.EscapeString(previewUrl) + "\"}";
             return "{\"error\":true,\"code\":\"preview_url_failed\"}";
         }
+
+        /// <summary>
+        /// Minimize the main window to taskbar after DLL-triggered preview starts successfully.
+        /// </summary>
+        private static void MinimizeMainForm()
+        {
+            try
+            {
+                var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] : null;
+                if (form != null && form.InvokeRequired)
+                {
+                    form.Invoke(new Action(() =>
+                    {
+                        form.WindowState = FormWindowState.Minimized;
+                    }));
+                }
+                else if (form != null)
+                {
+                    form.WindowState = FormWindowState.Minimized;
+                }
+            }
+            catch { /* Best-effort, must not crash */ }
+        }
+    }
+
+    /// <summary>
+    /// Data passed to capture queue workers — includes third-party's saveDir.
+    /// </summary>
+    public class CaptureTaskData
+    {
+        public TaskCompletionSource<string> Tcs { get; set; }
+        public string SaveDir { get; set; }
     }
 }

@@ -141,14 +141,17 @@ namespace HZCYKJTHardWare.Proxy.Server
             var errorCode = JsonHelper.ExtractString(bodyUtf8, "error_code");
             var message = JsonHelper.ExtractString(bodyUtf8, "message");
 
-            if (!string.IsNullOrEmpty(errorCode))
-            {
-                _log($"[OCR事件] request_id={requestId}, event={chineseEvent}, error={errorCode}, message={message}");
-            }
+            // Only "证件检测" and "证件离开" show in UI; all others write to log file only
+            bool showInUi = (eventType == "event_type_card_detect" || eventType == "event_type_card_leave");
+
+            var logLine = !string.IsNullOrEmpty(errorCode)
+                ? $"[OCR事件] request_id={requestId}, event={chineseEvent}, error={errorCode}, message={message}"
+                : $"[OCR事件] request_id={requestId}, event={chineseEvent}";
+
+            if (showInUi)
+                _log(logLine);           // UI + file
             else
-            {
-                _log($"[OCR事件] request_id={requestId}, event={chineseEvent}");
-            }
+                Logger.Info(logLine);    // file only
         }
 
         private void HandleOcrDocument(string bodyUtf8)
@@ -165,13 +168,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Save evidence images if present
             SaveEvidenceImages(bodyUtf8, saveDir, result.RequestId);
 
-            // Forward to DLL callback — only if request is still active (no fallback = avoid stale data)
+            // Forward to DLL callback — fallback to default URL if request_id not found (same as Delphi)
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
-            {
-                _log("[OCR回调] 未找到回调地址，流程已结束或终端已切换，跳过");
-                return;
-            }
+                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
             if (!TryMarkProcessed(result.RequestId, "ocr_document"))
             {
                 _log("[OCR回调] 重复OCR结果，已去重: " + result.RequestId);
@@ -191,10 +191,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
-            {
-                _log("[IC卡回调] 未找到回调地址，流程已结束或终端已切换，跳过");
-                return;
-            }
+                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
             if (!TryMarkProcessed(result.RequestId, "nfc_card"))
             {
                 _log("[IC卡回调] 重复回调，已去重: " + result.RequestId);
@@ -221,10 +218,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
-            {
-                _log("[虹膜回调] 未找到回调地址，流程已结束或终端已切换，跳过");
-                return;
-            }
+                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris";
             if (!TryMarkProcessed(result.RequestId, "iris_image"))
             {
                 _log("[虹膜回调] 重复回调，已去重: " + result.RequestId);
@@ -280,10 +274,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
-            {
-                _log("[授权回调] 未找到回调地址，流程已结束或终端已切换，跳过");
-                return;
-            }
+                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize";
             if (!TryMarkProcessed(result.RequestId, "protocol"))
             {
                 _log("[授权回调] 重复回调，已去重: " + result.RequestId);

@@ -215,11 +215,28 @@ namespace HZCYKJTHardWare.Proxy
             Logger.Info(message);
         }
 
+        private const int MaxLogLines = 3000;  // Prevent UI crash from unbounded log growth
+
         private void AppendLogToMemo(string line)
         {
-            memoLog.AppendText(line + Environment.NewLine);
-            memoLog.SelectionStart = memoLog.TextLength;
-            memoLog.ScrollToCaret();
+            try
+            {
+                // Trim old lines if exceeding limit (keep last MaxLogLines)
+                if (memoLog.Lines.Length > MaxLogLines)
+                {
+                    var lines = memoLog.Lines;
+                    var keep = new string[MaxLogLines];
+                    Array.Copy(lines, lines.Length - MaxLogLines, keep, 0, MaxLogLines);
+                    memoLog.Lines = keep;
+                }
+                memoLog.AppendText(line + Environment.NewLine);
+                memoLog.SelectionStart = memoLog.TextLength;
+                memoLog.ScrollToCaret();
+            }
+            catch
+            {
+                // Log area must never crash the program
+            }
         }
     }
 }
