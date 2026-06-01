@@ -81,6 +81,7 @@ bool Logger::Init(const std::string& logDir) {
     if (m_file) {
         setvbuf(m_file, nullptr, _IONBF, 0);
     }
+    m_currentLogPath = logPath;
 
     LeaveCriticalSection(&m_cs);
     return m_file != nullptr;
@@ -92,6 +93,7 @@ void Logger::Shutdown() {
         fclose(m_file);
         m_file = nullptr;
     }
+    m_currentLogPath.clear();
     LeaveCriticalSection(&m_cs);
 }
 
@@ -121,6 +123,26 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
              timeBuf, LevelToString(level), moduleFunction, msgBuf);
 
     EnterCriticalSection(&m_cs);
+    std::string desiredLogPath = GetLogFilePath();
+    if (!m_file || desiredLogPath != m_currentLogPath) {
+        if (m_file) {
+            fclose(m_file);
+            m_file = nullptr;
+        }
+
+        std::wstring wLogDir = PathHelper::Utf8ToWide(m_logDir);
+        CreateDirectoryW(wLogDir.c_str(), nullptr);
+
+        std::wstring wLogPath = PathHelper::Utf8ToWide(desiredLogPath);
+        m_file = _wfsopen(wLogPath.c_str(), L"a", _SH_DENYNO);
+        if (m_file) {
+            setvbuf(m_file, nullptr, _IONBF, 0);
+            m_currentLogPath = desiredLogPath;
+        } else {
+            m_currentLogPath.clear();
+        }
+    }
+
     if (m_file) {
         fputs(lineBuf, m_file);
         fflush(m_file);

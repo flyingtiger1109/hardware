@@ -218,6 +218,87 @@
 - [x] `demo/DelphiThirdPartyDemo` 已包含当前 `HZCYKJTHardWare.dll` 和 `HZCYKJTHardWare.json`，并补充 README 说明调用链路。
 - [x] `demo/Delphi7Demo/README.md` 已说明 Delphi 服务端角色、端点、回调和测试顺序。
 
+## 长期运行稳定性修复记录（2026-06-01）
+
+### 已完成事项
+- [x] 已建立修改前备份：`.codex_backups/pre_terminal_switch_fix_20260601_104557`，备注当前版本仍存在终端切换问题。
+- [x] 第 1 项：终端切换改为高优先级同步控制，切换期间阻止普通请求继续进入旧终端，旧 generation 的预览结果会被丢弃。
+- [x] 第 2 项：回调成功后立即清理 Delphi7Demo 请求上下文，DLL 层记录已完成 request_id，第三方重新注册回调时清空待推送队列。
+- [x] 第 3 项：网络请求增加连接/发送/接收超时，修复 WinInet 响应读取方式，DLL 回调队列增加上限，避免请求无限堆积。
+- [x] 第 4 项：视频预览停止流程加锁，切换终端时先停止旧预览并清理旧 HWND，降低并发 Stop/Start 导致卡顿或句柄残留的风险。
+- [x] 第 5 项：Delphi7Demo 日志改为 ANSI/GBK 兼容写入；DLL 日志跨天自动关闭旧文件并切换到新日期文件。
+- [x] Delphi7Demo 已通过 Delphi 7 `DCC32.EXE HZCYKJTHardWare.dpr` 编译。
+- [x] DLL 已通过 Release Win32 MSBuild 编译，0 警告 0 错误。
+- [x] 第三方 Delphi 示例 `HZCYKJTDemo.dpr` 已通过 Delphi 7 编译，示例目录 DLL 已同步为最新 Release DLL。
+
+### 修改文件
+- `demo/Delphi7Demo/DelphiProxyServer.pas`
+- `demo/Delphi7Demo/TerminalClient.pas`
+- `demo/Delphi7Demo/PreviewManager.pas`
+- `demo/Delphi7Demo/Logger.pas`
+- `src/exports.cpp`
+- `src/delphi_proxy.cpp`
+- `src/event_dispatcher.cpp`
+- `src/hzsjkjt_context.h`
+- `src/hzsjkjt_context.cpp`
+- `src/request_session_manager.h`
+- `src/request_session_manager.cpp`
+- `src/logger.h`
+- `src/logger.cpp`
+- 编译产物：`demo/Delphi7Demo/HZCYKJTHardWare.exe`、`Release/HZCYKJTHardWare.dll`
+- 第三方示例产物：`demo/DelphiThirdPartyDemo/HZCYKJTHardWare.dll`、`demo/DelphiThirdPartyDemo/HZCYKJTDemo.exe`
+
+### 待验证事项
+- [ ] 第三方程序每秒 5-8 次请求连续运行 24 小时，观察 12029、线程数、句柄数、内存是否持续增长。
+- [ ] 高频抓拍期间连续切换终端，确认切换命令优先响应，旧终端回调不会再推送给第三方。
+- [ ] 第三方程序反复退出、重启并重新注册回调，确认不会收到已处理过的历史数据。
+- [ ] 切换终端期间视频预览停止、重建、SetParent/MoveWindow 均有中文日志且无窗口句柄残留。
+- [ ] 模拟网络断开、终端超时、Delphi7Demo 短暂无响应，确认 DLL 外部接口仍按 1/0 兼容返回，内部中文日志记录详细错误。
+- [ ] 跨 0 点运行，确认 Delphi7Demo 与 DLL 均自动生成新日期日志文件。
+
+### 已知风险
+- DLL 外部接口按要求仍保持 1/0 兼容，详细错误码只写入中文日志；第三方如果需要读取详细错误码，需要后续新增不破坏兼容的查询接口。
+- 当前只完成编译验证，真实 24 小时压力测试、真实终端切换、视频预览和第三方反复重启场景仍需现场联调。
+- `demo/Delphi7Demo/HZCYKJTDemo.exe` 在本次开始前已处于删除状态，未在本次修复中恢复。
+
+### 下一步建议
+- 先做 30-60 分钟短压测，确认终端切换、预览、回调去重日志正常，再扩大到 24 小时压力测试。
+- 压测期间每 5 分钟记录一次进程内存、线程数、句柄数、日志文件大小和最近错误码。
+- 如现场仍出现 12029，优先对照日志中的请求阶段、终端切换 generation、队列满丢弃日志和 WinInet 错误码定位。
+
+## 第三方切换终端卡顿专项修复（2026-06-01）
+
+### 问题定位
+- [x] DLL 日志显示第三方 `SwitchTerminal` 等待 `/terminal/switch` 超时，错误码为 12002。
+- [x] Delphi 日志显示卡点不在终端 HTTP，而在停止 `resource=fingerprint, session=external` 的 VLC 预览，单次阻塞约 30-31 秒。
+- [x] 根因是切换线程同步等待 `libvlc_media_player_stop/release`，并通过 `TThread.Synchronize` 占用主线程，导致 DLL HTTP 响应和第三方调用同时卡住。
+
+### 已完成修复
+- [x] `/terminal/switch` 改为快速受理：Delphi 设置切换状态后立即返回 `status=ok, accepted=true`，后台线程执行停止旧预览、切换终端、恢复新预览。
+- [x] `TVlcPlayer` 新增 `DetachVideoWindow`，先解除 VLC 窗口绑定、隐藏并销毁视频子窗口，第三方窗口不再等待 VLC 完整释放。
+- [x] `TPreviewManager.StopPreview` 改为先从活动状态摘除旧 `TVlcPlayer`，再把 VLC 对象投递到后台清理队列。
+- [x] VLC 后台清理使用固定 2 个 worker 线程，队列上限 32，避免频繁切换时无限创建线程或无限堆积句柄。
+- [x] 队列满时改为同步释放并写日志，优先保证资源不无限增长。
+- [x] DLL 取消 `/terminal/switch` 30 秒特殊超时，恢复普通短超时，避免 Delphi 异常无响应时长时间卡住第三方。
+
+### 修改文件
+- `demo/Delphi7Demo/DelphiProxyServer.pas`
+- `demo/Delphi7Demo/PreviewManager.pas`
+- `demo/Delphi7Demo/VlcPlayer.pas`
+- `src/delphi_proxy.cpp`
+- 编译产物：`demo/Delphi7Demo/HZCYKJTHardWare.exe`、`Release/HZCYKJTHardWare.dll`、`demo/DelphiThirdPartyDemo/HZCYKJTHardWare.dll`、`demo/DelphiThirdPartyDemo/HZCYKJTDemo.exe`
+
+### 验证结果
+- [x] Delphi7Demo 编译通过。
+- [x] DLL Release Win32 编译通过，0 警告 0 错误。
+- [x] 第三方 Delphi 示例编译通过。
+
+### 待现场验证
+- [ ] 第三方连续调用终端 1/2 切换，确认 DLL 调用快速返回，不再出现 30 秒无响应。
+- [ ] 切换时观察第三方摄像头/指纹预览窗口，确认旧画面立即消失，新终端预览尽快重建。
+- [ ] 高频切换 10-30 分钟，观察线程数、句柄数、内存是否稳定，确认后台清理队列不会持续堆积。
+- [ ] 如果日志出现“VLC后台释放队列已满”，说明现场切换频率已超过释放能力，需要降低切换频率或进一步替换 VLC 停止策略。
+
 - [ ] `DelphiProxyServer.pas` 仍是协议演示 mock，真实项目需替换为终端 HTTP、终端回调解析、真实图片保存和 VLC 渲染。
 - [ ] 指纹预览、虹膜预览、车牌预览仍未定义 Delphi HTTP 端点，当前 DLL 代理模式下返回 unsupported。
 

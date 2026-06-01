@@ -95,7 +95,7 @@ function HttpRequest(Method, Url, BodyUtf8: string; out ResponseUtf8: string;
   out ErrorStage: string; out ErrorCode, HttpStatus: Cardinal): Boolean;
 var
   hInet, hConn, hReq: HINTERNET;
-  Host, Path, Headers: string;
+  Host, Path, Headers, Chunk: string;
   Port: Integer;
   Buf: array[0..4095] of Byte;
   BytesRead: Cardinal;
@@ -133,6 +133,12 @@ begin
       Exit;
     end;
     try
+      Timeout := 5000;
+      InternetSetOption(hConn, INTERNET_OPTION_CONNECT_TIMEOUT, @Timeout, SizeOf(Timeout));
+      Timeout := 10000;
+      InternetSetOption(hConn, INTERNET_OPTION_SEND_TIMEOUT, @Timeout, SizeOf(Timeout));
+      InternetSetOption(hConn, INTERNET_OPTION_RECEIVE_TIMEOUT, @Timeout, SizeOf(Timeout));
+
       Flags := INTERNET_FLAG_RELOAD or INTERNET_FLAG_NO_CACHE_WRITE;
       ErrorStage := 'open_request';
       hReq := HttpOpenRequest(hConn, PChar(Method), PChar(Path), nil, nil, nil, Flags, 0);
@@ -142,6 +148,12 @@ begin
         Exit;
       end;
       try
+        Timeout := 5000;
+        InternetSetOption(hReq, INTERNET_OPTION_CONNECT_TIMEOUT, @Timeout, SizeOf(Timeout));
+        Timeout := 10000;
+        InternetSetOption(hReq, INTERNET_OPTION_SEND_TIMEOUT, @Timeout, SizeOf(Timeout));
+        InternetSetOption(hReq, INTERNET_OPTION_RECEIVE_TIMEOUT, @Timeout, SizeOf(Timeout));
+
         Headers := 'Content-Type: application/json; charset=utf-8'#13#10;
       ErrorStage := 'send_request_wait_response_headers';
         if not HttpSendRequest(hReq, PChar(Headers), Length(Headers),
@@ -164,7 +176,10 @@ begin
             Exit;
           end;
           if BytesRead > 0 then
-            ResponseUtf8 := ResponseUtf8 + Copy(string(PChar(@Buf)), 1, BytesRead);
+          begin
+            SetString(Chunk, PAnsiChar(@Buf[0]), BytesRead);
+            ResponseUtf8 := ResponseUtf8 + Chunk;
+          end;
         until BytesRead = 0;
 
         ErrorStage := 'completed';

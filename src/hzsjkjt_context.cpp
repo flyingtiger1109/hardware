@@ -49,6 +49,8 @@ void HzsjkjtContext::Reset() {
     rtsp_transport = "tcp";
     preview_check_hwnd_interval_ms = 500;
     process_active = false;
+    http_busy.store(false);
+    switch_pending.store(false);
 }
 
 } // namespace HZCYKJTHardWare

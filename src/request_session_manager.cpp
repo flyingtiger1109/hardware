@@ -22,6 +22,14 @@ private:
 };
 }
 
+static int64_t NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+static const int64_t kCompletedKeepMs = 10 * 60 * 1000;
+static const size_t kMaxCompletedRequests = 1024;
+
 RequestSessionManager& RequestSessionManager::Instance() {
     if (!g_pReqSessMgr) g_pReqSessMgr = new RequestSessionManager();
     return *g_pReqSessMgr;
@@ -97,13 +105,48 @@ bool RequestSessionManager::MarkAccepted(const std::string& requestId) {
 bool RequestSessionManager::MarkCallbackReceived(const std::string& requestId,
                                                    const std::string& callbackBody) {
     CriticalSectionGuard guard(&m_cs);
+    PruneCompletedLocked(NowMs());
+    if (m_completedRequests.find(requestId) != m_completedRequests.end()) {
+        LOG_WARN("RequestSession", "重复回调已忽略：request_id=%s，原因=已完成", requestId.c_str());
+        return false;
+    }
     auto it = m_sessions.find(requestId);
     if (it == m_sessions.end()) return false;
+    if (it->second->status == RequestStatus::CallbackReceived ||
+        it->second->status == RequestStatus::Completed) {
+        LOG_WARN("RequestSession", "重复回调已忽略：request_id=%s，status=%d",
+                 requestId.c_str(), static_cast<int>(it->second->status));
+        return false;
+    }
     it->second->status = RequestStatus::CallbackReceived;
     it->second->callback_body = callbackBody;
     it->second->callback_received = true;
     LOG_DEBUG("RequestSession", "异步请求已收到终端回调：request_id=%s", requestId.c_str());
     return true;
+}
+
+void RequestSessionManager::MarkCompleted(const std::string& requestId) {
+    if (requestId.empty()) return;
+    CriticalSectionGuard guard(&m_cs);
+    int64_t now = NowMs();
+    auto it = m_sessions.find(requestId);
+    if (it != m_sessions.end()) {
+        it->second->status = RequestStatus::Completed;
+        it->second->callback_body.clear();
+        it->second->callback_received = false;
+        m_sessions.erase(it);
+    }
+    m_completedRequests[requestId] = now;
+    PruneCompletedLocked(now);
+    LOG_DEBUG("RequestSession", "请求会话已完成并清理：request_id=%s", requestId.c_str());
+}
+
+bool RequestSessionManager::IsRecentlyCompleted(const std::string& requestId) {
+    if (requestId.empty()) return false;
+    CriticalSectionGuard guard(&m_cs);
+    int64_t now = NowMs();
+    PruneCompletedLocked(now);
+    return m_completedRequests.find(requestId) != m_completedRequests.end();
 }
 
 std::shared_ptr<RequestSession> RequestSessionManager::GetSession(const std::string& requestId) {
@@ -155,6 +198,40 @@ void RequestSessionManager::ExpireAllForTerminalSwitch() {
             kv.second->status = RequestStatus::Expired;
             LOG_DEBUG("RequestSession", "异步请求已过期：request_id=%s，原因=终端切换", kv.first.c_str());
         }
+    }
+}
+
+void RequestSessionManager::CancelAllForCallbackReset() {
+    CriticalSectionGuard guard(&m_cs);
+    for (auto& kv : m_sessions) {
+        if (kv.second->status == RequestStatus::Pending ||
+            kv.second->status == RequestStatus::Accepted ||
+            kv.second->status == RequestStatus::CallbackReceived) {
+            kv.second->status = RequestStatus::Cancelled;
+            kv.second->callback_body.clear();
+            kv.second->callback_received = false;
+            LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=第三方重新注册回调", kv.first.c_str());
+        }
+    }
+}
+
+void RequestSessionManager::PruneCompletedLocked(int64_t nowMs) {
+    for (auto it = m_completedRequests.begin(); it != m_completedRequests.end(); ) {
+        if (nowMs - it->second > kCompletedKeepMs) {
+            it = m_completedRequests.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    while (m_completedRequests.size() > kMaxCompletedRequests) {
+        auto oldest = m_completedRequests.begin();
+        for (auto it = m_completedRequests.begin(); it != m_completedRequests.end(); ++it) {
+            if (it->second < oldest->second) {
+                oldest = it;
+            }
+        }
+        m_completedRequests.erase(oldest);
     }
 }
 

@@ -8,6 +8,7 @@ enum class RequestStatus {
     Pending,
     Accepted,       // 终端已受理
     CallbackReceived,
+    Completed,
     Timeout,
     Cancelled,      // EndProcess 导致
     Expired,        // SwitchTerminal 导致
@@ -47,6 +48,10 @@ public:
     bool MarkCallbackReceived(const std::string& requestId,
                               const std::string& callbackBody);
 
+    void MarkCompleted(const std::string& requestId);
+
+    bool IsRecentlyCompleted(const std::string& requestId);
+
     // 获取会话
     std::shared_ptr<RequestSession> GetSession(const std::string& requestId);
 
@@ -59,6 +64,8 @@ public:
     // 将所有旧请求标记为过期（SwitchTerminal）
     void ExpireAllForTerminalSwitch();
 
+    void CancelAllForCallbackReset();
+
     // 获取所有 pending 请求数
     int GetPendingCount() const;
 
@@ -69,9 +76,11 @@ private:
     RequestSessionManager& operator=(const RequestSessionManager&) = delete;
 
     std::string GenerateRequestId(const std::string& prefix);
+    void PruneCompletedLocked(int64_t nowMs);
 
     mutable CRITICAL_SECTION m_cs;
     std::map<std::string, std::shared_ptr<RequestSession>> m_sessions;
+    std::map<std::string, int64_t> m_completedRequests;
     int m_seq = 0;
 };
 

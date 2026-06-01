@@ -44,6 +44,7 @@ type
     procedure ExecutePlayCommand;
     procedure ExecuteStopCommand;
     procedure ExecuteFreeCommand;
+    procedure ExecuteDetachCommand;
     procedure DoLog(const Msg: string);
     function ResTypeToTerminalPath(ResType: TPreviewResourceType): string;
     function ResTypeToLogName(ResType: TPreviewResourceType): string;
@@ -80,6 +81,66 @@ type
 implementation
 
 uses EncodingHelper;
+type
+  TVlcCleanupThread = class(TThread)
+  protected
+    procedure Execute; override;
+  end;
+
+const
+  MAX_ASYNC_VLC_CLEANUP_QUEUE = 32;
+
+var
+  GCleanupLock: TCriticalSection;
+  GCleanupEvent: TEvent;
+  GCleanupQueue: TList;
+  GCleanupThread1: TVlcCleanupThread;
+  GCleanupThread2: TVlcCleanupThread;
+
+procedure TVlcCleanupThread.Execute;
+var
+  Item: TObject;
+begin
+  while not Terminated do
+  begin
+    Item := nil;
+    GCleanupLock.Enter;
+    try
+      if GCleanupQueue.Count > 0 then
+      begin
+        Item := TObject(GCleanupQueue[0]);
+        GCleanupQueue.Delete(0);
+      end;
+    finally
+      GCleanupLock.Leave;
+    end;
+
+    if Item <> nil then
+    begin
+      try
+        Item.Free;
+      except
+      end;
+    end
+    else
+      GCleanupEvent.WaitFor(1000);
+  end;
+end;
+
+function QueueVlcForCleanup(Vlc: TVlcPlayer): Boolean;
+begin
+  Result := False;
+  if Vlc = nil then Exit;
+  GCleanupLock.Enter;
+  try
+    if GCleanupQueue.Count >= MAX_ASYNC_VLC_CLEANUP_QUEUE then Exit;
+    GCleanupQueue.Add(Vlc);
+    Result := True;
+  finally
+    GCleanupLock.Leave;
+  end;
+  if Result then GCleanupEvent.SetEvent;
+end;
 
 function ExtractJsonField(const Json, Key: string): string;
 var
@@ -185,6 +246,11 @@ begin
   FCommandVlc.Free;
 end;
 
+procedure TPreviewManager.ExecuteDetachCommand;
+begin
+  if FCommandVlc = nil then Exit;
+  FCommandVlc.DetachVideoWindow;
+end;
 function TPreviewManager.GetVlcPlayer(ResType: TPreviewResourceType;
   SessionType: TPreviewSessionType): TVlcPlayer;
 begin
@@ -474,16 +540,41 @@ begin
   Vlc := GetVlcPlayer(ResType, SessionType);
   if Vlc = nil then Exit;
 
-  FCommandVlc := Vlc;
-  RunOnMainThread(ExecuteStopCommand);
-  RunOnMainThread(ExecuteFreeCommand);
-  FCommandVlc := nil;
-  SetVlcPlayer(ResType, SessionType, nil);
-  SetTargetHwnd(ResType, SessionType, 0);
+  FPlayLock.Enter;
+  try
+    SetVlcPlayer(ResType, SessionType, nil);
+    SetTargetHwnd(ResType, SessionType, 0);
+    FCommandVlc := Vlc;
+    RunOnMainThread(ExecuteDetachCommand);
+    FCommandVlc := nil;
+  finally
+    FPlayLock.Leave;
+  end;
+
+  if not QueueVlcForCleanup(Vlc) then
+  begin
+    DoLog('[警告] [预览渲染] VLC后台释放队列已满，改为同步释放以避免资源无限增长。');
+    Vlc.Free;
+  end;
 
   DoLog(Format('[信息] [预览渲染] 预览已停止：resource=%s，session=%s。',
     [ResTypeToLogName(ResType), SessionTypeToLogName(SessionType)]));
   Result := True;
 end;
 
+initialization
+  GCleanupLock := TCriticalSection.Create;
+  GCleanupEvent := TEvent.Create(nil, False, False, '');
+  GCleanupQueue := TList.Create;
+  GCleanupThread1 := TVlcCleanupThread.Create(False);
+  GCleanupThread2 := TVlcCleanupThread.Create(False);
+
+finalization
+  if GCleanupThread1 <> nil then GCleanupThread1.Terminate;
+  if GCleanupThread2 <> nil then GCleanupThread2.Terminate;
+  if GCleanupEvent <> nil then
+  begin
+    GCleanupEvent.SetEvent;
+    GCleanupEvent.SetEvent;
+  end;
 end.

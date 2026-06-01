@@ -25,8 +25,6 @@ var
 
 implementation
 
-uses EncodingHelper;
-
 constructor TFileLogger.Create;
 var
   ExeDir: string;
@@ -57,10 +55,10 @@ end;
 procedure TFileLogger.WriteLog(const Msg: string);
 var
   FS: TFileStream;
-  LineUtf8: string;
+  LineAnsi: string;
 begin
-  LineUtf8 := AnsiToUtf8('[' + FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now) +
-    '] ' + Msg + #13#10);
+  LineAnsi := '[' + FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now) +
+    '] ' + Msg + #13#10;
   EnterCriticalSection(FLock);
   try
     InitLogFile;
@@ -70,8 +68,8 @@ begin
       FS := TFileStream.Create(FLogFileFull, fmCreate or fmShareDenyNone);
     try
       FS.Seek(0, soFromEnd);
-      if LineUtf8 <> '' then
-        FS.WriteBuffer(LineUtf8[1], Length(LineUtf8));
+      if LineAnsi <> '' then
+        FS.WriteBuffer(LineAnsi[1], Length(LineAnsi));
     finally
       FS.Free;
     end;

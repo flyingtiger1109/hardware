@@ -1,9 +1,9 @@
 object FormMain: TFormMain
-  Left = 295
-  Top = 148
+  Left = 291
+  Top = 134
   Width = 980
   Height = 680
-  Caption = 'HZCYKJTHardWare - '#21518#31471#26381#21153' '#30452#36830#32456#31471
+  Caption = 'HZCYKJTHardWare - '#21518#31471#26381#21153
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText

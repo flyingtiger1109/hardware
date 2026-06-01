@@ -42,6 +42,7 @@ private:
     FILE* m_file = nullptr;
     LogLevel m_level = LogLevel::Info;
     std::string m_logDir;
+    std::string m_currentLogPath;
 };
 
 } // namespace HZCYKJTHardWare

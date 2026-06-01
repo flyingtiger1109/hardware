@@ -52,6 +52,7 @@ type
     destructor Destroy; override;
     function Play(const Url: string; Hwnd: HWND; SourceWidth, SourceHeight: Integer;
       SwapLayoutDimensions: Boolean; NetworkCachingMs, LiveCachingMs: Integer): Boolean;
+    procedure DetachVideoWindow;
     procedure Stop;
     procedure Warmup;
     procedure SetLogProc(ALogProc: TVlcLogCallback);
@@ -385,6 +386,22 @@ begin
   Result := True;
 end;
 
+procedure TVlcPlayer.DetachVideoWindow;
+begin
+  if FMediaPlayer <> nil then
+  begin
+    if @Flibvlc_media_player_set_hwnd <> nil then
+      Flibvlc_media_player_set_hwnd(FMediaPlayer, nil);
+  end;
+  if FVideoHwnd <> 0 then
+  begin
+    ShowWindow(FVideoHwnd, SW_HIDE);
+    DestroyWindow(FVideoHwnd);
+    FVideoHwnd := 0;
+  end;
+  FHostHwnd := 0;
+  FRunning := False;
+end;
 procedure TVlcPlayer.Stop;
 begin
   if FMediaPlayer <> nil then

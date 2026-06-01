@@ -37,10 +37,11 @@ type
   private
     FOwner: TDelphiProxyServer;
     FTerminalIndex: Integer;
+    FSwitchGeneration: Integer;
   protected
     procedure Execute; override;
   public
-    constructor Create(AOwner: TDelphiProxyServer; TerminalIndex: Integer);
+    constructor Create(AOwner: TDelphiProxyServer; TerminalIndex, SwitchGeneration: Integer);
   end;
 
   TAsyncStopPreviewThread = class(TThread)
@@ -63,12 +64,13 @@ type
     FTerminalBaseUrl: string;
     FRequestId: string;
     FCallbackUrl: string;
+    FSwitchGeneration: Integer;
   protected
     procedure Execute; override;
   public
     constructor Create(AOwner: TDelphiProxyServer; ResType: TPreviewResourceType;
       SessionType: TPreviewSessionType; Hwnd: HWND; const TerminalBaseUrl,
-      RequestId, CallbackUrl: string);
+      RequestId, CallbackUrl: string; SwitchGeneration: Integer);
   end;
 
   TVlcWarmupThread = class(TThread)
@@ -91,6 +93,8 @@ type
     FPreviewManager: TPreviewManager;
     FRequestSaveDirs: TStringList;
     FRequestCallbacks: TStringList;
+    FRequestGenerations: TStringList;
+    FCompletedCallbacks: TStringList;
     FDelphiServerHost: string;
     FDelphiServerPort: Integer;
     FTerminalCallbackListenHost: string;
@@ -107,6 +111,10 @@ type
     FThirdPartyCameraHwnd: HWND;
     FThirdPartyFingerprintHwnd: HWND;
     FThirdPartyIrisHwnd: HWND;
+    FSwitchingTerminal: Boolean;
+    FSwitchGeneration: Integer;
+    FLastSwitchTick: DWORD;
+    FStateLock: TRTLCriticalSection;
     procedure DoLog(const Msg: string);
     function GenRequestId(const Prefix: string): string;
     function GetLocalLanIp: string;
@@ -116,6 +124,21 @@ type
     procedure LoadRuntimeConfig;
     procedure AutoStartPreviews;
     procedure AutoStopPreviews;
+    function ExecuteTerminalSwitch(Index, SwitchGeneration: Integer): Boolean;
+    function StartTerminalSwitchAsync(Index: Integer): Boolean;
+    function BeginTerminalSwitch(out SwitchGeneration: Integer): Boolean;
+    procedure EndTerminalSwitch(SwitchGeneration: Integer);
+    function IsTerminalSwitching: Boolean;
+    function CurrentSwitchGeneration: Integer;
+    function IsSwitchGenerationCurrent(SwitchGeneration: Integer): Boolean;
+    function ShouldDropUnknownCallback(const RequestId: string): Boolean;
+    procedure RememberRequestContext(const RequestId, SaveDir, CallbackUrl: string);
+    procedure GetRequestContext(const RequestId: string; out SaveDir, CallbackUrl: string; out RequestGeneration: Integer);
+    procedure ForgetRequestContext(const RequestId: string);
+    procedure ClearRequestContexts;
+    procedure PruneCompletedCallbacks;
+    procedure MarkCompletedCallback(const RequestId: string);
+    function IsCompletedCallback(const RequestId: string): Boolean;
     function HandleRequest(const Method, Path, BodyUtf8: string): string;
     function HandleTerminalCallback(const BodyUtf8: string): string;
     function MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
@@ -261,7 +284,7 @@ begin
 end;
 
 function HttpPostJson(const Url, BodyUtf8: string): Boolean;
-var WSA: TWSAData; Sock: TSocket; Addr: TSockAddrIn; Host, Path, Req, HostPort: string; Port, SlashPos, ColonPos: Integer; U: string;
+var WSA: TWSAData; Sock: TSocket; Addr: TSockAddrIn; Host, Path, Req, HostPort: string; Port, SlashPos, ColonPos, TimeoutMs: Integer; U: string;
 begin Result := False; U := Url; if Copy(U, 1, 7) = 'http://' then Delete(U, 1, 7);
   SlashPos := Pos('/', U); if SlashPos = 0 then Exit;
   HostPort := Copy(U, 1, SlashPos - 1); Path := Copy(U, SlashPos, MaxInt);
@@ -270,6 +293,9 @@ begin Result := False; U := Url; if Copy(U, 1, 7) = 'http://' then Delete(U, 1, 
   else begin Host := HostPort; Port := 80; end;
   if Host = '' then Exit; if WSAStartup($0202, WSA) <> 0 then Exit;
   try Sock := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if Sock = INVALID_SOCKET then Exit;
+    TimeoutMs := 3000;
+    setsockopt(Sock, SOL_SOCKET, SO_RCVTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
+    setsockopt(Sock, SOL_SOCKET, SO_SNDTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
     try FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET; Addr.sin_port := htons(Port);
       Addr.sin_addr.S_addr := inet_addr(PChar(Host)); if Addr.sin_addr.S_addr = INADDR_NONE then Exit;
       if connect(Sock, Addr, SizeOf(Addr)) <> 0 then Exit;
@@ -472,7 +498,7 @@ begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FList
 
 procedure TCallbackReceiverThread.Execute;
 var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..16383] of Char;
-  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen, CLPos, LineEnd: Integer;
+  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen, CLPos, LineEnd, TimeoutMs: Integer;
   Raw, Header, BodyUtf8, Response, ResponseBody, Chunk: string;
 begin if WSAStartup($0202, WSA) <> 0 then Exit;
   try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
@@ -494,6 +520,9 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     FOwner.DoLog('[信息] [终端回调] 终端回调地址为：' + FOwner.GetCallbackBase);
     while not Terminated do begin
       Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
+      TimeoutMs := 5000;
+      setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
+      setsockopt(Client, SOL_SOCKET, SO_SNDTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
       try Raw := '';
         repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
           if RecvLen > 0 then begin SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; end;
@@ -531,8 +560,8 @@ procedure TDelphiHttpServerThread.StopServer;
 begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; end; end;
 
 procedure TDelphiHttpServerThread.Execute;
-var WSA: TWSAData; Addr: TSockAddrIn; Client, DrainClient: TSocket; Buf: array[0..8191] of Char; Mode: Integer; Resp503: string;
-  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen: Integer;
+var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..8191] of Char;
+  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen, TimeoutMs: Integer;
   Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string; P1, P2, CLPos, LineEnd: Integer;
 begin if WSAStartup($0202, WSA) <> 0 then Exit;
   try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
@@ -552,6 +581,9 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     FOwner.DoLog('[信息] [服务] DLL通信服务程序已启动，http://' + FOwner.FDelphiServerHost + ':' +
       IntToStr(FOwner.FDelphiServerPort));
     while not Terminated do begin Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
+      TimeoutMs := 5000;
+      setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
+      setsockopt(Client, SOL_SOCKET, SO_SNDTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
       try Raw := '';
         repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
           if RecvLen > 0 then begin SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; end;
@@ -576,26 +608,6 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
           'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
         send(Client, Response[1], Length(Response), 0);
       finally closesocket(Client); end;
-      // Drain queued connections to prevent backlog overflow
-      try
-        Mode := 1;
-        ioctlsocket(FListenSocket, FIONBIO, Mode);
-        while True do begin
-          DrainClient := accept(FListenSocket, nil, nil);
-          if DrainClient = INVALID_SOCKET then Break;
-          Resp503 := 'HTTP/1.1 503 Service Busy'#13#10 +
-            'Content-Type: application/json; charset=utf-8'#13#10 +
-            'Content-Length: 25'#13#10 +
-            'Connection: close'#13#10#13#10 +
-            '{"error":true,"code":"busy"}';
-          send(DrainClient, Resp503[1], Length(Resp503), 0);
-          closesocket(DrainClient);
-        end;
-        Mode := 0;
-        ioctlsocket(FListenSocket, FIONBIO, Mode);
-      except
-        // Ignore drain errors
-      end;
     end;
   finally if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; WSACleanup; end;
 end;
@@ -603,17 +615,18 @@ end;
 // ============================================================
 // TAsyncSwitchThread
 // ============================================================
-constructor TAsyncSwitchThread.Create(AOwner: TDelphiProxyServer; TerminalIndex: Integer);
+constructor TAsyncSwitchThread.Create(AOwner: TDelphiProxyServer; TerminalIndex, SwitchGeneration: Integer);
 begin
   inherited Create(False);
   FreeOnTerminate := True;
   FOwner := AOwner;
   FTerminalIndex := TerminalIndex;
+  FSwitchGeneration := SwitchGeneration;
 end;
 
 procedure TAsyncSwitchThread.Execute;
 begin
-  FOwner.SwitchTerminalDirect(FTerminalIndex);
+  FOwner.ExecuteTerminalSwitch(FTerminalIndex, FSwitchGeneration);
 end;
 
 // ============================================================
@@ -640,7 +653,8 @@ end;
 // ============================================================
 constructor TAsyncStartPreviewThread.Create(AOwner: TDelphiProxyServer;
   ResType: TPreviewResourceType; SessionType: TPreviewSessionType;
-  Hwnd: HWND; const TerminalBaseUrl, RequestId, CallbackUrl: string);
+  Hwnd: HWND; const TerminalBaseUrl, RequestId, CallbackUrl: string;
+  SwitchGeneration: Integer);
 begin
   inherited Create(False);
   FreeOnTerminate := True;
@@ -651,6 +665,7 @@ begin
   FTerminalBaseUrl := TerminalBaseUrl;
   FRequestId := RequestId;
   FCallbackUrl := CallbackUrl;
+  FSwitchGeneration := SwitchGeneration;
 end;
 
 procedure TAsyncStartPreviewThread.Execute;
@@ -664,8 +679,14 @@ begin
     prtIris: ResourceType := 'iris_image';
     else ResourceType := 'unknown';
   end;
+  if not FOwner.IsSwitchGenerationCurrent(FSwitchGeneration) then Exit;
   if FOwner.FPreviewManager.StartPreview(FResType, FSessionType, FHwnd, FTerminalBaseUrl) then
   begin
+    if not FOwner.IsSwitchGenerationCurrent(FSwitchGeneration) then
+    begin
+      FOwner.FPreviewManager.StopPreview(FResType, FSessionType);
+      Exit;
+    end;
     FOwner.DoLog('[信息] [异步预览] 已开始: resource=' + ResourceType +
       ', request_id=' + FRequestId);
     PayloadUtf8 := '{' +
@@ -673,10 +694,15 @@ begin
       JsonStr('resource_type', ResourceType) + ',' +
       JsonInt('render_hwnd', FOwner.FPreviewManager.GetRenderHwnd(FResType, FSessionType)) + ',' +
       JsonInt('delphi_host_hwnd', FOwner.FPreviewManager.GetDefaultHostHwnd(FResType)) + '}';
-    FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8);
+    if FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8) then
+    begin
+      FOwner.MarkCompletedCallback(FRequestId);
+      FOwner.ForgetRequestContext(FRequestId);
+    end;
   end
   else
   begin
+    if not FOwner.IsSwitchGenerationCurrent(FSwitchGeneration) then Exit;
     FOwner.DoLog('[错误] [异步预览] 失败: resource=' + ResourceType +
       ', request_id=' + FRequestId);
     Exclude(FOwner.FExternalActivePreviews, FResType);
@@ -690,7 +716,11 @@ begin
       JsonStr('resource_type', ResourceType) + ',' +
       JsonInt('render_hwnd', FHwnd) + ',' +
       '"error":true,"code":"preview_failed"}';
-    FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8);
+    if FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8) then
+    begin
+      FOwner.MarkCompletedCallback(FRequestId);
+      FOwner.ForgetRequestContext(FRequestId);
+    end;
   end;
 end;
 
@@ -725,6 +755,10 @@ begin inherited Create;
   FCallbackParser := TCallbackParser.Create; FFileSaver := TFileSaver.Create;
   FPreviewManager := TPreviewManager.Create(ACameraPanel, AFingerprintPanel, AIrisPanel);
   FRequestSaveDirs := TStringList.Create; FRequestCallbacks := TStringList.Create;
+  FRequestGenerations := TStringList.Create;
+  FCompletedCallbacks := TStringList.Create;
+  InitializeCriticalSection(FStateLock);
+  FSwitchingTerminal := False; FSwitchGeneration := 0; FLastSwitchTick := 0;
   FThread := nil; FCallbackThread := nil; FLogProc := nil; FLanIp := '127.0.0.1';
   FLocalActivePreviews := [];
   FExternalActivePreviews := [];
@@ -732,7 +766,7 @@ begin inherited Create;
 end;
 
 destructor TDelphiProxyServer.Destroy;
-begin Stop; FRequestSaveDirs.Free; FRequestCallbacks.Free; FPreviewManager.Free;
+begin Stop; FRequestSaveDirs.Free; FRequestCallbacks.Free; FRequestGenerations.Free; FCompletedCallbacks.Free; DeleteCriticalSection(FStateLock); FPreviewManager.Free;
   FFileSaver.Free; FCallbackParser.Free; FTerminalClient.Free; FTerminalManager.Free; inherited Destroy; end;
 
 procedure TDelphiProxyServer.SetLogProc(ALogProc: TLogCallback);
@@ -767,7 +801,182 @@ function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, Payloa
 begin Result := False; if DllCallbackUrl = '' then Exit;
   DoLog('[信息] [DLL回调] 正在向DLL回传异步结果，url=' + DllCallbackUrl +
     '，body_size=' + IntToStr(Length(PayloadUtf8)));
-  HttpPostJson(DllCallbackUrl, PayloadUtf8); Result := True; end;
+  Result := HttpPostJson(DllCallbackUrl, PayloadUtf8); end;
+
+function TDelphiProxyServer.BeginTerminalSwitch(out SwitchGeneration: Integer): Boolean;
+begin
+  Result := False;
+  SwitchGeneration := 0;
+  EnterCriticalSection(FStateLock);
+  try
+    if FSwitchingTerminal then begin
+      SwitchGeneration := FSwitchGeneration;
+      Exit;
+    end;
+    Inc(FSwitchGeneration);
+    FSwitchingTerminal := True;
+    FLastSwitchTick := GetTickCount;
+    SwitchGeneration := FSwitchGeneration;
+    Result := True;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.EndTerminalSwitch(SwitchGeneration: Integer);
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    if FSwitchGeneration = SwitchGeneration then begin
+      FSwitchingTerminal := False;
+      FLastSwitchTick := GetTickCount;
+    end;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TDelphiProxyServer.IsTerminalSwitching: Boolean;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FSwitchingTerminal;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TDelphiProxyServer.CurrentSwitchGeneration: Integer;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FSwitchGeneration;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TDelphiProxyServer.IsSwitchGenerationCurrent(SwitchGeneration: Integer): Boolean;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FSwitchGeneration = SwitchGeneration;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TDelphiProxyServer.ShouldDropUnknownCallback(const RequestId: string): Boolean;
+begin
+  Result := False;
+  if RequestId = '' then Exit;
+  EnterCriticalSection(FStateLock);
+  try
+    Result := (FRequestGenerations.IndexOfName(RequestId) < 0) and
+      (FLastSwitchTick <> 0) and (Integer(GetTickCount - FLastSwitchTick) < 30000);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.RememberRequestContext(const RequestId, SaveDir, CallbackUrl: string);
+var ResolvedSaveDir: string;
+begin
+  if RequestId = '' then Exit;
+  ResolvedSaveDir := SafeResolveSaveDir(SaveDir);
+  EnterCriticalSection(FStateLock);
+  try
+    FRequestSaveDirs.Values[RequestId] := ResolvedSaveDir;
+    FRequestCallbacks.Values[RequestId] := CallbackUrl;
+    FRequestGenerations.Values[RequestId] := IntToStr(FSwitchGeneration);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.GetRequestContext(const RequestId: string; out SaveDir, CallbackUrl: string; out RequestGeneration: Integer);
+begin
+  SaveDir := '';
+  CallbackUrl := '';
+  RequestGeneration := -1;
+  if RequestId = '' then Exit;
+  EnterCriticalSection(FStateLock);
+  try
+    SaveDir := FRequestSaveDirs.Values[RequestId];
+    CallbackUrl := FRequestCallbacks.Values[RequestId];
+    RequestGeneration := StrToIntDef(FRequestGenerations.Values[RequestId], -1);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.ForgetRequestContext(const RequestId: string);
+var I: Integer;
+begin
+  if RequestId = '' then Exit;
+  EnterCriticalSection(FStateLock);
+  try
+    I := FRequestSaveDirs.IndexOfName(RequestId); if I >= 0 then FRequestSaveDirs.Delete(I);
+    I := FRequestCallbacks.IndexOfName(RequestId); if I >= 0 then FRequestCallbacks.Delete(I);
+    I := FRequestGenerations.IndexOfName(RequestId); if I >= 0 then FRequestGenerations.Delete(I);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.ClearRequestContexts;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    FRequestSaveDirs.Clear;
+    FRequestCallbacks.Clear;
+    FRequestGenerations.Clear;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.PruneCompletedCallbacks;
+var I: Integer; TickNow, TickSaved: DWORD;
+begin
+  TickNow := GetTickCount;
+  EnterCriticalSection(FStateLock);
+  try
+    for I := FCompletedCallbacks.Count - 1 downto 0 do
+    begin
+      TickSaved := DWORD(StrToInt64Def(FCompletedCallbacks.ValueFromIndex[I], 0));
+      if (Integer(TickNow - TickSaved) > 600000) or (FCompletedCallbacks.Count > 1024) then
+        FCompletedCallbacks.Delete(I);
+    end;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+procedure TDelphiProxyServer.MarkCompletedCallback(const RequestId: string);
+begin
+  if RequestId = '' then Exit;
+  EnterCriticalSection(FStateLock);
+  try
+    FCompletedCallbacks.Values[RequestId] := IntToStr(GetTickCount);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+  PruneCompletedCallbacks;
+end;
+
+function TDelphiProxyServer.IsCompletedCallback(const RequestId: string): Boolean;
+begin
+  Result := False;
+  if RequestId = '' then Exit;
+  PruneCompletedCallbacks;
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FCompletedCallbacks.IndexOfName(RequestId) >= 0;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
 
 // ============================================================
 // AUTO PREVIEWS
@@ -844,30 +1053,69 @@ end;
 // ============================================================
 // DIRECT METHODS
 // ============================================================
-function TDelphiProxyServer.SwitchTerminalDirect(Index: Integer): Boolean;
+function TDelphiProxyServer.ExecuteTerminalSwitch(Index, SwitchGeneration: Integer): Boolean;
 var
   TotalTick, PhaseTick: DWORD;
 begin
   Result := False;
   TotalTick := GetTickCount;
+  try
+    ClearRequestContexts;
+    PhaseTick := GetTickCount;
+    AutoStopPreviews;
+    DoLog(Format('[PERF] terminal switch stop previews cost=%dms', [Integer(GetTickCount - PhaseTick)]));
+    PhaseTick := GetTickCount;
+    FTerminalManager.SwitchTo(Index);
+    DoLog(Format('[PERF] terminal manager switch cost=%dms', [Integer(GetTickCount - PhaseTick)]));
+    PhaseTick := GetTickCount;
+    AutoStartPreviews;
+    DoLog(Format('[PERF] terminal switch restart previews cost=%dms', [Integer(GetTickCount - PhaseTick)]));
+    DoLog(Format('[PERF] terminal switch total cost=%dms', [Integer(GetTickCount - TotalTick)]));
+    Result := True;
+  except
+    on E: Exception do
+      DoLog('[错误] [终端切换] 后台切换异常：' + E.Message);
+  end;
+  EndTerminalSwitch(SwitchGeneration);
+end;
+
+function TDelphiProxyServer.StartTerminalSwitchAsync(Index: Integer): Boolean;
+var
+  SwitchGeneration: Integer;
+begin
+  Result := False;
   if (Index < 1) or (Index > 2) then Exit;
-  if FTerminalManager.IsSameTerminal(Index) then begin
-    DoLog('[信息] [终端切换] 已处于当目标终端，跳过切换');
+  if FTerminalManager.IsSameTerminal(Index) then
+  begin
+    Result := True;
     Exit;
   end;
-  DoLog('[信息] [终端切换] 正在切换到终端' + IntToStr(FTerminalManager.CurrentIndex) + ' -> ??，' + IntToStr(Index));
-  PhaseTick := GetTickCount;
-  AutoStopPreviews;
-  DoLog(Format('[性能] 终端切换停止 耗时=%d毫秒', [Integer(GetTickCount - PhaseTick)]));
-  PhaseTick := GetTickCount;
-  FTerminalManager.SwitchTo(Index);
-  DoLog(Format('[性能] 终端管理器切换 耗时=%d毫秒', [Integer(GetTickCount - PhaseTick)]));
-  DoLog('[信息] [终端切换] 当前终端已切换为：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
-  PhaseTick := GetTickCount;
-  AutoStartPreviews;
-  DoLog(Format('[性能] 终端切换启动 耗时=%d毫秒', [Integer(GetTickCount - PhaseTick)]));
-  DoLog(Format('[性能] 终端切换总耗时=%d毫秒', [Integer(GetTickCount - TotalTick)]));
-  Result := True;
+  if not BeginTerminalSwitch(SwitchGeneration) then Exit;
+  try
+    TAsyncSwitchThread.Create(Self, Index, SwitchGeneration);
+    Result := True;
+    DoLog(Format('[信息] [终端切换] 已受理后台切换请求：terminal=%d，generation=%d', [Index, SwitchGeneration]));
+  except
+    on E: Exception do
+    begin
+      EndTerminalSwitch(SwitchGeneration);
+      DoLog('[错误] [终端切换] 创建后台切换线程失败：' + E.Message);
+    end;
+  end;
+end;
+
+function TDelphiProxyServer.SwitchTerminalDirect(Index: Integer): Boolean;
+var
+  SwitchGeneration: Integer;
+begin
+  Result := False;
+  if (Index < 1) or (Index > 2) then Exit;
+  if FTerminalManager.IsSameTerminal(Index) then begin
+    Result := True;
+    Exit;
+  end;
+  if not BeginTerminalSwitch(SwitchGeneration) then Exit;
+  Result := ExecuteTerminalSwitch(Index, SwitchGeneration);
 end;
 function TDelphiProxyServer.StartProcessDirect(const SaveDir: string): Boolean;
 var BaseUrl, BodyUtf8, ResponseUtf8, ResolvedSaveDir: string;
@@ -891,7 +1139,7 @@ end;
 
 function TDelphiProxyServer.EndProcessDirect: Boolean;
 begin FTerminalManager.ProcessActive := False; FTerminalManager.ProcessSaveDir := '';
-  FRequestSaveDirs.Clear; FRequestCallbacks.Clear; DoLog('[信息] [流程] 流程已结束。'); Result := True; end;
+  ClearRequestContexts; DoLog('[信息] [流程] 流程已结束。'); Result := True; end;
 
 function TDelphiProxyServer.CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FaceResult: TImageCallbackResult;
@@ -938,7 +1186,7 @@ begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenReq
   if not FTerminalClient.PostJson(BaseUrl, '/resources/ocr-document/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] OCR识别指令发送到终端失败。'); Result := ''; Exit; end;
-  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  RememberRequestContext(Result, SaveDir, '');
   DoLog('[信息] [OCR识别] 正在等待终端回调...' + CallbackUrl); end;
 
 function TDelphiProxyServer.RequestNfcDirect(const SaveDir: string): string;
@@ -949,7 +1197,7 @@ begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenReq
   if not FTerminalClient.PostJson(BaseUrl, '/resources/nfc-card/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] IC卡识别指令发送到终端失败。'); Result := ''; Exit; end;
-  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  RememberRequestContext(Result, SaveDir, '');
   DoLog('[信息] [IC卡识别] 正在等待刷卡回调...'); end;
 
 function TDelphiProxyServer.CaptureIrisDirect(const SaveDir: string): string;
@@ -960,7 +1208,7 @@ begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenReq
   if not FTerminalClient.PostJson(BaseUrl, '/resources/iris/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] 虹膜抓拍指令发送到终端失败。'); Result := ''; Exit; end;
-  FRequestSaveDirs.Values[Result] := SafeResolveSaveDir(SaveDir);
+  RememberRequestContext(Result, SaveDir, '');
   DoLog('[信息] [虹膜抓拍] 正在等待终端回调...'); end;
 
 function TDelphiProxyServer.StartCameraPreviewDirect: Boolean;
@@ -1007,21 +1255,25 @@ begin
   CallbackUrl := ExtractJsonString(BodyUtf8, 'callback_url');
   if SaveDir = '' then SaveDir := FTerminalManager.ProcessSaveDir;
   if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
-  if (CallbackUrl <> '') and (RequestId <> '') then begin
-    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
-    FRequestCallbacks.Values[RequestId] := CallbackUrl; end;
   TerminalBaseUrl := FTerminalManager.CurrentBaseUrl;
 
   if Path = '/terminal/switch' then begin
     TerminalIndex := ExtractJsonInt(BodyUtf8, 'terminal_index');
     if (TerminalIndex < 1) or (TerminalIndex > 2) then begin
       Result := '{"error":true,"code":"invalid_terminal_index"}'; Exit; end;
-    if FTerminalManager.IsSameTerminal(TerminalIndex) then begin
-      Result := '{"status":"ok","terminal_index":' + IntToStr(TerminalIndex) + ',"same_terminal":true}'; end
-    else begin
-      TAsyncSwitchThread.Create(Self, TerminalIndex);
-      Result := '{"status":"ok","terminal_index":' + IntToStr(TerminalIndex) + '}'; end;
+    if IsTerminalSwitching then begin
+      Result := '{"error":true,"code":"terminal_switching"}'; Exit; end;
+    if StartTerminalSwitchAsync(TerminalIndex) then
+      Result := '{"status":"ok","accepted":true,"terminal_index":' + IntToStr(TerminalIndex) + '}'
+    else
+      Result := '{"error":true,"code":"switch_failed","terminal_index":' + IntToStr(TerminalIndex) + '}';
     Exit; end;
+
+  if IsTerminalSwitching then begin
+    Result := '{"error":true,"code":"terminal_switching"}'; Exit; end;
+
+  if (CallbackUrl <> '') and (RequestId <> '') then
+    RememberRequestContext(RequestId, SaveDir, CallbackUrl);
 
   if Path = '/process/start' then begin
     if StartProcessDirect(SaveDir) then
@@ -1043,8 +1295,7 @@ begin
 
   if Path = '/capture/iris' then begin
     DllCallbackUrl := CallbackUrl;
-    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
-    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    RememberRequestContext(RequestId, SaveDir, DllCallbackUrl);
     Client := TTerminalClient.Create;
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/iris/request',
@@ -1055,8 +1306,7 @@ begin
 
   if Path = '/ocr' then begin
     DllCallbackUrl := CallbackUrl;
-    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
-    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    RememberRequestContext(RequestId, SaveDir, DllCallbackUrl);
     Client := TTerminalClient.Create;
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/ocr-document/request',
@@ -1067,8 +1317,7 @@ begin
 
   if Path = '/nfc' then begin
     DllCallbackUrl := CallbackUrl;
-    FRequestSaveDirs.Values[RequestId] := SafeResolveSaveDir(SaveDir);
-    FRequestCallbacks.Values[RequestId] := DllCallbackUrl;
+    RememberRequestContext(RequestId, SaveDir, DllCallbackUrl);
     Client := TTerminalClient.Create;
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/nfc-card/request',
@@ -1103,7 +1352,7 @@ begin
     DoLog('[信息] [DLL请求] DLL下发摄像头预览，target_hwnd=' + IntToStr(ThirdPartyHwndVal));
     Include(FExternalActivePreviews, prtCamera);
     TAsyncStartPreviewThread.Create(Self, prtCamera, pstExternal,
-      ThirdPartyHwndVal, TerminalBaseUrl, RequestId, CallbackUrl);
+      ThirdPartyHwndVal, TerminalBaseUrl, RequestId, CallbackUrl, CurrentSwitchGeneration);
     Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/camera/stop' then begin TAsyncStopPreviewThread.Create(Self, prtCamera, pstExternal); Exclude(FExternalActivePreviews, prtCamera); FThirdPartyCameraHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
@@ -1116,7 +1365,7 @@ begin
     FThirdPartyFingerprintHwnd := FpHwnd;
     Include(FExternalActivePreviews, prtFingerprint);
     TAsyncStartPreviewThread.Create(Self, prtFingerprint, pstExternal,
-      FpHwnd, TerminalBaseUrl, RequestId, CallbackUrl);
+      FpHwnd, TerminalBaseUrl, RequestId, CallbackUrl, CurrentSwitchGeneration);
     Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/fingerprint/stop' then begin TAsyncStopPreviewThread.Create(Self, prtFingerprint, pstExternal); Exclude(FExternalActivePreviews, prtFingerprint); FThirdPartyFingerprintHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
@@ -1129,7 +1378,7 @@ begin
     FThirdPartyIrisHwnd := IrisHwnd;
     Include(FExternalActivePreviews, prtIris);
     TAsyncStartPreviewThread.Create(Self, prtIris, pstExternal,
-      IrisHwnd, TerminalBaseUrl, RequestId, CallbackUrl);
+      IrisHwnd, TerminalBaseUrl, RequestId, CallbackUrl, CurrentSwitchGeneration);
     Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/iris/stop' then begin TAsyncStopPreviewThread.Create(Self, prtIris, pstExternal); Exclude(FExternalActivePreviews, prtIris); FThirdPartyIrisHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
@@ -1147,7 +1396,10 @@ begin
       ',"CSRQ":"' + ExtractJsonString(BodyUtf8, 'CSRQ') + '"' +
       ',"KADM":"' + ExtractJsonString(BodyUtf8, 'KADM') + '"' +
       ',"message":"' + #$E5#$90#$8C#$E6#$84#$8F#$E6#$8E#$88#$E6#$9D#$83 + '"}';
-    MakeCallback(RequestId, CallbackUrl, PayloadUtf8);
+    if MakeCallback(RequestId, CallbackUrl, PayloadUtf8) then begin
+      MarkCompletedCallback(RequestId);
+      ForgetRequestContext(RequestId);
+    end;
     Result := '{"accepted":true}'; Exit;
   end;
 
@@ -1158,6 +1410,7 @@ begin
 // ============================================================
 function TDelphiProxyServer.HandleTerminalCallback(const BodyUtf8: string): string;
 var ResourceType, RequestId, DllCallbackUrl, SaveDir, SavePath, PayloadUtf8: string;
+  RequestGeneration: Integer;
   OcrResult: TOcrCallbackResult; NfcResult: TNfcCallbackResult; ImgResult: TImageCallbackResult;
   I: Integer; ImgPath, ImgName: string; SL: TStringList;
 begin
@@ -1165,8 +1418,24 @@ begin
   RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
   DoLog('[信息] [终端回调] 收到终端回调，resource_type=' + ResourceType + '?，request_id=' + RequestId);
 
-  SaveDir := FRequestSaveDirs.Values[RequestId];
-  DllCallbackUrl := FRequestCallbacks.Values[RequestId];
+  if IsCompletedCallback(RequestId) then begin
+    Result := '{"status":"ignored","code":"duplicate_callback"}';
+    Exit;
+  end;
+  if IsTerminalSwitching then begin
+    Result := '{"status":"ignored","code":"terminal_switching"}';
+    Exit;
+  end;
+  if ShouldDropUnknownCallback(RequestId) then begin
+    Result := '{"status":"ignored","code":"stale_terminal_callback"}';
+    Exit;
+  end;
+  GetRequestContext(RequestId, SaveDir, DllCallbackUrl, RequestGeneration);
+  if (RequestGeneration >= 0) and (RequestGeneration <> CurrentSwitchGeneration) then begin
+    ForgetRequestContext(RequestId);
+    Result := '{"status":"ignored","code":"stale_terminal_callback"}';
+    Exit;
+  end;
   if SaveDir = '' then SaveDir := FTerminalManager.ProcessSaveDir;
   if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
 
@@ -1204,7 +1473,10 @@ begin
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('mrz', OcrResult.Mrz) + ',' +
           JsonStr('save_path', AnsiToUtf8(SavePath)) + '}';
-        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+        if MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8) then begin
+          MarkCompletedCallback(RequestId);
+          ForgetRequestContext(RequestId);
+        end; end; end
     else DoLog('[错误] [OCR回调] 识别结果解析失败。'); end
 
   else if ResourceType = 'nfc_card' then begin
@@ -1214,7 +1486,10 @@ begin
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/nfc-card');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('card_text', NfcResult.CardText) + '}';
-        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+        if MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8) then begin
+          MarkCompletedCallback(RequestId);
+          ForgetRequestContext(RequestId);
+        end; end; end
     else DoLog('[错误] [IC卡回调] 回调解析失败，未找到card_text。'); end
 
   else if ResourceType = 'iris_image' then begin
@@ -1224,7 +1499,10 @@ begin
       DoLog('[信息] [虹膜回调] 图片保存成功，save_path=' + SavePath);
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('save_path', AnsiToUtf8(SavePath)) + '}';
-        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8); end; end
+        if MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8) then begin
+          MarkCompletedCallback(RequestId);
+          ForgetRequestContext(RequestId);
+        end; end; end
     else DoLog('[错误] [虹膜回调] 回调解析失败。'); end
 
   else if ResourceType = 'face_image' then begin

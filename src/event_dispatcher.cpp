@@ -60,6 +60,8 @@ static bool IsOcrPortraitImage(const EvidenceImage& img) {
 }
 
 namespace { EventDispatcher* g_pEventDisp = nullptr; }
+static const size_t kMaxEventQueueSize = 512;
+static const size_t kMaxPendingCallbackQueueSize = 512;
 
 EventDispatcher& EventDispatcher::Instance() {
     if (!g_pEventDisp) g_pEventDisp = new EventDispatcher();
@@ -87,14 +89,34 @@ void EventDispatcher::Stop() {
 }
 
 void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
+    bool callbackChanged = false;
     EnterCriticalSection(&m_cs);
+    callbackChanged = (callback != nullptr && m_callback != callback);
     m_callback = callback;
+    if (callbackChanged) {
+        std::queue<HZCYKJTHardWare_EVENT> emptyEvents;
+        std::queue<EventStrings> emptyStrings;
+        std::queue<CallbackData> emptyCallbacks;
+        m_queue.swap(emptyEvents);
+        m_stringsQueue.swap(emptyStrings);
+        m_pendingCallbacks.swap(emptyCallbacks);
+    }
     LeaveCriticalSection(&m_cs);
+    if (callbackChanged) {
+        RequestSessionManager::Instance().CancelAllForCallbackReset();
+    }
     LOG_INFO("EventDispatcher", "第三方事件回调已注册：callback=%p", callback);
 }
 
 void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
     EnterCriticalSection(&m_cs);
+    if (m_queue.size() >= kMaxEventQueueSize) {
+        LOG_WARN("EventDispatcher", "第三方事件队列已满，丢弃最旧事件：queue_size=%zu", m_queue.size());
+        m_queue.pop();
+        if (!m_stringsQueue.empty()) {
+            m_stringsQueue.pop();
+        }
+    }
     EventStrings strs;
     strs.request_id = event.request_id ? event.request_id : "";
     strs.resource_type = event.resource_type ? event.resource_type : "";
@@ -125,6 +147,10 @@ void EventDispatcher::PostCallbackData(const CallbackData& cbData) {
 
     // 投递到 worker 线程处理，不阻塞 HTTP 线程
     EnterCriticalSection(&m_cs);
+    if (m_pendingCallbacks.size() >= kMaxPendingCallbackQueueSize) {
+        LOG_WARN("EventDispatcher", "Delphi回调处理队列已满，丢弃最旧回调：queue_size=%zu", m_pendingCallbacks.size());
+        m_pendingCallbacks.pop();
+    }
     m_pendingCallbacks.push(cbData);
     LeaveCriticalSection(&m_cs);
     WakeConditionVariable(&m_cv);
@@ -137,7 +163,6 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     std::string resourceType;
     bool isPreviewReady = false;
     if (path.find("/preview-ready") != std::string::npos) {
-        resourceType = HZCYKJTHardWare_RESOURCE_FACE_IMAGE;
         isPreviewReady = true;
     } else if (path.find("/ocr") != std::string::npos) {
         resourceType = HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT;
@@ -164,6 +189,12 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     }
 
     auto& sessionMgr = RequestSessionManager::Instance();
+    if (sessionMgr.IsRecentlyCompleted(requestId)) {
+        LOG_WARN("EventDispatcher", "Delphi程序重复回调已忽略：request_id=%s，path=%s",
+                 requestId.c_str(), path.c_str());
+        return;
+    }
+
     auto session = sessionMgr.GetSession(requestId);
     if (!session) {
         bool processActive = false;
@@ -231,13 +262,19 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
     if (session->status == RequestStatus::Expired ||
         session->status == RequestStatus::Cancelled ||
-        session->status == RequestStatus::Timeout) {
+        session->status == RequestStatus::Timeout ||
+        session->status == RequestStatus::CallbackReceived ||
+        session->status == RequestStatus::Completed) {
         LOG_DEBUG("EventDispatcher", "Delphi程序回调已忽略：request_id=%s，status=%d",
                   requestId.c_str(), static_cast<int>(session->status));
         return;
     }
 
-    sessionMgr.MarkCallbackReceived(requestId, body);
+    if (!sessionMgr.MarkCallbackReceived(requestId, body)) {
+        LOG_WARN("EventDispatcher", "Delphi程序重复回调已忽略：request_id=%s，path=%s",
+                 requestId.c_str(), path.c_str());
+        return;
+    }
 
     std::string errorCode;
     std::string errorMsg;
@@ -276,6 +313,8 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             ProcessAuthorizeCallback(requestId, body);
         }
     }
+
+    sessionMgr.MarkCompleted(requestId);
 }
 
 #if 0
@@ -687,6 +726,23 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     std::string resourceType = JsonHelper::GetString(body, "resource_type");
     if (resourceType.empty()) {
         resourceType = HZCYKJTHardWare_RESOURCE_FACE_IMAGE;
+    }
+
+    // 检查异步预览失败回调（适配 Delphi 468157e TAsyncStartPreviewThread）
+    std::string errorCode, errorMsg;
+    if (IsDelphiErrorResponse(body, errorCode, errorMsg)) {
+        int failedEventType = HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED;
+        if (resourceType == HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE) {
+            failedEventType = HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_FAILED;
+        } else if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
+            failedEventType = HZCYKJTHardWare_EVENT_IRIS_PREVIEW_FAILED;
+        }
+        LOG_ERROR("EventDispatcher", "Delphi异步预览启动失败：request_id=%s，resource=%s，code=%s，msg=%s",
+                  requestId.c_str(), resourceType.c_str(), errorCode.c_str(), errorMsg.c_str());
+        SendEvent(requestId, resourceType, failedEventType,
+                  HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
+                  nullptr, body.c_str());
+        return;
     }
 
     auto& ctx = HzsjkjtContext::Instance();

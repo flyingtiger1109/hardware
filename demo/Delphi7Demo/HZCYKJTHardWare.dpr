@@ -7,6 +7,8 @@ uses
   VlcPlayer in 'VlcPlayer.pas',
   PreviewManager in 'PreviewManager.pas';
 
+{$R *.res}
+
 begin
   Application.Initialize;
   Application.Title := 'HZCYKJTHardWare Delphi Service Demo';

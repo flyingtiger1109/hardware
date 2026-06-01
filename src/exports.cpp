@@ -33,6 +33,28 @@ struct BusyGuard {
     }
 };
 
+struct SwitchPendingScope {
+    std::atomic<bool>& flag;
+    bool acquired;
+
+    explicit SwitchPendingScope(std::atomic<bool>& switchFlag)
+        : flag(switchFlag), acquired(false) {
+        bool expected = false;
+        acquired = flag.compare_exchange_strong(expected, true);
+    }
+
+    ~SwitchPendingScope() {
+        if (acquired) {
+            flag.store(false);
+        }
+    }
+};
+
+// 检查终端切换是否进行中；切换期间拒绝新操作，保证切换优先
+static bool IsSwitchPending() {
+    return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
+}
+
 static std::string GenerateSyncRequestId(const char* prefix) {
     static std::atomic<int> seq{0};
     int currentSeq = ++seq;
@@ -589,6 +611,12 @@ static int SwitchTerminalBody(int terminalIndex) {
         }
     }
 
+    SwitchPendingScope switchScope(ctx.switch_pending);
+    if (!switchScope.acquired) {
+        LOG_WARN("EXPORT", "终端切换请求被拒绝：已有切换正在执行，terminal_index=%d", terminalIndex);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+
     RequestSessionManager::Instance().ExpireAllForTerminalSwitch();
 
     bool irisRunning = false;
@@ -625,7 +653,7 @@ static int SwitchTerminalBody(int terminalIndex) {
         return restoreRet == HZCYKJTHardWare_RET_OK ? HZCYKJTHardWare_RET_HTTP_FAILED : restoreRet;
     }
 
-    LOG_INFO("EXPORT", "终端切换请求已转发Delphi程序：terminal_index=%d", terminalIndex);
+    LOG_INFO("EXPORT", "终端切换已完成：terminal_index=%d", terminalIndex);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -692,8 +720,16 @@ static int StartProcessBody(const char* saveDir) {
         "\"iris\":\"" + irisCallback + "\"" +
         "}}";
 
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "开始流程被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "开始流程被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
         LOG_ERROR("EXPORT", "开始流程失败：DLL转发Delphi程序失败，delphi_server=%s", ctx.delphi_server_url.c_str());
@@ -765,8 +801,28 @@ static int StartCameraPreviewBody(void* hwnd) {
         ctx.camera_preview_third_party_hwnd = thirdPartyHwnd;
     }
 
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "摄像头预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.camera_preview_request_id == requestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) {
+        auto lock = WriteLock();
+        if (ctx.camera_preview_request_id == requestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "摄像头预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -860,8 +916,28 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         ctx.fingerprint_preview_third_party_hwnd = thirdPartyHwnd;
     }
 
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "指纹预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.fingerprint_preview_request_id == requestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) {
+        auto lock = WriteLock();
+        if (ctx.fingerprint_preview_request_id == requestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "指纹预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -953,8 +1029,28 @@ static int StartIrisPreviewBody(void* hwnd) {
         ctx.iris_preview_third_party_hwnd = thirdPartyHwnd;
     }
 
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "虹膜预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.iris_preview_request_id == requestId) {
+            ctx.iris_preview_running = false;
+            ctx.iris_preview_request_id.clear();
+            ctx.iris_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "虹膜预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        auto lock = WriteLock();
+        if (ctx.iris_preview_request_id == requestId) {
+            ctx.iris_preview_running = false;
+            ctx.iris_preview_request_id.clear();
+            ctx.iris_preview_third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.GetIrisPreviewUrl(requestId, rtspUrl)) {
         LOG_ERROR("EXPORT", "启动虹膜预览失败：向Delphi程序获取预览地址失败，request_id=%s", requestId.c_str());
@@ -1043,13 +1139,28 @@ static int CaptureCameraImageBody(const char* saveDir) {
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FACE");
     std::string saveRoot = ResolveCaptureTargetPath(saveDir, true);
     std::string savePath;
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "人脸抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "人脸抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
         LOG_ERROR("EXPORT", "人脸抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    // 终端切换抢断：如果HTTP执行期间发生了切换，丢弃结果
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "人脸抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
     LOG_INFO("EXPORT", "人脸抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
@@ -1065,13 +1176,27 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP");
     std::string saveRoot = ResolveCaptureTargetPath(saveDir, false);
     std::string savePath;
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "指纹抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "指纹抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {
         LOG_ERROR("EXPORT", "指纹抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "指纹抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
     LOG_INFO("EXPORT", "指纹抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
@@ -1090,8 +1215,17 @@ static int CaptureIrisImageBody(const char* saveDir) {
         HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, saveRoot, timeoutMs);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
         LOG_ERROR("EXPORT", "虹膜抓拍提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
@@ -1118,8 +1252,17 @@ static int RequestOCRBody(const char* saveDir) {
         HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, saveRoot, ctx.ocr_timeout_ms);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "OCR请求被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "OCR请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
         LOG_ERROR("EXPORT", "OCR请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
@@ -1147,8 +1290,17 @@ static int RequestNfcCardBody(const char* saveDir) {
         HZCYKJTHardWare_RESOURCE_NFC_CARD, saveRoot, timeoutMs);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
+
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "NFC请求被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "NFC请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
         LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
@@ -1182,8 +1334,16 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
 
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (IsSwitchPending()) {
+        LOG_WARN("EXPORT", "授权请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestAuthorize(requestId,
                                 ZJHM ? ZJHM : "",
