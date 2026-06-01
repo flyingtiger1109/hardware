@@ -1,0 +1,520 @@
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using HZCYKJTHardWare.Proxy.Infrastructure;
+
+namespace HZCYKJTHardWare.Proxy.Preview
+{
+    public class VlcPreviewPlayer : IDisposable
+    {
+        private IntPtr _libVlcCoreHandle;
+        private IntPtr _libVlcHandle;
+        private IntPtr _vlcInstance;
+        private IntPtr _mediaPlayer;
+        private bool _running;
+        private IntPtr _currentParentHwnd;
+        private string _vlcDir;
+
+        // Source dimensions for cover layout
+        private int _sourceWidth;
+        private int _sourceHeight;
+        private bool _swapDimensions;
+
+        // Cached layout
+        private int _lastHostW, _lastHostH, _lastSrcW, _lastSrcH;
+
+        // Delegates for libvlc functions
+        private delegate IntPtr LibvlcNew(int argc, IntPtr argv);
+        private delegate void LibvlcRelease(IntPtr instance);
+        private delegate IntPtr LibvlcMediaNewLocation(IntPtr instance, IntPtr mrl);
+        private delegate void LibvlcMediaAddOption(IntPtr media, IntPtr option);
+        private delegate void LibvlcMediaRelease(IntPtr media);
+        private delegate IntPtr LibvlcMediaPlayerNewFromMedia(IntPtr media);
+        private delegate void LibvlcMediaPlayerRelease(IntPtr player);
+        private delegate void LibvlcMediaPlayerSetHwnd(IntPtr player, IntPtr drawable);
+        private delegate int LibvlcMediaPlayerPlay(IntPtr player);
+        private delegate void LibvlcMediaPlayerStop(IntPtr player);
+        private delegate void LibvlcVideoSetAspectRatio(IntPtr player, IntPtr ratio);
+        private delegate void LibvlcVideoSetScale(IntPtr player, float factor);
+
+        private LibvlcNew _fnNew;
+        private LibvlcRelease _fnRelease;
+        private LibvlcMediaNewLocation _fnMediaNewLocation;
+        private LibvlcMediaAddOption _fnMediaAddOption;
+        private LibvlcMediaRelease _fnMediaRelease;
+        private LibvlcMediaPlayerNewFromMedia _fnPlayerNewFromMedia;
+        private LibvlcMediaPlayerRelease _fnPlayerRelease;
+        private LibvlcMediaPlayerSetHwnd _fnPlayerSetHwnd;
+        private LibvlcMediaPlayerPlay _fnPlayerPlay;
+        private LibvlcMediaPlayerStop _fnPlayerStop;
+        private LibvlcVideoSetAspectRatio _fnVideoSetAspectRatio;
+        private LibvlcVideoSetScale _fnVideoSetScale;
+
+        public bool IsRunning => _running && _videoHwnd != IntPtr.Zero && IsWindow(_videoHwnd);
+        public IntPtr RenderFormHandle => _videoHwnd;
+        public int WarmupMs { get; private set; }
+
+        /// <summary>
+        /// Pre-load VLC libraries and create a short-lived instance to warm up the VLC engine.
+        /// This significantly reduces first-playback latency (same as Delphi TVlcWarmupThread).
+        /// </summary>
+        public void Warmup()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                if (!LoadVlc())
+                {
+                    Logger.Warn("VLC warmup: failed to load VLC libraries");
+                    return;
+                }
+
+                // Create a minimal VLC instance to trigger library initialization
+                var args = new System.Collections.Generic.List<string>
+                {
+                    "--no-video-title-show", "--no-xlib", "--quiet", "--intf", "dummy"
+                };
+                var argPtrs = new IntPtr[args.Count];
+                for (int i = 0; i < args.Count; i++)
+                    argPtrs[i] = Marshal.StringToHGlobalAnsi(args[i]);
+                var argvPtr = Marshal.AllocHGlobal(IntPtr.Size * args.Count);
+                Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
+
+                var instance = _fnNew(args.Count, argvPtr);
+
+                for (int i = 0; i < args.Count; i++)
+                    Marshal.FreeHGlobal(argPtrs[i]);
+                Marshal.FreeHGlobal(argvPtr);
+
+                if (instance != IntPtr.Zero)
+                {
+                    _fnRelease(instance);
+                }
+                WarmupMs = (int)sw.ElapsedMilliseconds;
+                Logger.Info($"VLC warmup completed: {WarmupMs}ms");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"VLC warmup failed: {ex.Message}");
+            }
+        }
+
+        public bool LoadVlc(string vlcDir = null)
+        {
+            if (_libVlcHandle != IntPtr.Zero) return true;
+
+            var extractedDir = VlcResourceExtractor.EnsureExtracted();
+            if (!string.IsNullOrEmpty(extractedDir) && System.IO.Directory.Exists(extractedDir))
+            {
+                if (TryLoadFromDir(extractedDir)) return true;
+            }
+
+            var searchDirs = new[]
+            {
+                vlcDir,
+                System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vlc"),
+                @"C:\Program Files\VideoLAN\VLC",
+                @"C:\Program Files (x86)\VideoLAN\VLC",
+                @"D:\VLC",
+                @"C:\VLC"
+            };
+
+            foreach (var dir in searchDirs)
+            {
+                if (string.IsNullOrEmpty(dir) || !System.IO.Directory.Exists(dir)) continue;
+                if (TryLoadFromDir(dir)) return true;
+            }
+
+            Logger.Error("VLC not found");
+            return false;
+        }
+
+        private bool TryLoadFromDir(string dir)
+        {
+            var corePath = System.IO.Path.Combine(dir, "libvlccore.dll");
+            var libPath = System.IO.Path.Combine(dir, "libvlc.dll");
+
+            if (!System.IO.File.Exists(corePath) || !System.IO.File.Exists(libPath))
+                return false;
+
+            try
+            {
+                SetDllDirectory(dir);
+                _libVlcCoreHandle = LoadLibrary(corePath);
+                _libVlcHandle = LoadLibrary(libPath);
+                if (_libVlcHandle == IntPtr.Zero) return false;
+
+                _fnNew = GetDelegate<LibvlcNew>("libvlc_new");
+                _fnRelease = GetDelegate<LibvlcRelease>("libvlc_release");
+                _fnMediaNewLocation = GetDelegate<LibvlcMediaNewLocation>("libvlc_media_new_location");
+                _fnMediaAddOption = GetDelegate<LibvlcMediaAddOption>("libvlc_media_add_option");
+                _fnMediaRelease = GetDelegate<LibvlcMediaRelease>("libvlc_media_release");
+                _fnPlayerNewFromMedia = GetDelegate<LibvlcMediaPlayerNewFromMedia>("libvlc_media_player_new_from_media");
+                _fnPlayerRelease = GetDelegate<LibvlcMediaPlayerRelease>("libvlc_media_player_release");
+                _fnPlayerSetHwnd = GetDelegate<LibvlcMediaPlayerSetHwnd>("libvlc_media_player_set_hwnd");
+                _fnPlayerPlay = GetDelegate<LibvlcMediaPlayerPlay>("libvlc_media_player_play");
+                _fnPlayerStop = GetDelegate<LibvlcMediaPlayerStop>("libvlc_media_player_stop");
+                _fnVideoSetAspectRatio = GetDelegate<LibvlcVideoSetAspectRatio>("libvlc_video_set_aspect_ratio");
+                _fnVideoSetScale = GetDelegate<LibvlcVideoSetScale>("libvlc_video_set_scale");
+
+                if (_fnNew == null || _fnPlayerPlay == null) { Unload(); return false; }
+
+                _vlcDir = dir;
+                Logger.Info($"VLC loaded from {dir}");
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Child window handle for VLC rendering (same as Delphi's CreateWindowEx STATIC)
+        private IntPtr _videoHwnd = IntPtr.Zero;
+
+        public bool Play(string rtspUrl, IntPtr parentHwnd, int networkCachingMs, int liveCachingMs,
+            int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false)
+        {
+            if (_fnNew == null && !LoadVlc()) return false;
+            if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd)) return false;
+
+            Stop();
+
+            _currentParentHwnd = parentHwnd;
+            _sourceWidth = sourceWidth;
+            _sourceHeight = sourceHeight;
+            _swapDimensions = swapDimensions;
+            _lastHostW = _lastHostH = _lastSrcW = _lastSrcH = 0;
+
+            try
+            {
+                // 1) Create VLC instance (same as Delphi, with configurable rtsp_transport)
+                var args = new System.Collections.Generic.List<string>
+                {
+                    "--no-video-title-show", "--no-xlib", "--quiet"
+                };
+                var rtspTransport = AppConfig.Instance.RtspTransport;
+                if (!string.IsNullOrEmpty(rtspTransport))
+                    args.Add("--rtsp-" + rtspTransport);
+
+                var pluginsPath = System.IO.Path.Combine(_vlcDir ?? "", "plugins");
+                if (System.IO.Directory.Exists(pluginsPath))
+                    args.Add("--plugin-path=" + pluginsPath);
+
+                var argPtrs = new IntPtr[args.Count];
+                for (int i = 0; i < args.Count; i++)
+                    argPtrs[i] = Marshal.StringToHGlobalAnsi(args[i]);
+                var argvPtr = Marshal.AllocHGlobal(IntPtr.Size * args.Count);
+                Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
+
+                _vlcInstance = _fnNew(args.Count, argvPtr);
+
+                for (int i = 0; i < args.Count; i++)
+                    Marshal.FreeHGlobal(argPtrs[i]);
+                Marshal.FreeHGlobal(argvPtr);
+
+                if (_vlcInstance == IntPtr.Zero)
+                {
+                    Logger.Error("Failed to create VLC instance");
+                    CleanupPartial();
+                    return false;
+                }
+
+                // 2) Create media with options
+                var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
+                var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
+                Marshal.FreeHGlobal(mrlPtr);
+
+                if (media == IntPtr.Zero)
+                {
+                    Logger.Error("Failed to create VLC media");
+                    CleanupPartial();
+                    return false;
+                }
+
+                // Media options — exactly same as Delphi VlcPlayer.Play
+                AddMediaOption(media, $":network-caching={networkCachingMs}");
+                AddMediaOption(media, $":live-caching={liveCachingMs}");
+                AddMediaOption(media, ":drop-late-frames");
+                AddMediaOption(media, ":skip-frames");
+                AddMediaOption(media, ":clock-jitter=0");
+                AddMediaOption(media, ":clock-synchro=0");
+                AddMediaOption(media, ":no-audio");
+
+                // 3) Create player
+                _mediaPlayer = _fnPlayerNewFromMedia(media);
+                _fnMediaRelease(media);
+
+                if (_mediaPlayer == IntPtr.Zero)
+                {
+                    Logger.Error("Failed to create VLC media player");
+                    CleanupPartial();
+                    return false;
+                }
+
+                // 4) Create child window (STATIC) for VLC — same as Delphi CreateWindowEx('STATIC', WS_CHILD)
+                _videoHwnd = CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                    0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+                if (_videoHwnd == IntPtr.Zero)
+                {
+                    Logger.Error("Failed to create video child window");
+                    CleanupPartial();
+                    return false;
+                }
+
+                // 5) Set VLC render target → child window
+                _fnPlayerSetHwnd(_mediaPlayer, _videoHwnd);
+
+                // 6) Play
+                if (_fnPlayerPlay(_mediaPlayer) != 0)
+                {
+                    Logger.Error("VLC play returned error");
+                    CleanupPartial();
+                    return false;
+                }
+                _running = true;
+
+                // 7) Scale to fill window (same as Delphi libvlc_video_set_scale(0.0))
+                if (_fnVideoSetScale != null)
+                    _fnVideoSetScale(_mediaPlayer, 0.0f);
+
+                // 8) Apply cover layout AFTER play (same order as Delphi)
+                ApplyCoverLayout();
+
+                Logger.Info($"VLC播放成功: {rtspUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"VLC播放异常: url={rtspUrl}, 错误={ex.Message}", ex);
+                CleanupPartial();
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Clean up resources created during a failed Play attempt, without touching resources
+        /// from a previous successful Play (those are managed by Stop).
+        /// </summary>
+        private void CleanupPartial()
+        {
+            if (_mediaPlayer != IntPtr.Zero) { try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { } _mediaPlayer = IntPtr.Zero; }
+            if (_vlcInstance != IntPtr.Zero) { try { _fnRelease?.Invoke(_vlcInstance); } catch { } _vlcInstance = IntPtr.Zero; }
+            if (_videoHwnd != IntPtr.Zero) { DestroyWindow(_videoHwnd); _videoHwnd = IntPtr.Zero; }
+            _running = false;
+        }
+
+        /// <summary>
+        /// Release VLC instance and video window but keep DLLs loaded (for warmup).
+        /// Calling FreeLibrary after warmup causes subsequent libvlc_new to fail.
+        /// </summary>
+        public void StopKeepDlls()
+        {
+            if (_mediaPlayer != IntPtr.Zero)
+            {
+                try { _fnPlayerStop?.Invoke(_mediaPlayer); } catch { }
+                try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { }
+                _mediaPlayer = IntPtr.Zero;
+            }
+            if (_vlcInstance != IntPtr.Zero)
+            {
+                try { _fnRelease?.Invoke(_vlcInstance); } catch { }
+                _vlcInstance = IntPtr.Zero;
+            }
+            if (_videoHwnd != IntPtr.Zero)
+            {
+                DestroyWindow(_videoHwnd);
+                _videoHwnd = IntPtr.Zero;
+            }
+            _running = false;
+            _currentParentHwnd = IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// Reparent the render window to a new parent and apply cover layout.
+        /// </summary>
+        public bool SetParentWindow(IntPtr newParentHwnd)
+        {
+            if (_videoHwnd == IntPtr.Zero) return false;
+
+            try
+            {
+                _currentParentHwnd = newParentHwnd;
+                if (newParentHwnd != IntPtr.Zero)
+                {
+                    SetParent(_videoHwnd, newParentHwnd);
+                    ApplyCoverLayout();
+                    ShowWindow(_videoHwnd, SW_SHOW);
+                }
+                else
+                {
+                    ShowWindow(_videoHwnd, SW_HIDE);
+                    SetParent(_videoHwnd, IntPtr.Zero);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"SetParentWindow failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Apply cover-fit layout to child video window (same algorithm as Delphi ApplyCoverLayout).
+        /// Uses MulDiv for precise integer scaling — avoids floating-point rounding differences.
+        /// </summary>
+        public void ApplyCoverLayout()
+        {
+            if (!_running || _mediaPlayer == IntPtr.Zero) return;
+            if (_videoHwnd == IntPtr.Zero || !IsWindow(_videoHwnd)) return;
+            if (_currentParentHwnd == IntPtr.Zero || !IsWindow(_currentParentHwnd)) return;
+
+            try
+            {
+                RECT hostRect;
+                if (!GetClientRect(_currentParentHwnd, out hostRect)) return;
+
+                int hostW = hostRect.Right - hostRect.Left;
+                int hostH = hostRect.Bottom - hostRect.Top;
+                if (hostW <= 0 || hostH <= 0) return;
+
+                int srcW = _sourceWidth > 0 ? _sourceWidth : hostW;
+                int srcH = _sourceHeight > 0 ? _sourceHeight : hostH;
+                if (srcW <= 0 || srcH <= 0) return;
+
+                // Swap for portrait sources (e.g. camera 480x640)
+                int displayW = srcW, displayH = srcH;
+                if (_swapDimensions)
+                {
+                    displayW = srcH;
+                    displayH = srcW;
+                }
+
+                if (hostW == _lastHostW && hostH == _lastHostH &&
+                    displayW == _lastSrcW && displayH == _lastSrcH)
+                    return;
+
+                _lastHostW = hostW;
+                _lastHostH = hostH;
+                _lastSrcW = displayW;
+                _lastSrcH = displayH;
+
+                // 1) Tell VLC to scale to fill window exactly (same as Delphi libvlc_video_set_scale(0.0))
+                if (_fnVideoSetScale != null)
+                    _fnVideoSetScale(_mediaPlayer, 0.0f);
+
+                // 2) Set aspect ratio (same as Delphi)
+                if (_fnVideoSetAspectRatio != null)
+                {
+                    var ratioStr = $"{displayW}:{displayH}";
+                    var ratioPtr = Marshal.StringToHGlobalAnsi(ratioStr);
+                    _fnVideoSetAspectRatio(_mediaPlayer, ratioPtr);
+                    Marshal.FreeHGlobal(ratioPtr);
+                }
+
+                // 3) Calculate cover-fit position/size (same MulDiv algorithm as Delphi)
+                int videoW, videoH, videoX, videoY;
+                if (displayW * hostH > displayH * hostW)
+                {
+                    // Fit by height (pillarbox) - same as Delphi MulDiv
+                    videoH = hostH;
+                    videoW = (displayW * hostH) / displayH;
+                    videoX = (hostW - videoW) / 2;
+                    videoY = 0;
+                }
+                else
+                {
+                    // Fit by width (letterbox) - same as Delphi MulDiv
+                    videoW = hostW;
+                    videoH = (displayH * hostW) / displayW;
+                    videoX = 0;
+                    videoY = (hostH - videoH) / 2;
+                }
+
+                MoveWindow(_videoHwnd, videoX, videoY, videoW, videoH, false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
+            }
+        }
+
+        private void AddMediaOption(IntPtr media, string option)
+        {
+            var optPtr = Marshal.StringToHGlobalAnsi(option);
+            _fnMediaAddOption(media, optPtr);
+            Marshal.FreeHGlobal(optPtr);
+        }
+
+        public void Stop()
+        {
+            // Stop and release VLC player (same order as Delphi)
+            if (_mediaPlayer != IntPtr.Zero)
+            {
+                try { _fnPlayerStop?.Invoke(_mediaPlayer); } catch { }
+                try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { }
+                _mediaPlayer = IntPtr.Zero;
+            }
+            if (_vlcInstance != IntPtr.Zero)
+            {
+                try { _fnRelease?.Invoke(_vlcInstance); } catch { }
+                _vlcInstance = IntPtr.Zero;
+            }
+
+            // Destroy child video window (same as Delphi DestroyWindow)
+            if (_videoHwnd != IntPtr.Zero)
+            {
+                DestroyWindow(_videoHwnd);
+                _videoHwnd = IntPtr.Zero;
+            }
+
+            _running = false;
+            _currentParentHwnd = IntPtr.Zero;
+            _lastHostW = _lastHostH = _lastSrcW = _lastSrcH = 0;
+        }
+
+        private void Unload()
+        {
+            Stop();
+            if (_libVlcHandle != IntPtr.Zero) { FreeLibrary(_libVlcHandle); _libVlcHandle = IntPtr.Zero; }
+            if (_libVlcCoreHandle != IntPtr.Zero) { FreeLibrary(_libVlcCoreHandle); _libVlcCoreHandle = IntPtr.Zero; }
+            _fnNew = null; _fnRelease = null; _fnMediaNewLocation = null; _fnMediaAddOption = null;
+            _fnMediaRelease = null; _fnPlayerNewFromMedia = null; _fnPlayerRelease = null;
+            _fnPlayerSetHwnd = null; _fnPlayerPlay = null; _fnPlayerStop = null;
+            _fnVideoSetAspectRatio = null; _fnVideoSetScale = null;
+        }
+
+        private T GetDelegate<T>(string procName) where T : class
+        {
+            var ptr = GetProcAddress(_libVlcHandle, procName);
+            if (ptr == IntPtr.Zero) return null;
+            return Marshal.GetDelegateForFunctionPointer(ptr, typeof(T)) as T;
+        }
+
+        public void Dispose() { Unload(); }
+
+        // Win32 API
+        [DllImport("kernel32.dll")] private static extern IntPtr LoadLibrary(string lpFileName);
+        [DllImport("kernel32.dll")] private static extern bool FreeLibrary(IntPtr hModule);
+        [DllImport("kernel32.dll")] private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+        [DllImport("kernel32.dll")] private static extern bool SetDllDirectory(string lpPathName);
+        [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string lpModuleName);
+        [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+        [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern IntPtr CreateWindowEx(uint dwExStyle, string lpClassName,
+            string lpWindowName, uint dwStyle, int X, int Y, int nWidth, int nHeight,
+            IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+        [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);
+
+        private const int SW_SHOW = 5;
+        private const int SW_HIDE = 0;
+        private const uint WS_CHILD = 0x40000000;
+        private const uint WS_VISIBLE = 0x10000000;
+        private const uint WS_CLIPSIBLINGS = 0x04000000;
+        private const uint WS_CLIPCHILDREN = 0x02000000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+    }
+}

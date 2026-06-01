@@ -1,0 +1,44 @@
+{
+  "dll_server": {
+    "host": "127.0.0.1",
+    "port": 18080
+  },
+  "terminal_callback_server": {
+    "listen_host": "0.0.0.0",
+    "public_host": "",
+    "port": 18081,
+    "path": "/terminal-callback"
+  },
+  "terminal": {
+    "scheme": "http",
+    "port": 9098,
+    "subnet_prefix": "192.168.20",
+    "devices": [
+      {
+        "index": 1,
+        "name": "终端1",
+        "host_suffix": 30
+      },
+      {
+        "index": 2,
+        "name": "终端2",
+        "host_suffix": 31
+      }
+    ]
+  },
+  "callback_server": {
+    "host": "127.0.0.1",
+    "port": 39091,
+    "base_path": "/HZCYKJTHardWare/callback"
+  },
+  "preview": {
+    "rtsp_network_caching_ms": 50,
+    "rtsp_live_caching_ms": 50,
+    "rtsp_transport": "tcp"
+  },
+  "save": {
+    "default_dir": ".\\captures",
+    "create_date_folder": true,
+    "create_request_folder": true
+  }
+}

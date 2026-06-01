@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>HZCYKJTHardWare.Proxy</RootNamespace>
+    <AssemblyName>HZCYKJTHardWare.Proxy</AssemblyName>
+    <PlatformTarget>x86</PlatformTarget>
+    <Platforms>x86</Platforms>
+    <LangVersion>latest</LangVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <ApplicationIcon>国移局icon_256x256.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="国移局icon_256x256.ico" />
+    <Content Include="HZCYKJTHardWare.Proxy.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- VLC embedded resources -->
+  <ItemGroup>
+    <EmbeddedResource Include="vlc\libvlc.dll" LogicalName="vlc.libvlc.dll" />
+    <EmbeddedResource Include="vlc\libvlccore.dll" LogicalName="vlc.libvlccore.dll" />
+    <EmbeddedResource Include="vlc\plugins\access\libtcp_plugin.dll" LogicalName="vlc.plugins.access.libtcp_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\access\librtp_plugin.dll" LogicalName="vlc.plugins.access.librtp_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\access\libhttp_plugin.dll" LogicalName="vlc.plugins.access.libhttp_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\access\libhttps_plugin.dll" LogicalName="vlc.plugins.access.libhttps_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\access\liblive555_plugin.dll" LogicalName="vlc.plugins.access.liblive555_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libts_plugin.dll" LogicalName="vlc.plugins.demux.libts_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libh26x_plugin.dll" LogicalName="vlc.plugins.demux.libh26x_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libps_plugin.dll" LogicalName="vlc.plugins.demux.libps_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libes_plugin.dll" LogicalName="vlc.plugins.demux.libes_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libmp4_plugin.dll" LogicalName="vlc.plugins.demux.libmp4_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\demux\libavi_plugin.dll" LogicalName="vlc.plugins.demux.libavi_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\codec\libavcodec_plugin.dll" LogicalName="vlc.plugins.codec.libavcodec_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\codec\librawvideo_plugin.dll" LogicalName="vlc.plugins.codec.librawvideo_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\packetizer\libpacketizer_h264_plugin.dll" LogicalName="vlc.plugins.packetizer.libpacketizer_h264_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\packetizer\libpacketizer_hevc_plugin.dll" LogicalName="vlc.plugins.packetizer.libpacketizer_hevc_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\packetizer\libpacketizer_copy_plugin.dll" LogicalName="vlc.plugins.packetizer.libpacketizer_copy_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\packetizer\libpacketizer_mpeg4video_plugin.dll" LogicalName="vlc.plugins.packetizer.libpacketizer_mpeg4video_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\packetizer\libpacketizer_mpeg4audio_plugin.dll" LogicalName="vlc.plugins.packetizer.libpacketizer_mpeg4audio_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_output\libdirect3d11_plugin.dll" LogicalName="vlc.plugins.video_output.libdirect3d11_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_output\libdirect3d9_plugin.dll" LogicalName="vlc.plugins.video_output.libdirect3d9_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_output\libdirectdraw_plugin.dll" LogicalName="vlc.plugins.video_output.libdirectdraw_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_output\libdrawable_plugin.dll" LogicalName="vlc.plugins.video_output.libdrawable_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_output\libvdummy_plugin.dll" LogicalName="vlc.plugins.video_output.libvdummy_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_chroma\libi420_rgb_plugin.dll" LogicalName="vlc.plugins.video_chroma.libi420_rgb_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_chroma\libi420_yuy2_plugin.dll" LogicalName="vlc.plugins.video_chroma.libi420_yuy2_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_chroma\libswscale_plugin.dll" LogicalName="vlc.plugins.video_chroma.libswscale_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_chroma\libi420_rgb_sse2_plugin.dll" LogicalName="vlc.plugins.video_chroma.libi420_rgb_sse2_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\video_chroma\libi420_yuy2_sse2_plugin.dll" LogicalName="vlc.plugins.video_chroma.libi420_yuy2_sse2_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\misc\libxml_plugin.dll" LogicalName="vlc.plugins.misc.libxml_plugin.dll" />
+    <EmbeddedResource Include="vlc\plugins\misc\libgnutls_plugin.dll" LogicalName="vlc.plugins.misc.libgnutls_plugin.dll" />
+  </ItemGroup>
+
+</Project>
