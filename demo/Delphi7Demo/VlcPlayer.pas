@@ -27,6 +27,7 @@ type
     FLastSourceHeight: Integer;
     FVlcDir: string;
     FLastError: string;
+    FWarmupMs: DWORD;
     FLogProc: TVlcLogCallback;
     Flibvlc_new: function(argc: Integer; argv: Pointer): Pointer; cdecl;
     Flibvlc_release: procedure(p_instance: Pointer); cdecl;
@@ -52,9 +53,11 @@ type
     function Play(const Url: string; Hwnd: HWND; SourceWidth, SourceHeight: Integer;
       SwapLayoutDimensions: Boolean; NetworkCachingMs, LiveCachingMs: Integer): Boolean;
     procedure Stop;
+    procedure Warmup;
     procedure SetLogProc(ALogProc: TVlcLogCallback);
     property Running: Boolean read FRunning;
     property LastError: string read FLastError;
+    property WarmupMs: DWORD read FWarmupMs;
   end;
 
 implementation
@@ -143,6 +146,7 @@ begin
   FLastSourceWidth := -1;
   FLastSourceHeight := -1;
   FVlcDir := '';
+  FWarmupMs := 0;
   FLastError := '';
   FLogProc := nil;
   Flibvlc_new := nil;
@@ -409,4 +413,23 @@ begin
   FRunning := False;
 end;
 
+procedure TVlcPlayer.Warmup;
+var
+  Argv: array[0..3] of PChar;
+  ArgCount: Integer;
+  TmpInstance: Pointer;
+  T0: DWORD;
+begin
+  FWarmupMs := 0;
+  if not LoadLibVlc then Exit;
+  ArgCount := 0;
+  Argv[ArgCount] := '--no-video-title-show'; Inc(ArgCount);
+  Argv[ArgCount] := '--no-xlib'; Inc(ArgCount);
+  Argv[ArgCount] := '--quiet'; Inc(ArgCount);
+  T0 := GetTickCount;
+  TmpInstance := Flibvlc_new(ArgCount, @Argv[0]);
+  if TmpInstance <> nil then
+    Flibvlc_release(TmpInstance);
+  FWarmupMs := GetTickCount - T0;
+end;
 end.

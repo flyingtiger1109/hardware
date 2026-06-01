@@ -4,7 +4,8 @@ interface
 
 uses
   Windows, SysUtils, Classes, WinSock, ExtCtrls,
-  TerminalManager, TerminalClient, CallbackParser, FileSaver, PreviewManager, EncodingHelper;
+  TerminalManager, TerminalClient, CallbackParser, FileSaver, PreviewManager, EncodingHelper,
+  VlcPlayer;
 
 type
   TDelphiProxyServer = class;
@@ -51,6 +52,32 @@ type
     procedure Execute; override;
   public
     constructor Create(AOwner: TDelphiProxyServer; ResType: TPreviewResourceType; SessionType: TPreviewSessionType);
+  end;
+
+  TAsyncStartPreviewThread = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+    FResType: TPreviewResourceType;
+    FSessionType: TPreviewSessionType;
+    FHwnd: HWND;
+    FTerminalBaseUrl: string;
+    FRequestId: string;
+    FCallbackUrl: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer; ResType: TPreviewResourceType;
+      SessionType: TPreviewSessionType; Hwnd: HWND; const TerminalBaseUrl,
+      RequestId, CallbackUrl: string);
+  end;
+
+  TVlcWarmupThread = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer);
   end;
 
   TDelphiProxyServer = class
@@ -454,12 +481,12 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     Addr.sin_port := htons(FOwner.FTerminalCallbackPort);
     if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
       FOwner.DoLog('[错误] [终端回调] 回调接收服务启动失败：bind ' + FOwner.FTerminalCallbackListenHost + ':' +
-        IntToStr(FOwner.FTerminalCallbackPort) + ' ???，error=' + IntToStr(WSAGetLastError) + '?，');
+        IntToStr(FOwner.FTerminalCallbackPort) + ' ，error=' + IntToStr(WSAGetLastError) + '，');
       Exit;
     end;
     if listen(FListenSocket, SOMAXCONN) <> 0 then begin
       FOwner.DoLog('[错误] [终端回调] 回调接收服务启动失败：listen ' + FOwner.FTerminalCallbackListenHost + ':' +
-        IntToStr(FOwner.FTerminalCallbackPort) + ' ???，error=' + IntToStr(WSAGetLastError) + '?，');
+        IntToStr(FOwner.FTerminalCallbackPort) + ' ，error=' + IntToStr(WSAGetLastError) + '，');
       Exit;
     end;
     FOwner.DoLog('[信息] [终端回调] 回调接收服务程序已启动，listen=' + FOwner.FTerminalCallbackListenHost + ':' +
@@ -514,12 +541,12 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     Addr.sin_port := htons(FOwner.FDelphiServerPort);
     if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
       FOwner.DoLog('[错误] [服务] DLL通信服务启动失败：bind ' + FOwner.FDelphiServerHost + ':' +
-        IntToStr(FOwner.FDelphiServerPort) + ' ???，error=' + IntToStr(WSAGetLastError) + '?，');
+        IntToStr(FOwner.FDelphiServerPort) + ' ，error=' + IntToStr(WSAGetLastError) + '，');
       Exit;
     end;
     if listen(FListenSocket, SOMAXCONN) <> 0 then begin
       FOwner.DoLog('[错误] [服务] DLL通信服务启动失败：listen ' + FOwner.FDelphiServerHost + ':' +
-        IntToStr(FOwner.FDelphiServerPort) + ' ???，error=' + IntToStr(WSAGetLastError) + '?，');
+        IntToStr(FOwner.FDelphiServerPort) + ' ，error=' + IntToStr(WSAGetLastError) + '，');
       Exit;
     end;
     FOwner.DoLog('[信息] [服务] DLL通信服务程序已启动，http://' + FOwner.FDelphiServerHost + ':' +
@@ -607,7 +634,89 @@ begin
   FOwner.FPreviewManager.StopPreview(FResType, FSessionType);
 end;
 
+
 // ============================================================
+// TAsyncStartPreviewThread
+// ============================================================
+constructor TAsyncStartPreviewThread.Create(AOwner: TDelphiProxyServer;
+  ResType: TPreviewResourceType; SessionType: TPreviewSessionType;
+  Hwnd: HWND; const TerminalBaseUrl, RequestId, CallbackUrl: string);
+begin
+  inherited Create(False);
+  FreeOnTerminate := True;
+  FOwner := AOwner;
+  FResType := ResType;
+  FSessionType := SessionType;
+  FHwnd := Hwnd;
+  FTerminalBaseUrl := TerminalBaseUrl;
+  FRequestId := RequestId;
+  FCallbackUrl := CallbackUrl;
+end;
+
+procedure TAsyncStartPreviewThread.Execute;
+var
+  ResourceType: string;
+  PayloadUtf8: string;
+begin
+  case FResType of
+    prtCamera: ResourceType := 'face_image';
+    prtFingerprint: ResourceType := 'fingerprint_image';
+    prtIris: ResourceType := 'iris_image';
+    else ResourceType := 'unknown';
+  end;
+  if FOwner.FPreviewManager.StartPreview(FResType, FSessionType, FHwnd, FTerminalBaseUrl) then
+  begin
+    FOwner.DoLog('[信息] [异步预览] 已开始: resource=' + ResourceType +
+      ', request_id=' + FRequestId);
+    PayloadUtf8 := '{' +
+      JsonStr('request_id', FRequestId) + ',' +
+      JsonStr('resource_type', ResourceType) + ',' +
+      JsonInt('render_hwnd', FOwner.FPreviewManager.GetRenderHwnd(FResType, FSessionType)) + ',' +
+      JsonInt('delphi_host_hwnd', FOwner.FPreviewManager.GetDefaultHostHwnd(FResType)) + '}';
+    FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8);
+  end
+  else
+  begin
+    FOwner.DoLog('[错误] [异步预览] 失败: resource=' + ResourceType +
+      ', request_id=' + FRequestId);
+    Exclude(FOwner.FExternalActivePreviews, FResType);
+    case FResType of
+      prtCamera: FOwner.FThirdPartyCameraHwnd := 0;
+      prtFingerprint: FOwner.FThirdPartyFingerprintHwnd := 0;
+      prtIris: FOwner.FThirdPartyIrisHwnd := 0;
+    end;
+    PayloadUtf8 := '{' +
+      JsonStr('request_id', FRequestId) + ',' +
+      JsonStr('resource_type', ResourceType) + ',' +
+      JsonInt('render_hwnd', FHwnd) + ',' +
+      '"error":true,"code":"preview_failed"}';
+    FOwner.MakeCallback(FRequestId, FCallbackUrl, PayloadUtf8);
+  end;
+end;
+
+// ============================================================
+// TVlcWarmupThread
+// ============================================================
+constructor TVlcWarmupThread.Create(AOwner: TDelphiProxyServer);
+begin
+  inherited Create(False);
+  FreeOnTerminate := True;
+  FOwner := AOwner;
+end;
+
+procedure TVlcWarmupThread.Execute;
+var
+  Vlc: TVlcPlayer;
+begin
+  FOwner.DoLog('[信息] [VLC预热] 正在启动...');
+  Vlc := TVlcPlayer.Create;
+  try
+    Vlc.Warmup;
+    FOwner.DoLog('[信息] [VLC预热] 已完成, 耗时=' + IntToStr(Vlc.WarmupMs) + 'ms');
+  finally
+    Vlc.Free;
+  end;
+end;
 // TDelphiProxyServer - Core
 // ============================================================
 constructor TDelphiProxyServer.Create(ACameraPanel, AFingerprintPanel, AIrisPanel: TPanel);
@@ -645,7 +754,7 @@ begin if FThread <> nil then Exit;
   DoLog('[信息] [服务] 正在启动DLL通信服务，http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
   DoLog('[信息] [服务] DLL通信终端回调=' + GetCallbackBase);
-  DoLog('[信息] [预览管理] 服务程序已启动，等待外部预览指令中...'); end;
+  DoLog('[信息] [预览管理] 服务程序已启动，等待外部预览指令中...'); TVlcWarmupThread.Create(Self); end;
 
 procedure TDelphiProxyServer.Stop;
 begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
@@ -657,7 +766,7 @@ begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.
 function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
 begin Result := False; if DllCallbackUrl = '' then Exit;
   DoLog('[信息] [DLL回调] 正在向DLL回传异步结果，url=' + DllCallbackUrl +
-    '?，body_size=' + IntToStr(Length(PayloadUtf8)));
+    '，body_size=' + IntToStr(Length(PayloadUtf8)));
   HttpPostJson(DllCallbackUrl, PayloadUtf8); Result := True; end;
 
 // ============================================================
@@ -743,15 +852,7 @@ begin
   TotalTick := GetTickCount;
   if (Index < 1) or (Index > 2) then Exit;
   if FTerminalManager.IsSameTerminal(Index) then begin
-    DoLog('[提示] [终端切换] 当前已在终端' + IntToStr(Index) + '。。?。。。?。?。?。?，');
-    PhaseTick := GetTickCount;
-    AutoStopPreviews;
-    DoLog(Format('[性能] 切换同终端停止 耗时=%d毫秒', [Integer(GetTickCount - PhaseTick)]));
-    PhaseTick := GetTickCount;
-    AutoStartPreviews;
-    DoLog(Format('[性能] 切换同终端启动 耗时=%d毫秒', [Integer(GetTickCount - PhaseTick)]));
-    DoLog(Format('[性能] 切换同终端总耗时=%d毫秒', [Integer(GetTickCount - TotalTick)]));
-    Result := True;
+    DoLog('[信息] [终端切换] 已处于当目标终端，跳过切换');
     Exit;
   end;
   DoLog('[信息] [终端切换] 正在切换到终端' + IntToStr(FTerminalManager.CurrentIndex) + ' -> ??，' + IntToStr(Index));
@@ -795,7 +896,7 @@ begin FTerminalManager.ProcessActive := False; FTerminalManager.ProcessSaveDir :
 function TDelphiProxyServer.CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FaceResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FACE');
-  DoLog('[信息] [终端通信] 正在向终端请求人脸抓拍，request_id=' + ReqId + '?，url=' + BaseUrl + '/resources/face-image/sync-request');
+  DoLog('[信息] [终端通信] 正在向终端请求人脸抓拍，request_id=' + ReqId + '，url=' + BaseUrl + '/resources/face-image/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/face-image/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] 人脸抓拍指令发送失败，terminal=' + BaseUrl); Exit; end;
@@ -814,7 +915,7 @@ begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUr
 function TDelphiProxyServer.CaptureFingerprintDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FpResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FP');
-  DoLog('[信息] [终端通信] 正在向终端请求指纹抓拍，request_id=' + ReqId + '?，url=' + BaseUrl + '/resources/fingerprint/sync-request');
+  DoLog('[信息] [终端通信] 正在向终端请求指纹抓拍，request_id=' + ReqId + '，url=' + BaseUrl + '/resources/fingerprint/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/fingerprint/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] 指纹抓拍指令发送失败，terminal=' + BaseUrl); Exit; end;
@@ -833,7 +934,7 @@ function TDelphiProxyServer.RequestOCRDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('OCR');
   CallbackUrl := GetCallbackBase;
-  DoLog('[信息] [终端通信] 正在提交OCR识别，request_id=' + Result + '?，callback=' + CallbackUrl);
+  DoLog('[信息] [终端通信] 正在提交OCR识别，request_id=' + Result + '，callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/ocr-document/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] OCR识别指令发送到终端失败。'); Result := ''; Exit; end;
@@ -844,7 +945,7 @@ function TDelphiProxyServer.RequestNfcDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('NFC');
   CallbackUrl := GetCallbackBase;
-  DoLog('[信息] [终端通信] 正在提交IC卡识别，request_id=' + Result + '?，callback=' + CallbackUrl);
+  DoLog('[信息] [终端通信] 正在提交IC卡识别，request_id=' + Result + '，callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/nfc-card/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
     DoLog('[错误] [终端通信] IC卡识别指令发送到终端失败。'); Result := ''; Exit; end;
@@ -916,7 +1017,6 @@ begin
     if (TerminalIndex < 1) or (TerminalIndex > 2) then begin
       Result := '{"error":true,"code":"invalid_terminal_index"}'; Exit; end;
     if FTerminalManager.IsSameTerminal(TerminalIndex) then begin
-      TAsyncSwitchThread.Create(Self, TerminalIndex);
       Result := '{"status":"ok","terminal_index":' + IntToStr(TerminalIndex) + ',"same_terminal":true}'; end
     else begin
       TAsyncSwitchThread.Create(Self, TerminalIndex);
@@ -1001,14 +1101,10 @@ begin
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyCameraHwnd := ThirdPartyHwndVal;
     DoLog('[信息] [DLL请求] DLL下发摄像头预览，target_hwnd=' + IntToStr(ThirdPartyHwndVal));
-    if FPreviewManager.StartPreview(prtCamera, pstExternal, ThirdPartyHwndVal, TerminalBaseUrl) then begin
-      MakeCallback(RequestId, CallbackUrl,
-        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'face_image') + ',' +
-        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtCamera, pstExternal)) + ',' +
-        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtCamera)) + '}');
-      Include(FExternalActivePreviews, prtCamera);
-      Result := '{"accepted":true}'; end
-    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+    Include(FExternalActivePreviews, prtCamera);
+    TAsyncStartPreviewThread.Create(Self, prtCamera, pstExternal,
+      ThirdPartyHwndVal, TerminalBaseUrl, RequestId, CallbackUrl);
+    Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/camera/stop' then begin TAsyncStopPreviewThread.Create(Self, prtCamera, pstExternal); Exclude(FExternalActivePreviews, prtCamera); FThirdPartyCameraHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
@@ -1018,14 +1114,10 @@ begin
       DoLog('[错误] [预览管理] 指纹目标窗口句柄无效，hwnd=' + IntToStr(FpHwnd));
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyFingerprintHwnd := FpHwnd;
-    if FPreviewManager.StartPreview(prtFingerprint, pstExternal, FpHwnd, TerminalBaseUrl) then begin
-      MakeCallback(RequestId, CallbackUrl,
-        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'fingerprint_image') + ',' +
-        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtFingerprint, pstExternal)) + ',' +
-        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtFingerprint)) + '}');
-      Include(FExternalActivePreviews, prtFingerprint);
-      Result := '{"accepted":true}'; end
-    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+    Include(FExternalActivePreviews, prtFingerprint);
+    TAsyncStartPreviewThread.Create(Self, prtFingerprint, pstExternal,
+      FpHwnd, TerminalBaseUrl, RequestId, CallbackUrl);
+    Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/fingerprint/stop' then begin TAsyncStopPreviewThread.Create(Self, prtFingerprint, pstExternal); Exclude(FExternalActivePreviews, prtFingerprint); FThirdPartyFingerprintHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
@@ -1035,14 +1127,10 @@ begin
       DoLog('[错误] [预览管理] 虹膜目标窗口句柄无效，hwnd=' + IntToStr(IrisHwnd));
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyIrisHwnd := IrisHwnd;
-    if FPreviewManager.StartPreview(prtIris, pstExternal, IrisHwnd, TerminalBaseUrl) then begin
-      MakeCallback(RequestId, CallbackUrl,
-        '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('resource_type', 'iris_image') + ',' +
-        JsonInt('render_hwnd', FPreviewManager.GetRenderHwnd(prtIris, pstExternal)) + ',' +
-        JsonInt('delphi_host_hwnd', FPreviewManager.GetDefaultHostHwnd(prtIris)) + '}');
-      Include(FExternalActivePreviews, prtIris);
-      Result := '{"accepted":true}'; end
-    else Result := '{"error":true,"code":"preview_failed"}'; Exit; end;
+    Include(FExternalActivePreviews, prtIris);
+    TAsyncStartPreviewThread.Create(Self, prtIris, pstExternal,
+      IrisHwnd, TerminalBaseUrl, RequestId, CallbackUrl);
+    Result := '{"accepted":true}'; Exit; end;
 
   if Path = '/preview/iris/stop' then begin TAsyncStopPreviewThread.Create(Self, prtIris, pstExternal); Exclude(FExternalActivePreviews, prtIris); FThirdPartyIrisHwnd := 0; Result := '{"status":"ok"}'; Exit; end;
 
@@ -1071,7 +1159,7 @@ begin
 function TDelphiProxyServer.HandleTerminalCallback(const BodyUtf8: string): string;
 var ResourceType, RequestId, DllCallbackUrl, SaveDir, SavePath, PayloadUtf8: string;
   OcrResult: TOcrCallbackResult; NfcResult: TNfcCallbackResult; ImgResult: TImageCallbackResult;
-  I: Integer; ImgPath, Suffix: string;
+  I: Integer; ImgPath, ImgName: string; SL: TStringList;
 begin
   ResourceType := FCallbackParser.GetResourceType(BodyUtf8);
   RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
@@ -1088,26 +1176,30 @@ begin
   else if ResourceType = 'ocr_document' then begin
     OcrResult := FCallbackParser.ParseOcrDocument(BodyUtf8);
     if OcrResult.Valid then begin
-      SavePath := FFileSaver.SaveJsonFile(BodyUtf8, SaveDir, RequestId, 'OCR');
-      // Save evidence images
+      SavePath := IncludeTrailingBackslash(FFileSaver.EnsureDir(SaveDir)) + 'OCR.json';
+      SL := TStringList.Create;
+      try SL.Text := BodyUtf8; SL.SaveToFile(SavePath);
+      finally SL.Free; end;
       I := 0;
       while I < OcrResult.EvidenceImagesCount do begin
         if OcrResult.EvidenceImages[I].ImageBase64 <> '' then begin
-          Suffix := '';
-          if OcrResult.EvidenceImages[I].ImageType = 2 then Suffix := '_portrait'
+          ImgName := '';
+          if OcrResult.EvidenceImages[I].ImageType = 2 then ImgName := '人像'
           else case OcrResult.EvidenceImages[I].LampType of
-            1: Suffix := '_visible';
-            2: Suffix := '_infrared';
-            3: Suffix := '_ultraviolet';
+            1: ImgName := '可见光';
+            2: ImgName := '红外光';
+            3: ImgName := '紫外光';
           end;
-          ImgPath := FFileSaver.SaveBase64Image(OcrResult.EvidenceImages[I].ImageBase64,
-            'image/bmp', SaveDir, RequestId + Suffix, 'evidence');
-          DoLog('[信息] [OCR回调] 证据图片已保存：type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
-            '，lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + '，path=' + ImgPath);
+          if ImgName <> '' then begin
+            ImgPath := FFileSaver.SaveBase64ImageToFile(OcrResult.EvidenceImages[I].ImageBase64,
+              IncludeTrailingBackslash(FFileSaver.EnsureDir(SaveDir)) + ImgName + '.jpg');
+            DoLog('[信息] [OCR] 照片已保存: type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
+              ',lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + ',path=' + ImgPath);
+          end;
         end;
         I := I + 1;
       end;
-      DoLog('[信息] [OCR回调] 识别完成，mrz=' + OcrResult.Mrz + '?，evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + '?，save_path=' + SavePath);
+      DoLog('[信息] [OCR] 已完成, mrz=' + OcrResult.Mrz + ',evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + ',save_path=' + SavePath);
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/ocr');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('mrz', OcrResult.Mrz) + ',' +
