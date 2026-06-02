@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -14,6 +16,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private bool _running;
         private IntPtr _currentParentHwnd;
         private string _vlcDir;
+        private const string RiskySftpPluginRelativePath = @"plugins\access\libsftp_plugin.dll";
+        private static readonly object RiskyPluginCheckLock = new object();
+        private static readonly HashSet<string> RiskyPluginCheckedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Source dimensions for cover layout
         private int _sourceWidth;
@@ -70,9 +75,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // Create a minimal VLC instance to trigger library initialization
-                var args = new System.Collections.Generic.List<string>
+                var args = new List<string>
                 {
-                    "--no-video-title-show", "--no-xlib", "--quiet", "--intf", "dummy"
+                    "--no-video-title-show", "--no-xlib", "--quiet", "--no-plugins-cache", "--intf", "dummy"
                 };
                 var argPtrs = new IntPtr[args.Count];
                 for (int i = 0; i < args.Count; i++)
@@ -139,14 +144,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private bool TryLoadFromDir(string dir)
         {
-            var corePath = System.IO.Path.Combine(dir, "libvlccore.dll");
-            var libPath = System.IO.Path.Combine(dir, "libvlc.dll");
+            var corePath = Path.Combine(dir, "libvlccore.dll");
+            var libPath = Path.Combine(dir, "libvlc.dll");
 
-            if (!System.IO.File.Exists(corePath) || !System.IO.File.Exists(libPath))
+            if (!File.Exists(corePath) || !File.Exists(libPath))
                 return false;
 
             try
             {
+                DisableRiskySftpPlugin(dir);
                 SetDllDirectory(dir);
                 _libVlcCoreHandle = LoadLibrary(corePath);
                 _libVlcHandle = LoadLibrary(libPath);
@@ -195,13 +201,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 // 1) Create VLC instance (exact same args as Delphi)
-                var args = new System.Collections.Generic.List<string>
+                var args = new List<string>
                 {
-                    "--no-video-title-show", "--no-xlib", "--quiet"
+                    "--no-video-title-show", "--no-xlib", "--quiet", "--no-plugins-cache"
                 };
 
-                var pluginsPath = System.IO.Path.Combine(_vlcDir ?? "", "plugins");
-                if (System.IO.Directory.Exists(pluginsPath))
+                var pluginsPath = Path.Combine(_vlcDir ?? "", "plugins");
+                if (Directory.Exists(pluginsPath))
                     args.Add("--plugin-path=" + pluginsPath);
 
                 var argPtrs = new IntPtr[args.Count];
@@ -494,6 +500,48 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _fnMediaRelease = null; _fnPlayerNewFromMedia = null; _fnPlayerRelease = null;
             _fnPlayerSetHwnd = null; _fnPlayerPlay = null; _fnPlayerStop = null;
             _fnVideoSetAspectRatio = null; _fnVideoSetScale = null;
+        }
+
+        private static void DisableRiskySftpPlugin(string vlcDir)
+        {
+            if (string.IsNullOrEmpty(vlcDir))
+                return;
+
+            string fullDir;
+            try
+            {
+                fullDir = Path.GetFullPath(vlcDir);
+            }
+            catch
+            {
+                fullDir = vlcDir;
+            }
+
+            lock (RiskyPluginCheckLock)
+            {
+                if (!RiskyPluginCheckedDirs.Add(fullDir))
+                    return;
+            }
+
+            var pluginPath = Path.Combine(fullDir, RiskySftpPluginRelativePath);
+            if (!File.Exists(pluginPath))
+                return;
+
+            Logger.Warn($"检测到VLC SFTP插件: {pluginPath}。RTSP预览不需要该插件，现场已出现该插件导致的崩溃，正在尝试禁用。");
+
+            var disabledPath = pluginPath + ".disabled";
+            if (File.Exists(disabledPath))
+                disabledPath = pluginPath + ".disabled." + DateTime.Now.ToString("yyyyMMddHHmmss");
+
+            try
+            {
+                File.Move(pluginPath, disabledPath);
+                Logger.Warn($"已禁用VLC SFTP插件: {disabledPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"禁用VLC SFTP插件失败: {ex.Message}。请手动将该文件改名为 libsftp_plugin.dll.disabled 后再启动程序。");
+            }
         }
 
         private T GetDelegate<T>(string procName) where T : class

@@ -6,12 +6,12 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// A task item with generation tracking for terminal switch filtering.
+    /// A task item with terminal switch batch tracking.
     /// </summary>
     public class QueueTask<T>
     {
         public T Data { get; set; }
-        public int Generation { get; set; }  // Terminal generation when enqueued
+        public int Generation { get; set; }  // Terminal switch batch when enqueued
         public DateTime EnqueueTime { get; set; }
     }
 
@@ -25,7 +25,7 @@ namespace HZCYKJTHardWare.Proxy.Core
     /// - Worker blocks on Take() when idle (no CPU spin)
     /// - Queue full → immediately returns (no waiting)
     /// - Preview queues use "replace" mode (new request replaces pending old one)
-    /// - Generation tracking for terminal switch filtering
+    /// - Terminal switch batch tracking for filtering old requests
     /// - Statistics: enqueued, dropped, completed, timed out
     /// </summary>
     public class WorkerQueue<T> : IDisposable

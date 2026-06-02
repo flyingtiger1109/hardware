@@ -40,6 +40,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly ConcurrentDictionary<string, PreviewSession> _sessions = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, PreviewSession> _restartInfo = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, byte> _coldStartWarmups = new ConcurrentDictionary<string, byte>();
+        private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
         private readonly TerminalClient _terminalClient;
         private readonly int _networkCachingMs;
         private readonly int _liveCachingMs;
@@ -116,6 +117,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
         public async Task<bool> StartPreview(PreviewResourceType resType, PreviewSessionType sessionType,
             IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null)
         {
+            await _operationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                return await StartPreviewCore(resType, sessionType, targetHwnd, terminalBaseUrl, localPanel)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
+        }
+
+        private async Task<bool> StartPreviewCore(PreviewResourceType resType, PreviewSessionType sessionType,
+            IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null)
+        {
             var totalSw = System.Diagnostics.Stopwatch.StartNew();
             var key = SessionKey(resType, sessionType);
 
@@ -125,7 +141,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             // Stop existing if running with different target
             if (existing != null && existing.IsRunning)
-                StopPreview(resType, sessionType);
+                await StopPreviewCore(resType, sessionType, preserveRestartInfo: false).ConfigureAwait(false);
 
             // Get RTSP URL from terminal
             var urlTick = totalSw.ElapsedMilliseconds;
@@ -194,12 +210,36 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public bool StopPreview(PreviewResourceType resType, PreviewSessionType sessionType)
         {
+            if (_uiContext != null && SynchronizationContext.Current == _uiContext)
+            {
+                _ = StopPreviewAsync(resType, sessionType);
+                return true;
+            }
+
+            return StopPreviewAsync(resType, sessionType).GetAwaiter().GetResult();
+        }
+
+        public async Task<bool> StopPreviewAsync(PreviewResourceType resType, PreviewSessionType sessionType)
+        {
+            await _operationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                return await StopPreviewCore(resType, sessionType, preserveRestartInfo: false).ConfigureAwait(false);
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
+        }
+
+        private async Task<bool> StopPreviewCore(PreviewResourceType resType, PreviewSessionType sessionType, bool preserveRestartInfo)
+        {
             var key = SessionKey(resType, sessionType);
             if (_sessions.TryRemove(key, out var session))
             {
-                // VLC dispose must run on UI thread (same as Delphi RunOnMainThread)
-                PostToUi(() => { session.Player?.Dispose(); });
-                _restartInfo.TryRemove(key, out _);
+                await RunOnUiAsync(() => { session.Player?.Dispose(); }).ConfigureAwait(false);
+                if (!preserveRestartInfo)
+                    _restartInfo.TryRemove(key, out _);
                 Logger.Info($"预览已停止: {ResourceToName(resType)} {sessionType}");
                 return true;
             }
@@ -214,46 +254,75 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public void StopAll()
         {
+            if (_uiContext != null && SynchronizationContext.Current == _uiContext)
+            {
+                _ = StopAllAsync(preserveRestartInfo: false);
+                return;
+            }
+
+            StopAllAsync(preserveRestartInfo: false).GetAwaiter().GetResult();
+        }
+
+        public async Task StopAllAsync(bool preserveRestartInfo = false)
+        {
+            await _operationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await StopAllCore(preserveRestartInfo).ConfigureAwait(false);
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
+        }
+
+        private async Task StopAllCore(bool preserveRestartInfo)
+        {
             var sessions = new List<PreviewSession>(_sessions.Values);
-            // VLC dispose must run on UI thread
-            PostToUi(() =>
+            await RunOnUiAsync(() =>
             {
                 foreach (var session in sessions)
                     session.Player?.Dispose();
-            });
+            }).ConfigureAwait(false);
+
             _sessions.Clear();
+            if (!preserveRestartInfo)
+                _restartInfo.Clear();
             Logger.Info("所有预览已停止");
         }
 
         public async Task RestartPreviewsOnTerminalSwitch(string newTerminalBaseUrl)
         {
-            var restartList = new List<PreviewSession>(_restartInfo.Values);
-
-            await RunOnUiAsync(() =>
+            await _operationLock.WaitAsync().ConfigureAwait(false);
+            try
             {
-                foreach (var kvp in _sessions)
-                    kvp.Value.Player?.Dispose();
-            }).ConfigureAwait(false);
-            _sessions.Clear();
+                var restartList = new List<PreviewSession>(_restartInfo.Values);
+                await StopAllCore(preserveRestartInfo: true).ConfigureAwait(false);
 
-            if (restartList.Count == 0)
-            {
-                Logger.Info("无活跃预览需要重启");
-                return;
+                if (restartList.Count == 0)
+                {
+                    Logger.Info("无活跃预览需要重启");
+                    return;
+                }
+
+                Logger.Info($"终端切换，重启 {restartList.Count} 个预览");
+
+                foreach (var info in restartList)
+                {
+                    try
+                    {
+                        await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd, newTerminalBaseUrl, info.LocalPanel)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"重启预览失败 {ResourceToName(info.ResourceType)}: {ex.Message}");
+                    }
+                }
             }
-
-            Logger.Info($"终端切换，重启 {restartList.Count} 个预览");
-
-            foreach (var info in restartList)
+            finally
             {
-                try
-                {
-                    await StartPreview(info.ResourceType, info.SessionType, info.TargetHwnd, newTerminalBaseUrl, info.LocalPanel);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error($"重启预览失败 {ResourceToName(info.ResourceType)}: {ex.Message}");
-                }
+                _operationLock.Release();
             }
         }
 

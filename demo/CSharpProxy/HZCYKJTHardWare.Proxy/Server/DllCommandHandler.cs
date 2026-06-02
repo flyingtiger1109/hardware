@@ -314,9 +314,21 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 try
                 {
+                    if (_queueManager.SwitchingTerminal || !_queueManager.IsGenerationValid(gen))
+                    {
+                        _log($"[预览管理] 外部预览已跳过: {resType}, 原因=终端正在切换或请求已过期, hwnd={hwnd}");
+                        return;
+                    }
+
                     var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl);
                     if (ok)
                     {
+                        if (_queueManager.SwitchingTerminal || !_queueManager.IsGenerationValid(gen))
+                        {
+                            _log($"[预览管理] 外部预览启动后发现终端已切换，等待切换流程接管: {resType}, hwnd={hwnd}");
+                            return;
+                        }
+
                         if (!string.IsNullOrEmpty(callbackUrl))
                             await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero).ConfigureAwait(false);
                         _log($"[预览管理] 外部预览已启动: {resType}, hwnd={hwnd}");

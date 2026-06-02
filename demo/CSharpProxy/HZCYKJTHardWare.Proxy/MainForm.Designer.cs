@@ -12,6 +12,7 @@ namespace HZCYKJTHardWare.Proxy
             }
             if (disposing)
             {
+                DisposeUiLogResources();
                 DisposeTrayResources();
             }
             base.Dispose(disposing);

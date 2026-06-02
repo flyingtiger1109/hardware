@@ -418,7 +418,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 
                     _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + index);
-                    _previewManager.StopAll();
+                    await _previewManager.StopAllAsync(preserveRestartInfo: true).ConfigureAwait(false);
                     _log(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
 
                     var phaseTick = stopWatch.ElapsedMilliseconds;
@@ -602,7 +602,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _previewManager.StopAll();
+                _previewManager.StopAllAsync(preserveRestartInfo: true).GetAwaiter().GetResult();
                 _log($"[性能] 终端切换停止 耗时={sw.ElapsedMilliseconds}ms");
 
                 var phase = sw.ElapsedMilliseconds;

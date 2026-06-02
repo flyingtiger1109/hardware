@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Drawing;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -13,11 +16,15 @@ namespace HZCYKJTHardWare.Proxy
         private NotifyIcon _trayIcon;
         private ContextMenuStrip _trayMenu;
         private Icon _appIcon;
+        private System.Windows.Forms.Timer _uiLogTimer;
+        private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
+        private int _pendingUiLogCount;
 
         public MainForm()
         {
             InitializeComponent();
             InitializeTrayIcon();
+            InitializeUiLogTimer();
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -32,6 +39,8 @@ namespace HZCYKJTHardWare.Proxy
             if (_trayIcon != null)
                 _trayIcon.Visible = false;
 
+            _uiLogTimer?.Stop();
+            FlushPendingUiLogs();
             StopServer();
             Logger.Flush(1000);
         }
@@ -101,6 +110,13 @@ namespace HZCYKJTHardWare.Proxy
             {
                 // 托盘恢复失败不能影响后台服务运行
             }
+        }
+
+        private void InitializeUiLogTimer()
+        {
+            _uiLogTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _uiLogTimer.Tick += (s, e) => FlushPendingUiLogs();
+            _uiLogTimer.Start();
         }
 
         private void btnStartServer_Click(object sender, EventArgs e)
@@ -280,28 +296,59 @@ namespace HZCYKJTHardWare.Proxy
         private void AppendLog(string message)
         {
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+            EnqueueUiLog(line);
+            Logger.Info(message);
+        }
+
+        private const int MaxPendingUiLogLines = 5000;
+        private const int MaxUiLogFlushBatch = 300;
+
+        private void EnqueueUiLog(string line)
+        {
+            _pendingUiLogs.Enqueue(line);
+            var pending = Interlocked.Increment(ref _pendingUiLogCount);
+            if (pending <= MaxPendingUiLogLines)
+                return;
+
+            if (_pendingUiLogs.TryDequeue(out _))
+                Interlocked.Decrement(ref _pendingUiLogCount);
+        }
+
+        private void FlushPendingUiLogs()
+        {
+            if (IsDisposed)
+                return;
+
             if (InvokeRequired)
             {
                 if (!IsDisposed && IsHandleCreated)
-                    BeginInvoke(new Action(() => AppendLogToMemo(line)));
+                    BeginInvoke(new Action(FlushPendingUiLogs));
+                return;
             }
-            else
+
+            var sb = new StringBuilder();
+            var count = 0;
+            while (count < MaxUiLogFlushBatch && _pendingUiLogs.TryDequeue(out var line))
             {
-                AppendLogToMemo(line);
+                Interlocked.Decrement(ref _pendingUiLogCount);
+                sb.AppendLine(line);
+                count++;
             }
-            Logger.Info(message);
+
+            if (count > 0)
+                AppendLogToMemo(sb.ToString(), count);
         }
 
         private const int MaxLogLines = 3000;  // Prevent UI crash from unbounded log growth
         private const int TrimLogLinesBatch = 300;
         private int _uiLogLineCount;
 
-        private void AppendLogToMemo(string line)
+        private void AppendLogToMemo(string text, int lineCount)
         {
             try
             {
-                memoLog.AppendText(line + Environment.NewLine);
-                _uiLogLineCount++;
+                memoLog.AppendText(text);
+                _uiLogLineCount += lineCount;
 
                 // Trim in batches. Reading memoLog.Lines on every log is expensive during high-frequency requests.
                 if (_uiLogLineCount > MaxLogLines + TrimLogLinesBatch)
@@ -340,6 +387,16 @@ namespace HZCYKJTHardWare.Proxy
             _trayMenu = null;
             _appIcon?.Dispose();
             _appIcon = null;
+        }
+
+        private void DisposeUiLogResources()
+        {
+            if (_uiLogTimer != null)
+            {
+                _uiLogTimer.Stop();
+                _uiLogTimer.Dispose();
+                _uiLogTimer = null;
+            }
         }
     }
 }

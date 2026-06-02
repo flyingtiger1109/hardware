@@ -545,10 +545,16 @@
 - [x] 修复 `StartProcess` 创建无法匹配的假会话问题，并补充流程级虹膜回调兜底处理。
 - [x] C# Proxy `Release|x86` 编译通过：0 warning / 0 error。
 - [x] DLL `Release|Win32` 编译通过：0 warning / 0 error。
+- [x] 根据 `F:\HZCYKJTHardWare-20260602` 现场日志定位：高频抓拍叠加频繁终端切换时，Exe 日志停止在 VLC 新预览启动过程中，DLL 随后出现 `error=12029`，说明 C# Proxy 已无响应或退出。
+- [x] C# Proxy 预览启停增加串行锁，终端切换时等待 VLC 旧播放器真实释放后再切换和重启预览，避免旧播放器释放与新播放器启动交错。
+- [x] 外部预览后台启动增加终端世代检查，切换中或过期请求不再继续用旧终端地址拉流。
+- [x] C# Proxy UI 日志改为 250ms 批量刷新，并限制待刷 UI 日志队列，降低高频抓拍日志压垮 UI 消息队列的风险。
+- [x] 本轮 C# Proxy `Release|x86` 编译通过：0 warning / 0 error。
+- [x] 根据现场闪退模块 `libsftp_plugin.dll` 定位到 VLC SFTP 访问插件风险；该插件与 RTSP 预览无关，已从 C# Proxy 输出包排除，并在运行时检测到现场残留插件时尝试改名禁用。
 
 ### 修改文件
 
-- C# Proxy：`Core/WorkerQueue.cs`、`Infrastructure/Logger.cs`、`MainForm.cs`、`Preview/PreviewManager.cs`、`Server/DllCallbackSender.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/TerminalCallbackHandler.cs`、`Terminal/TerminalClient.cs`。
+- C# Proxy：`Core/WorkerQueue.cs`、`Infrastructure/Logger.cs`、`MainForm.cs`、`Preview/PreviewManager.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCallbackSender.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/TerminalCallbackHandler.cs`、`Terminal/TerminalClient.cs`、`HZCYKJTHardWare.Proxy.csproj`。
 - DLL 工程：`HZCYKJTHardWare.json`、`src/config_manager.cpp`、`src/config_manager.h`、`src/event_dispatcher.cpp`、`src/event_dispatcher.h`、`src/exports.cpp`、`src/request_session_manager.cpp`。
 - 本次未主动修改第三方示例程序源码；工作区中已有 Delphi 示例和第三方示例改动属于既有未提交变更。
 
@@ -557,6 +563,9 @@
 - [ ] 第三方 Demo 正常 `InitSdk`，确认 DLL 实际连接 `http://127.0.0.1:18080` 的 C# Proxy。
 - [ ] 人脸/指纹抓拍按每秒 5 到 8 次连续运行 24 小时，记录 P50/P95/P99 响应时间。
 - [ ] 长时间视频预览叠加高频抓拍，确认 UI 可移动、可点击、日志继续刷新且不假死。
+- [ ] 复测“高频人脸/指纹抓拍 + 每 0.5 到 2 秒反复切换终端 + 外部摄像头/指纹预览”，确认预览不出现旧画面延迟、切换不卡顿、Exe 不再闪退。
+- [ ] 复测中重点观察 Exe 日志是否继续输出、DLL 是否不再出现连续 `error=12029` 连接 C# Proxy 失败。
+- [ ] 现场部署后确认 `C:\BJ\exe\vlc\plugins\access\libsftp_plugin.dll` 已不存在，或已被改名为 `libsftp_plugin.dll.disabled`；复测 Windows 事件查看器不再出现该模块导致的闪退。
 - [ ] 授权请求真实链路验证：第三方调用 DLL，DLL 转发 C# Proxy，C# Proxy 调终端真实接口，授权结果回调第三方。
 - [ ] 第三方反复启动、退出、重新注册回调，确认旧会话被取消，旧数据不再回调给新注册方。
 - [ ] 断网、终端断开、终端超时、C# Proxy 停止等异常场景，确认 DLL 有中文失败日志和超时回调。
@@ -567,4 +576,5 @@
 - [ ] DLL 导出 HTTP 请求仍由全局 `BusyGuard` 串行化；当前可防止无限堆积，但并发第三方请求会快速返回 busy，后续可按资源类型拆分独立限流。
 - [ ] C# Proxy 抓拍同步接口仍需要等待终端 HTTP 返回；若终端自身响应变慢，建议结合现场数据继续调低超时并增加慢请求分桶统计。
 - [ ] 日志系统已从业务线程移走，但高频写盘仍建议观察磁盘 IO；必要时可改为批量 flush。
+- [ ] 如果现场仍有 VLC native 崩溃，需要补充 Windows 事件查看器中 `Faulting module`，确认是否为 `libvlc.dll/libvlccore.dll` 或显卡/窗口句柄相关模块。
 - [ ] 当前编译验证已完成，尚未做真实终端 24 小时压测，性能结论需以现场压测数据确认。

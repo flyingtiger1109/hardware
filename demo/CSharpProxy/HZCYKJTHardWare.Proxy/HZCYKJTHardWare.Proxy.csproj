@@ -42,7 +42,11 @@
 
   <!-- VLC: copy entire directory to output (same as Delphi — all plugins available) -->
   <ItemGroup>
-    <Content Include="vlc\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="vlc\" />
+    <Content Include="vlc\**\*" Exclude="vlc\plugins\access\libsftp_plugin.dll" CopyToOutputDirectory="PreserveNewest" LinkBase="vlc\" />
   </ItemGroup>
+
+  <Target Name="RemoveUnsupportedVlcPlugins" AfterTargets="Build">
+    <Delete Files="$(TargetDir)vlc\plugins\access\libsftp_plugin.dll" TreatErrorsAsWarnings="true" />
+  </Target>
 
 </Project>

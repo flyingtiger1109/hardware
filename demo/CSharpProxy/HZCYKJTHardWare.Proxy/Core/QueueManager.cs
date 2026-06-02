@@ -5,7 +5,7 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// Manages all fixed worker queues and terminal generation tracking.
+    /// Manages all fixed worker queues and terminal switch batch tracking.
     /// Queues:
     ///   switchQueue:          1 thread, priority=highest, max=1
     ///   faceCaptureQueue:     1 thread, max=2
@@ -16,13 +16,12 @@ namespace HZCYKJTHardWare.Proxy.Core
     ///   fingerprintPreviewQueue: 1 thread, max=1 (replace mode)
     ///   miscQueue:            1 thread, max=3 (process start/end, authorize)
     ///
-    /// Terminal switch is the highest priority. It increments a generation counter;
-    /// all queued tasks with a lower generation are silently discarded.
+    /// Terminal switch is the highest priority. Each switch increments a batch number;
+    /// queued tasks from an older batch are discarded.
     /// </summary>
     public class QueueManager : IDisposable
     {
-        // Generation counter: incremented on each terminal switch
-        // Tasks enqueued before the switch (lower gen) are discarded
+        // Terminal switch batch number. Tasks enqueued before the switch are discarded.
         private int _terminalGeneration;
         private volatile bool _switchingTerminal;
 
@@ -72,14 +71,14 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// <summary>
         /// Called when a terminal switch is requested.
         /// 1) Set switching flag immediately
-        /// 2) Increment generation (old queued tasks will be discarded)
+        /// 2) Increment switch batch (old queued tasks will be discarded)
         /// 3) Enqueue switch task to switch worker
         /// </summary>
         public bool RequestSwitch(int terminalIndex, int currentGeneration)
         {
             _switchingTerminal = true;
             var newGen = Interlocked.Increment(ref _terminalGeneration);
-            Logger.Info($"[终端切换] 设置切换中标志, 新世代={newGen}, 目标终端={terminalIndex}");
+            Logger.Info($"[终端切换] 设置切换中标志, 当前切换批次={newGen}, 目标终端={terminalIndex}");
 
             var data = new SwitchRequest { TerminalIndex = terminalIndex, Generation = newGen };
             return _switchQueue.Enqueue(data, newGen);
@@ -95,8 +94,8 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Check if a task with the given generation should be executed.
-        /// If generation is stale (< current), task should be discarded.
+        /// Check if a task belongs to the current terminal switch batch.
+        /// If its batch is stale (< current), the task should be discarded.
         /// </summary>
         public bool IsGenerationValid(int taskGeneration)
         {
@@ -139,7 +138,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[人脸抓拍] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[人脸抓拍] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             FaceCaptureHandler?.Invoke(task);
@@ -149,7 +148,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[指纹抓拍] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[指纹抓拍] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             FingerprintCaptureHandler?.Invoke(task);
@@ -159,7 +158,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[OCR] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[OCR] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             OcrHandler?.Invoke(task);
@@ -169,7 +168,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[NFC] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[NFC] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             NfcHandler?.Invoke(task);
@@ -179,7 +178,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[人脸预览] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[人脸预览] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             FacePreviewHandler?.Invoke(task);
@@ -189,7 +188,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[指纹预览] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[指纹预览] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             FingerprintPreviewHandler?.Invoke(task);
@@ -199,7 +198,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             if (!IsGenerationValid(task.Generation))
             {
-                Logger.Warn($"[杂项] 世代 {task.Generation} < {_terminalGeneration}, 已丢弃");
+                Logger.Warn($"[杂项] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
                 return;
             }
             MiscHandler?.Invoke(task);
