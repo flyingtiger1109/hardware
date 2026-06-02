@@ -42,7 +42,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var resourceType = CallbackParser.GetResourceType(bodyUtf8);
-                _log($"Terminal callback: resource_type={resourceType}");
+                _log($"[终端回调] resource_type={resourceType}");
 
                 switch (resourceType)
             {
@@ -73,12 +73,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var cbIdNo = JsonHelper.ExtractString(bodyUtf8, "id_no");
                     if ((cbStatus == "yes" || cbStatus == "no") && !string.IsNullOrEmpty(cbIdNo))
                     {
-                        _log($"Detected protocol callback via fallback: status={cbStatus}");
+                        _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
                         HandleProtocol(bodyUtf8);
                     }
                     else
                     {
-                        _log($"Unknown resource_type: {resourceType}");
+                        _log($"[终端回调] 未知资源类型: {resourceType}");
                     }
                     break;
             }
@@ -86,7 +86,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
             catch (Exception ex)
             {
-                _log($"Terminal callback handler error: {ex.Message}");
+                _log($"[终端回调] 处理异常: {ex.Message}");
             }
 
             return "{\"status\":\"ok\"}";
@@ -157,10 +157,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void HandleOcrDocument(string bodyUtf8)
         {
             var result = CallbackParser.ParseOcrDocument(bodyUtf8);
-            if (!result.Valid) { _log("Invalid OCR callback"); return; }
+            if (!result.Valid) { _log("[OCR回调] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"OCR result: request_id={result.RequestId}, mrz={result.Mrz}");
+            _log($"[OCR回调] request_id={result.RequestId}, mrz={result.Mrz}");
 
             // Save OCR result JSON
             FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
@@ -178,14 +178,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
             }
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
-            _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath).GetAwaiter().GetResult();
+            _ = _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath);
             CleanupProcessedIfNeeded();
         }
 
         private void HandleNfcCard(string bodyUtf8)
         {
             var result = CallbackParser.ParseNfcCard(bodyUtf8);
-            if (!result.Valid) { _log("Invalid NFC callback"); return; }
+            if (!result.Valid) { _log("[IC卡回调] 数据无效"); return; }
 
             _log($"[IC卡回调] request_id={result.RequestId}, card_text={result.CardText}");
 
@@ -197,17 +197,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _log("[IC卡回调] 重复回调，已去重: " + result.RequestId);
                 return;
             }
-            _dllCallback.SendNfcResult(result.RequestId, result.CardText).GetAwaiter().GetResult();
+            _ = _dllCallback.SendNfcResult(result.RequestId, result.CardText);
             CleanupProcessedIfNeeded();
         }
 
         private void HandleIrisImage(string bodyUtf8)
         {
             var result = CallbackParser.ParseImageCapture(bodyUtf8, "iris_image");
-            if (!result.Valid) { _log("Invalid iris callback"); return; }
+            if (!result.Valid) { _log("[虹膜回调] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"Iris capture result: request_id={result.RequestId}");
+            _log($"[虹膜回调] request_id={result.RequestId}");
 
             string savePath = "";
             if (!string.IsNullOrEmpty(result.ImageBase64))
@@ -224,17 +224,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _log("[虹膜回调] 重复回调，已去重: " + result.RequestId);
                 return;
             }
-            _dllCallback.SendIrisResult(result.RequestId, savePath).GetAwaiter().GetResult();
+            _ = _dllCallback.SendIrisResult(result.RequestId, savePath);
             CleanupProcessedIfNeeded();
         }
 
         private void HandleFaceImage(string bodyUtf8)
         {
             var result = CallbackParser.ParseImageCapture(bodyUtf8, "face_image");
-            if (!result.Valid) { _log("Invalid face callback"); return; }
+            if (!result.Valid) { _log("[人脸回调] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"Face async capture result: request_id={result.RequestId}");
+            _log($"[人脸回调] 异步抓拍结果: request_id={result.RequestId}");
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -246,10 +246,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void HandleFingerprintImage(string bodyUtf8)
         {
             var result = CallbackParser.ParseImageCapture(bodyUtf8, "fingerprint_image");
-            if (!result.Valid) { _log("Invalid fingerprint callback"); return; }
+            if (!result.Valid) { _log("[指纹回调] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"Fingerprint async capture result: request_id={result.RequestId}");
+            _log($"[指纹回调] 异步抓拍结果: request_id={result.RequestId}");
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -266,7 +266,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void HandleProtocol(string bodyUtf8)
         {
             var result = CallbackParser.ParseAuthorize(bodyUtf8);
-            if (!result.Valid) { _log("Invalid protocol callback"); return; }
+            if (!result.Valid) { _log("[授权回调] 数据无效"); return; }
 
             // 2.22 status field: "yes" (agreed) or "no" (rejected)
             var status = JsonHelper.ExtractString(bodyUtf8, "status");
@@ -311,7 +311,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "}";
 
             _log($"[授权回调] 转发至DLL: request_id={result.RequestId}, auth_result={authResult}");
-            _dllCallback.PostCallbackRaw("/authorize", payload).GetAwaiter().GetResult();
+            _ = _dllCallback.PostCallbackRaw("/authorize", payload);
             CleanupProcessedIfNeeded();
         }
 
@@ -367,7 +367,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
             catch (Exception ex)
             {
-                _log($"Error saving evidence images: {ex.Message}");
+                _log($"[OCR] 保存证据图片异常: {ex.Message}");
             }
         }
 

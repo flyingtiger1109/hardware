@@ -59,9 +59,10 @@ namespace HZCYKJTHardWare.Proxy
         {
             try
             {
-                var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CSharpProxy_Logs");
+                const string logNamePrefix = "HZCYKJTHardWareExe_Logs";
+                var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, logNamePrefix);
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                var file = Path.Combine(dir, $"CSharpProxy_{DateTime.Now:yyyyMMdd}.log");
+                var file = Path.Combine(dir, $"{logNamePrefix}_{DateTime.Now:yyyyMMdd}.log");
                 var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [致命] {message}{Environment.NewLine}";
                 File.AppendAllText(file, line, Encoding.UTF8);
             }

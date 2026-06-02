@@ -178,7 +178,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private IntPtr _videoHwnd = IntPtr.Zero;
 
         public bool Play(string rtspUrl, IntPtr parentHwnd, int networkCachingMs, int liveCachingMs,
-            int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false)
+            string rtspTransport = "", int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false,
+            bool visible = true)
         {
             if (_fnNew == null && !LoadVlc()) return false;
             if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd)) return false;
@@ -235,6 +236,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // Media options — exactly same as Delphi VlcPlayer.Play
+                if (string.Equals(rtspTransport, "tcp", StringComparison.OrdinalIgnoreCase))
+                    AddMediaOption(media, ":rtsp-tcp");
+                else if (string.Equals(rtspTransport, "udp", StringComparison.OrdinalIgnoreCase))
+                    AddMediaOption(media, ":rtsp-udp");
                 AddMediaOption(media, $":network-caching={networkCachingMs}");
                 AddMediaOption(media, $":live-caching={liveCachingMs}");
                 AddMediaOption(media, ":drop-late-frames");
@@ -255,7 +260,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 4) Create child window (STATIC) for VLC — same as Delphi CreateWindowEx('STATIC', WS_CHILD)
-                _videoHwnd = CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+                if (visible)
+                    windowStyle |= WS_VISIBLE;
+                _videoHwnd = CreateWindowEx(0, "STATIC", "", windowStyle,
                     0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
                 if (_videoHwnd == IntPtr.Zero)
                 {
@@ -282,6 +290,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 // 8) Apply cover layout AFTER play (same order as Delphi)
                 ApplyCoverLayout();
+                Logger.Info($"VLC播放参数：url={rtspUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}");
 
                 Logger.Info($"VLC播放成功: {rtspUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
                 return true;

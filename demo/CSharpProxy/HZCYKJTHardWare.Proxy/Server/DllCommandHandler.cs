@@ -149,7 +149,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// </summary>
         private async Task<string> EnqueueCapture(WorkerQueue<object> queue, int generation, string saveDir)
         {
-            var tcs = new TaskCompletionSource<string>();
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var data = new CaptureTaskData { Tcs = tcs, SaveDir = saveDir };
             if (!queue.Enqueue(data, generation))
             {
@@ -168,7 +168,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// </summary>
         private async Task<string> EnqueueWithResult(WorkerQueue<object> queue, int generation, string path, int timeoutMs)
         {
-            var tcs = new TaskCompletionSource<string>();
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!queue.Enqueue(tcs, generation))
             {
                 // Queue full — immediate busy response
@@ -227,7 +227,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log("[流程] 开始流程: url=" + _terminalManager.CurrentBaseUrl + "/process/start, save_dir=" + _terminalManager.ProcessSaveDir);
 
-            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body);
+            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body, 5000).ConfigureAwait(false);
             if (ok)
             {
                 _terminalManager.ProcessActive = true;
@@ -275,7 +275,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log("[授权] 转发至终端: request_id=" + requestId);
 
-            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody);
+            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
             if (ok)
             {
                 _log("[授权] 已受理: request_id=" + requestId);
@@ -318,8 +318,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     if (ok)
                     {
                         if (!string.IsNullOrEmpty(callbackUrl))
-                            await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero);
-                        _log($"Preview started: {resType} external -> hwnd={hwnd}");
+                            await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero).ConfigureAwait(false);
+                        _log($"[预览管理] 外部预览已启动: {resType}, hwnd={hwnd}");
 
                         // DLL-triggered preview success → minimize proxy window to taskbar
                         MinimizeMainForm();
@@ -329,14 +329,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                         if (!string.IsNullOrEmpty(callbackUrl))
                         {
                             var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" + hwndValue + ",\"error\":true,\"code\":\"preview_failed\"}";
-                            await _dllCallback.PostCallbackRaw("/preview-ready", errPayload);
+                            await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
                         }
-                        _log($"Preview failed: {resType} external -> hwnd={hwnd}");
+                        _log($"[预览管理] 外部预览启动失败: {resType}, hwnd={hwnd}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _log($"Preview start error: {ex.Message}");
+                    _log($"[预览管理] 外部预览启动异常: {ex.Message}");
                 }
             });
 
@@ -359,7 +359,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Minimize the main window to taskbar after DLL-triggered preview starts successfully.
+        /// Minimize the main window after DLL-triggered preview starts successfully.
+        /// MainForm handles minimized state by hiding itself to the system tray.
         /// </summary>
         private static void MinimizeMainForm()
         {
@@ -368,7 +369,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] : null;
                 if (form != null && form.InvokeRequired)
                 {
-                    form.Invoke(new Action(() =>
+                    form.BeginInvoke(new Action(() =>
                     {
                         form.WindowState = FormWindowState.Minimized;
                     }));
@@ -385,9 +386,14 @@ namespace HZCYKJTHardWare.Proxy.Server
     /// <summary>
     /// Data passed to capture queue workers — includes third-party's saveDir.
     /// </summary>
-    public class CaptureTaskData
+    public class CaptureTaskData : IQueueResultSink
     {
         public TaskCompletionSource<string> Tcs { get; set; }
         public string SaveDir { get; set; }
+
+        public void TrySetQueueResult(string result)
+        {
+            Tcs?.TrySetResult(result);
+        }
     }
 }

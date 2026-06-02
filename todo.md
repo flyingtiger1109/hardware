@@ -218,6 +218,67 @@
 - [x] `demo/DelphiThirdPartyDemo` 已包含当前 `HZCYKJTHardWare.dll` 和 `HZCYKJTHardWare.json`，并补充 README 说明调用链路。
 - [x] `demo/Delphi7Demo/README.md` 已说明 Delphi 服务端角色、端点、回调和测试顺序。
 
+## 长期稳定性优化记录（2026-06-01）
+
+已完成事项：
+- [x] 已先提交当前稳定版本：`0520e76 fix: stabilize terminal switching and callback handling`，便于回退。
+- [x] Delphi7Demo 的 DLL HTTP 接入改为固定 8 个 HTTP worker + 有界队列，accept 线程不再同步执行业务。
+- [x] 人脸抓拍、指纹抓拍、OCR、IC/NFC 读取拆分为固定业务 worker，每类 1 个执行中 + 1 个等待中。
+- [x] 业务队列满时不再返回 busy，而是用新请求替换等待中的旧请求；旧请求仅内部失败返回并写中文日志。
+- [x] 业务请求带终端切换 generation，切换后旧终端排队请求会被丢弃，避免旧终端数据回调。
+- [x] DLL `SwitchTerminal` 不再同步等待虹膜预览 URL 获取和渲染恢复，改为固定 1 个后台恢复 worker。
+- [x] DLL 后台虹膜预览恢复采用“最新请求替换旧等待请求”，避免频繁切换造成线程膨胀。
+- [x] Delphi7Demo 编译通过。
+- [x] DLL Release Win32 编译通过，0 warning / 0 error。
+- [x] DelphiThirdPartyDemo 编译通过。
+- [x] 已将最新 `Release/HZCYKJTHardWare.dll` 同步复制到 `demo/DelphiThirdPartyDemo/HZCYKJTHardWare.dll`，哈希一致。
+
+修改文件：
+- `demo/Delphi7Demo/DelphiProxyServer.pas`
+- `src/exports.cpp`
+- `framework.h`
+- `demo/Delphi7Demo/HZCYKJTHardWare.exe`
+- `demo/DelphiThirdPartyDemo/HZCYKJTHardWare.exe`
+- `demo/DelphiThirdPartyDemo/HZCYKJTHardWare.dll`
+- `todo.md`
+
+待验证事项：
+- [ ] 第三方程序每秒 5-8 次人脸/指纹抓拍请求连续运行 24 小时。
+- [ ] 高频请求中连续点击切换终端，确认切换指令立即返回，视频跟随新终端恢复。
+- [ ] 高频 OCR、IC/NFC 请求下确认旧等待请求被替换，不出现请求堆积。
+- [ ] 第三方程序反复重启、重新注册回调，确认不会收到已成功清理的历史数据。
+- [ ] 检查任务管理器或 Process Explorer 中线程数、句柄数、内存、CPU 是否长期稳定。
+- [ ] 切换期间终端旧回调是否全部丢弃，不转发到第三方。
+
+已知风险：
+- HTTP 接入队列仍保留 64 上限；极端连接风暴下仍会快速返回 `server_busy`，这是保护进程稳定的最后防线。
+- 同步抓拍接口如果被新等待请求替换，旧请求会失败返回，第三方外部仍保持 1/0 兼容。
+- DLL 虹膜预览后台恢复会最多重试约 10 秒；如果 Delphi 切换长期未完成或终端不可达，需要查看中文日志定位。
+
+下一步建议：
+- 在真实终端环境做 2 小时快速压测，观察是否还有 12029。
+- 再做 24 小时稳定性压测，并记录线程数、句柄数、内存曲线。
+- 如仍有切换视频迟滞，继续把 Delphi 侧外部预览 start/stop 也改成固定预览 worker + 最新请求替换策略。
+
+### 同步等待和预览回调最小化修复（2026-06-01）
+
+已完成事项：
+- [x] Delphi 业务队列同步等待统一降为 `4500ms`，低于 DLL 侧 5 秒 HTTP 超时。
+- [x] 被新请求替换的等待任务立即设置 `request_replaced` 并唤醒等待中的 HTTP handler。
+- [x] 超时任务通过 `StateLock` 标记为不再等待，由 worker 完成后释放，避免竞态泄漏。
+- [x] 第三方外部预览成功回调后，Delphi 主窗口通过消息切回 UI 线程并最小化到任务栏。
+- [x] Delphi7Demo 编译通过。
+
+修改文件：
+- `demo/Delphi7Demo/DelphiProxyServer.pas`
+- `demo/Delphi7Demo/MainUnit.pas`
+- `todo.md`
+
+待验证事项：
+- [ ] 第三方 UI 线程直接调用同步抓拍时，最长卡顿应压到约 4.5 秒以内。
+- [ ] 高频替换等待请求时，旧请求应快速返回失败，不再等满 20 秒。
+- [ ] 第三方启动摄像头/指纹/虹膜外部预览并收到成功回调后，Delphi 程序应自动最小化到任务栏。
+
 ## 长期运行稳定性修复记录（2026-06-01）
 
 ### 已完成事项
@@ -451,3 +512,59 @@
 - [x] 保留 `delphi_server.start_wait_ms`，用于启动新 Delphi 进程后等待 `/ping` 就绪；该配置不再表示旧进程观察等待。
 - [x] 更新 Delphi 服务端及第三方示例 README 中的初始化自恢复说明。
 - [x] 重新构建 Win32 DLL（`Release|Win32`，`0 warning / 0 error`），并将最新产物同步到第三方部署目录。
+
+### OCR 回调与人脸队列稳定性修复
+
+- [x] 根据 OCR 日志确认终端已返回 `ocr_document`，但 Delphi 侧没有 `[OCR] 已完成` 和 `/callback/ocr`，问题位于服务端回调解析/转发链路。
+- [x] `CallbackParser.pas` 移除带有托管字符串/动态数组记录上的 `FillChar(Result, SizeOf(Result), 0)`，避免破坏 Delphi 字符串和动态数组引用计数。
+- [x] `CallbackParser.pas` 修正 OCR 证据图片解析参数，传入完整动态数组，不再传第一个元素地址，避免大包证据图片解析时内存越界。
+- [x] `CallbackParser.pas` 增加 `mrz`、`MRZ`、`mrz_code`、`MRZCode` 等直接字段兜底，再回退到 `MRZ1/MRZ2/MRZ3` 拼接。
+- [x] `CallbackParser.pas` 增加扫描全部同名字段并取第一个非空值的 MRZ 解析逻辑，补充 `mrzCode`、`MRZ_CODE` 等字段名，避免第一个空字段挡住真实 MRZ。
+- [x] `DelphiProxyServer.pas` 为终端回调处理增加外层异常保护；OCR/NFC/虹膜解析异常时写中文日志，并尽量向 DLL 回调明确 `callback_exception`。
+- [x] `DelphiProxyServer.pas` 增加 DLL 回调成功/失败日志，便于确认是否已送达 DLL 回调服务。
+- [x] `DelphiProxyServer.pas` 修复业务队列任务完成竞态：工作线程不再在持有任务锁时触发 `DoneEvent`，避免 HTTP 线程唤醒后提前释放任务对象导致单个业务 worker 异常退出。
+- [x] 使用 Delphi 7 `DCC32.EXE` 重新编译 `demo/Delphi7Demo/HZCYKJTHardWare.dpr` 成功；仅有原有 hint/platform warning，无 error。
+- [x] 将新编译的 `HZCYKJTHardWare.exe` 同步到 `demo/DelphiThirdPartyDemo`，便于第三方示例直接验证。
+- [ ] 使用带 OCR 的第三方调用复测，确认日志出现 `[OCR] 已完成`、`DLL回调成功`，第三方收到 MRZ。
+- [ ] 使用无 OCR 高频抓拍复测，确认人脸和指纹队列均持续响应，人脸不再在一次请求后长期只返回 timeout。
+
+## C# Proxy / DLL 长期稳定性与授权适配优化（2026-06-02）
+
+### 已完成事项
+
+- [x] 修改前确认可回退备份：git 已存在 `0ca47fe`，并额外建立 `.codex_backups/review_opt_20260602_090210` 文件快照。
+- [x] C# Proxy 日志改为后台有界队列写入，业务线程和 UI 线程不再逐条同步写文件。
+- [x] C# Proxy 抓拍/预览/授权等终端 HTTP 请求增加超时参数，并释放 `HttpResponseMessage`、`HttpContent` 等资源。
+- [x] C# Proxy DLL 请求入口增加连接并发上限，终端回调入口改为快速返回 `202 accepted` 后后台处理。
+- [x] C# Proxy 请求队列取消二次 `Task.Run().Wait()`，避免 handler 超时后旧 ThreadPool 任务继续堆积。
+- [x] C# Proxy UI 日志刷新改为批量裁剪，预览和最小化操作改为异步 UI 投递，降低 UI 主线程被后台线程同步等待的风险。
+- [x] DLL 默认代理端口和根配置从 `8080` 改为 `18080`，避免缺配置或根配置场景继续走旧 Delphi 模拟授权链路。
+- [x] DLL 事件分发线程加入异步会话超时扫描，OCR/NFC/虹膜/授权超时会主动清理并回调失败事件。
+- [x] DLL 异步请求在终端切换、busy、HTTP 失败等提前返回路径清理会话，避免长期残留后误触发超时回调。
+- [x] DLL 授权回调 JSON 增加字符串转义，`auth_result` 按数字输出，第三方回调增加 SEH 保护。
+- [x] 修复 `StartProcess` 创建无法匹配的假会话问题，并补充流程级虹膜回调兜底处理。
+- [x] C# Proxy `Release|x86` 编译通过：0 warning / 0 error。
+- [x] DLL `Release|Win32` 编译通过：0 warning / 0 error。
+
+### 修改文件
+
+- C# Proxy：`Core/WorkerQueue.cs`、`Infrastructure/Logger.cs`、`MainForm.cs`、`Preview/PreviewManager.cs`、`Server/DllCallbackSender.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/TerminalCallbackHandler.cs`、`Terminal/TerminalClient.cs`。
+- DLL 工程：`HZCYKJTHardWare.json`、`src/config_manager.cpp`、`src/config_manager.h`、`src/event_dispatcher.cpp`、`src/event_dispatcher.h`、`src/exports.cpp`、`src/request_session_manager.cpp`。
+- 本次未主动修改第三方示例程序源码；工作区中已有 Delphi 示例和第三方示例改动属于既有未提交变更。
+
+### 待现场验证
+
+- [ ] 第三方 Demo 正常 `InitSdk`，确认 DLL 实际连接 `http://127.0.0.1:18080` 的 C# Proxy。
+- [ ] 人脸/指纹抓拍按每秒 5 到 8 次连续运行 24 小时，记录 P50/P95/P99 响应时间。
+- [ ] 长时间视频预览叠加高频抓拍，确认 UI 可移动、可点击、日志继续刷新且不假死。
+- [ ] 授权请求真实链路验证：第三方调用 DLL，DLL 转发 C# Proxy，C# Proxy 调终端真实接口，授权结果回调第三方。
+- [ ] 第三方反复启动、退出、重新注册回调，确认旧会话被取消，旧数据不再回调给新注册方。
+- [ ] 断网、终端断开、终端超时、C# Proxy 停止等异常场景，确认 DLL 有中文失败日志和超时回调。
+- [ ] 用任务管理器或 Process Explorer 连续观察内存、线程数、句柄数、GDI 对象数、日志文件句柄是否持续增长。
+
+### 已知风险和下一步建议
+
+- [ ] DLL 导出 HTTP 请求仍由全局 `BusyGuard` 串行化；当前可防止无限堆积，但并发第三方请求会快速返回 busy，后续可按资源类型拆分独立限流。
+- [ ] C# Proxy 抓拍同步接口仍需要等待终端 HTTP 返回；若终端自身响应变慢，建议结合现场数据继续调低超时并增加慢请求分桶统计。
+- [ ] 日志系统已从业务线程移走，但高频写盘仍建议观察磁盘 IO；必要时可改为批量 flush。
+- [ ] 当前编译验证已完成，尚未做真实终端 24 小时压测，性能结论需以现场压测数据确认。

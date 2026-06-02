@@ -181,29 +181,45 @@ std::vector<std::shared_ptr<RequestSession>> RequestSessionManager::CheckTimeout
 
 void RequestSessionManager::CancelAll() {
     CriticalSectionGuard guard(&m_cs);
-    for (auto& kv : m_sessions) {
+    int64_t now = NowMs();
+    for (auto it = m_sessions.begin(); it != m_sessions.end(); ) {
+        auto& kv = *it;
         if (kv.second->status == RequestStatus::Pending ||
             kv.second->status == RequestStatus::Accepted) {
             kv.second->status = RequestStatus::Cancelled;
             LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=流程结束", kv.first.c_str());
+            m_completedRequests[kv.first] = now;
+            it = m_sessions.erase(it);
+        } else {
+            ++it;
         }
     }
+    PruneCompletedLocked(now);
 }
 
 void RequestSessionManager::ExpireAllForTerminalSwitch() {
     CriticalSectionGuard guard(&m_cs);
-    for (auto& kv : m_sessions) {
+    int64_t now = NowMs();
+    for (auto it = m_sessions.begin(); it != m_sessions.end(); ) {
+        auto& kv = *it;
         if (kv.second->status == RequestStatus::Pending ||
             kv.second->status == RequestStatus::Accepted) {
             kv.second->status = RequestStatus::Expired;
             LOG_DEBUG("RequestSession", "异步请求已过期：request_id=%s，原因=终端切换", kv.first.c_str());
+            m_completedRequests[kv.first] = now;
+            it = m_sessions.erase(it);
+        } else {
+            ++it;
         }
     }
+    PruneCompletedLocked(now);
 }
 
 void RequestSessionManager::CancelAllForCallbackReset() {
     CriticalSectionGuard guard(&m_cs);
-    for (auto& kv : m_sessions) {
+    int64_t now = NowMs();
+    for (auto it = m_sessions.begin(); it != m_sessions.end(); ) {
+        auto& kv = *it;
         if (kv.second->status == RequestStatus::Pending ||
             kv.second->status == RequestStatus::Accepted ||
             kv.second->status == RequestStatus::CallbackReceived) {
@@ -211,8 +227,13 @@ void RequestSessionManager::CancelAllForCallbackReset() {
             kv.second->callback_body.clear();
             kv.second->callback_received = false;
             LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=第三方重新注册回调", kv.first.c_str());
+            m_completedRequests[kv.first] = now;
+            it = m_sessions.erase(it);
+        } else {
+            ++it;
         }
     }
+    PruneCompletedLocked(now);
 }
 
 void RequestSessionManager::PruneCompletedLocked(int64_t nowMs) {

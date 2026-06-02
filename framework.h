@@ -21,6 +21,7 @@
 #include <memory>
 #include <queue>
 #include <condition_variable>
+#include <mutex>
 #include <fstream>
 #include <sstream>
 #include <cstdio>

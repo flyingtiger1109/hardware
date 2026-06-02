@@ -10,6 +10,10 @@ namespace HZCYKJTHardWare.Proxy
             {
                 components.Dispose();
             }
+            if (disposing)
+            {
+                DisposeTrayResources();
+            }
             base.Dispose(disposing);
         }
 
@@ -194,6 +198,7 @@ namespace HZCYKJTHardWare.Proxy
             this.Text = "HZCYJKTHardWare - 后端服务";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.MainForm_FormClosing);
             this.Load += new System.EventHandler(this.MainForm_Load);
+            this.Resize += new System.EventHandler(this.MainForm_Resize);
 
             this.panelTop.ResumeLayout(false);
             this.panelPreview.ResumeLayout(false);

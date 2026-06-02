@@ -9,6 +9,7 @@ uses
 const
   WM_APPEND_APP_LOG = WM_USER + 101;
   WM_AUTO_START_SERVER = WM_USER + 102;
+  WM_MINIMIZE_AFTER_EXTERNAL_PREVIEW = WM_USER + 103;
 
 type
   TFormMain = class(TForm)
@@ -67,6 +68,8 @@ type
     procedure AppendLogLine(const S: string);
     procedure WMAppendAppLog(var Msg: TMessage); message WM_APPEND_APP_LOG;
     procedure WMAutoStartServer(var Msg: TMessage); message WM_AUTO_START_SERVER;
+    procedure WMMinimizeAfterExternalPreview(var Msg: TMessage); message WM_MINIMIZE_AFTER_EXTERNAL_PREVIEW;
+    procedure ExternalPreviewReady;
     procedure Log(const S: string);
   public
   end;
@@ -140,6 +143,18 @@ begin
   BtnStartServerClick(nil);
 end;
 
+procedure TFormMain.ExternalPreviewReady;
+begin
+  if HandleAllocated then
+    PostMessage(Handle, WM_MINIMIZE_AFTER_EXTERNAL_PREVIEW, 0, 0);
+end;
+
+procedure TFormMain.WMMinimizeAfterExternalPreview(var Msg: TMessage);
+begin
+  Log('[信息] [预览] 外部预览已成功回调第三方，程序自动最小化到任务栏。');
+  if WindowState <> wsMinimized then
+    Application.Minimize;
+end;
 procedure TFormMain.Log(const S: string);
 var
   LogMessage: PLogMessage;
@@ -185,6 +200,7 @@ begin
   end;
   FServer := TDelphiProxyServer.Create(PanelCamera, PanelFingerprint, PanelIris);
   FServer.SetLogProc(Log);
+  FServer.SetExternalPreviewReadyProc(ExternalPreviewReady);
   FServer.Start;
   Log('[信息] [服务] 正在启动服务，实际监听结果请查看后续日志。');
 end;

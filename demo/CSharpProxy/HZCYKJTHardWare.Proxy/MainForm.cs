@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -9,10 +10,14 @@ namespace HZCYKJTHardWare.Proxy
     public partial class MainForm : Form
     {
         private ProxyServer _server;
+        private NotifyIcon _trayIcon;
+        private ContextMenuStrip _trayMenu;
+        private Icon _appIcon;
 
         public MainForm()
         {
             InitializeComponent();
+            InitializeTrayIcon();
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -24,7 +29,78 @@ namespace HZCYKJTHardWare.Proxy
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_trayIcon != null)
+                _trayIcon.Visible = false;
+
             StopServer();
+            Logger.Flush(1000);
+        }
+
+        private void MainForm_Resize(object sender, EventArgs e)
+        {
+            if (WindowState == FormWindowState.Minimized)
+                HideToTray();
+        }
+
+        private void InitializeTrayIcon()
+        {
+            _appIcon = LoadApplicationIcon();
+            if (_appIcon != null)
+                Icon = _appIcon;
+
+            _trayMenu = new ContextMenuStrip();
+            _trayMenu.Items.Add("显示主窗口", null, (s, e) => RestoreFromTray());
+            _trayMenu.Items.Add("退出程序", null, (s, e) => Close());
+
+            _trayIcon = new NotifyIcon
+            {
+                Icon = _appIcon ?? SystemIcons.Application,
+                Text = "HZCYJKTHardWare 后端服务",
+                ContextMenuStrip = _trayMenu,
+                Visible = true
+            };
+            _trayIcon.DoubleClick += (s, e) => RestoreFromTray();
+        }
+
+        private static Icon LoadApplicationIcon()
+        {
+            try
+            {
+                return Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void HideToTray()
+        {
+            try
+            {
+                ShowInTaskbar = false;
+                Hide();
+                _trayIcon.Visible = true;
+            }
+            catch
+            {
+                // 托盘隐藏失败不能影响后台服务运行
+            }
+        }
+
+        private void RestoreFromTray()
+        {
+            try
+            {
+                ShowInTaskbar = true;
+                Show();
+                WindowState = FormWindowState.Normal;
+                Activate();
+            }
+            catch
+            {
+                // 托盘恢复失败不能影响后台服务运行
+            }
         }
 
         private void btnStartServer_Click(object sender, EventArgs e)
@@ -206,7 +282,8 @@ namespace HZCYKJTHardWare.Proxy
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => AppendLogToMemo(line)));
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke(new Action(() => AppendLogToMemo(line)));
             }
             else
             {
@@ -216,20 +293,32 @@ namespace HZCYKJTHardWare.Proxy
         }
 
         private const int MaxLogLines = 3000;  // Prevent UI crash from unbounded log growth
+        private const int TrimLogLinesBatch = 300;
+        private int _uiLogLineCount;
 
         private void AppendLogToMemo(string line)
         {
             try
             {
-                // Trim old lines if exceeding limit (keep last MaxLogLines)
-                if (memoLog.Lines.Length > MaxLogLines)
+                memoLog.AppendText(line + Environment.NewLine);
+                _uiLogLineCount++;
+
+                // Trim in batches. Reading memoLog.Lines on every log is expensive during high-frequency requests.
+                if (_uiLogLineCount > MaxLogLines + TrimLogLinesBatch)
                 {
                     var lines = memoLog.Lines;
-                    var keep = new string[MaxLogLines];
-                    Array.Copy(lines, lines.Length - MaxLogLines, keep, 0, MaxLogLines);
-                    memoLog.Lines = keep;
+                    if (lines.Length > MaxLogLines)
+                    {
+                        var keep = new string[MaxLogLines];
+                        Array.Copy(lines, lines.Length - MaxLogLines, keep, 0, MaxLogLines);
+                        memoLog.Lines = keep;
+                        _uiLogLineCount = keep.Length;
+                    }
+                    else
+                    {
+                        _uiLogLineCount = lines.Length;
+                    }
                 }
-                memoLog.AppendText(line + Environment.NewLine);
                 memoLog.SelectionStart = memoLog.TextLength;
                 memoLog.ScrollToCaret();
             }
@@ -237,6 +326,20 @@ namespace HZCYKJTHardWare.Proxy
             {
                 // Log area must never crash the program
             }
+        }
+
+        private void DisposeTrayResources()
+        {
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+            _trayMenu?.Dispose();
+            _trayMenu = null;
+            _appIcon?.Dispose();
+            _appIcon = null;
         }
     }
 }

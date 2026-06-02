@@ -46,6 +46,7 @@ type
     function ParseImageCapture(const BodyUtf8: string): TImageCallbackResult;
     function GetResourceType(const BodyUtf8: string): string;
     function ExtractField(const Json, Key: string): string;
+    function ExtractNonEmptyField(const Json, Key: string): string;
     function ExtractIntField(const Json, Key: string): Integer;
     function ExtractJsonArray(const Json, Key: string): string;
     function ParseEvidenceImages(const DataSection: string; var Images: array of TEvidenceImage; MaxCount: Integer): Integer;
@@ -85,6 +86,56 @@ begin
       Exit
     else
       Result := Result + Json[I];
+  end;
+end;
+
+function TCallbackParser.ExtractNonEmptyField(const Json, Key: string): string;
+var
+  SearchText, Tail, Value: string;
+  Offset, FoundAt, K, I: Integer;
+  Escaped: Boolean;
+begin
+  Result := '';
+  SearchText := '"' + Key + '"';
+  Offset := 1;
+  while Offset <= Length(Json) do begin
+    Tail := Copy(Json, Offset, MaxInt);
+    FoundAt := Pos(SearchText, Tail);
+    if FoundAt = 0 then Exit;
+    K := Offset + FoundAt - 1 + Length(SearchText);
+    while (K <= Length(Json)) and (Json[K] in [' ', #9, #10, #13, ':']) do Inc(K);
+    if (K <= Length(Json)) and (Json[K] = '"') then begin
+      Inc(K);
+      Value := '';
+      Escaped := False;
+      for I := K to Length(Json) do begin
+        if Escaped then begin
+          case Json[I] of
+            'n': Value := Value + #10;
+            'r': Value := Value + #13;
+            't': Value := Value + #9;
+          else
+            Value := Value + Json[I];
+          end;
+          Escaped := False;
+        end
+        else if Json[I] = '\' then
+          Escaped := True
+        else if Json[I] = '"' then begin
+          if Value <> '' then begin
+            Result := Value;
+            Exit;
+          end;
+          Offset := I + 1;
+          Break;
+        end
+        else
+          Value := Value + Json[I];
+      end;
+      if I > Length(Json) then Exit;
+    end else begin
+      Offset := K + 1;
+    end;
   end;
 end;
 
@@ -189,14 +240,19 @@ var
   begin
     Result := '';
     // Try uppercase field names (terminal uses MRZ1/MRZ2/MRZ3)
-    M1 := ExtractField(Pi, 'MRZ1'); if M1 = '' then M1 := ExtractField(Pi, 'mrz1');
-    M2 := ExtractField(Pi, 'MRZ2'); if M2 = '' then M2 := ExtractField(Pi, 'mrz2');
-    M3 := ExtractField(Pi, 'MRZ3'); if M3 = '' then M3 := ExtractField(Pi, 'mrz3');
+    M1 := ExtractNonEmptyField(Pi, 'MRZ1'); if M1 = '' then M1 := ExtractNonEmptyField(Pi, 'mrz1');
+    M2 := ExtractNonEmptyField(Pi, 'MRZ2'); if M2 = '' then M2 := ExtractNonEmptyField(Pi, 'mrz2');
+    M3 := ExtractNonEmptyField(Pi, 'MRZ3'); if M3 = '' then M3 := ExtractNonEmptyField(Pi, 'mrz3');
     if (M1 <> '') or (M2 <> '') or (M3 <> '') then
       Result := M1 + '^' + M2 + '^' + M3;
   end;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result.RequestId := '';
+  Result.Mrz := '';
+  Result.CardType := 0;
+  SetLength(Result.EvidenceImages, 0);
+  Result.EvidenceImagesCount := 0;
+  Result.Valid := False;
   Result.RequestId := ExtractField(BodyUtf8, 'request_id');
 
   // Extract data section
@@ -210,13 +266,23 @@ begin
 
   Result.CardType := ExtractIntField(DataSection, 'card_type');
 
+  Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'mrz');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'MRZ');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'mrz_code');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'mrzCode');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'MRZCode');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(BodyUtf8, 'MRZ_CODE');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(DataSection, 'mrz');
+  if Result.Mrz = '' then Result.Mrz := ExtractNonEmptyField(DataSection, 'MRZ');
+
   // Search ALL occurrences of mrz1/mrz2/mrz3 in the entire body
   // (not just in person_info - they might be at different nesting levels)
-  Result.Mrz := FindMrzInPersonInfo(BodyUtf8);
+  if Result.Mrz = '' then
+    Result.Mrz := FindMrzInPersonInfo(BodyUtf8);
 
   // Parse evidence_images
   SetLength(Result.EvidenceImages, 20);
-  Result.EvidenceImagesCount := ParseEvidenceImages(DataSection, Result.EvidenceImages[0], 20);
+  Result.EvidenceImagesCount := ParseEvidenceImages(DataSection, Result.EvidenceImages, 20);
 
   Result.Valid := True;
 end;
@@ -226,7 +292,9 @@ var
   DataSection, RawCardText: string;
   P: Integer;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result.RequestId := '';
+  Result.CardText := '';
+  Result.Valid := False;
   Result.RequestId := ExtractField(BodyUtf8, 'request_id');
 
   // Try to find card_text in the entire body first
@@ -269,7 +337,11 @@ var
   DataSection: string;
   P: Integer;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result.RequestId := '';
+  Result.ResourceType := '';
+  Result.ImageBase64 := '';
+  Result.ImageMimeType := '';
+  Result.Valid := False;
   Result.RequestId := ExtractField(BodyUtf8, 'request_id');
   Result.ResourceType := ExtractField(BodyUtf8, 'resource_type');
 

@@ -35,11 +35,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
     public class PreviewManager : IDisposable
     {
+        private const int PreviewUrlTimeoutMs = 5000;
+        private const int ColdStartWarmupMs = 800;
         private readonly ConcurrentDictionary<string, PreviewSession> _sessions = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, PreviewSession> _restartInfo = new ConcurrentDictionary<string, PreviewSession>();
+        private readonly ConcurrentDictionary<string, byte> _coldStartWarmups = new ConcurrentDictionary<string, byte>();
         private readonly TerminalClient _terminalClient;
         private readonly int _networkCachingMs;
         private readonly int _liveCachingMs;
+        private readonly string _rtspTransport;
         private readonly SynchronizationContext _uiContext;  // Captured from UI thread at construction
 
         public PreviewManager(TerminalClient terminalClient)
@@ -49,6 +53,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var cfg = AppConfig.Instance;
             _networkCachingMs = cfg.RtspNetworkCachingMs;
             _liveCachingMs = cfg.RtspLiveCachingMs;
+            _rtspTransport = cfg.RtspTransport ?? "";
         }
 
         private static string SessionKey(PreviewResourceType resType, PreviewSessionType sessionType)
@@ -90,19 +95,28 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public async Task<string> RequestPreviewUrl(PreviewResourceType resType, string terminalBaseUrl)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var path = ResourceToTerminalPath(resType);
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var body = $"{{\"request_id\":\"{requestId}\"}}";
 
-            var (ok, response) = await _terminalClient.PostJsonAsync(terminalBaseUrl, path, body);
-            if (!ok) return null;
+            var (ok, response) = await _terminalClient.PostJsonAsync(terminalBaseUrl, path, body, PreviewUrlTimeoutMs).ConfigureAwait(false);
+            sw.Stop();
+            if (!ok)
+            {
+                Logger.Warn($"预览URL请求失败：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms");
+                return null;
+            }
 
-            return ResultParser.ExtractPreviewUrl(response);
+            var previewUrl = ResultParser.ExtractPreviewUrl(response);
+            Logger.Info($"预览URL请求完成：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms，url_empty={string.IsNullOrEmpty(previewUrl)}");
+            return previewUrl;
         }
 
         public async Task<bool> StartPreview(PreviewResourceType resType, PreviewSessionType sessionType,
             IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null)
         {
+            var totalSw = System.Diagnostics.Stopwatch.StartNew();
             var key = SessionKey(resType, sessionType);
 
             // If already running for same target, skip
@@ -114,7 +128,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 StopPreview(resType, sessionType);
 
             // Get RTSP URL from terminal
+            var urlTick = totalSw.ElapsedMilliseconds;
             var rtspUrl = await RequestPreviewUrl(resType, terminalBaseUrl);
+            var urlElapsed = totalSw.ElapsedMilliseconds - urlTick;
             if (string.IsNullOrEmpty(rtspUrl))
             {
                 Logger.Error($"获取预览URL失败: {ResourceToName(resType)}");
@@ -139,18 +155,22 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             // Get source dimensions
             var (srcW, srcH, swap) = GetSourceDimensions(resType);
+            await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
 
             // Create VLC player and play — MUST run on UI thread (same as Delphi RunOnMainThread)
             var player = new VlcPreviewPlayer();
             var ok2 = false;
-            _uiContext.Send(_ =>
+            var playTick = totalSw.ElapsedMilliseconds;
+            await RunOnUiAsync(() =>
             {
-                ok2 = player.Play(rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs, srcW, srcH, swap);
-            }, null);
+                ok2 = player.Play(rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap);
+            }).ConfigureAwait(false);
+            var playElapsed = totalSw.ElapsedMilliseconds - playTick;
 
             if (!ok2)
             {
-                _uiContext.Send(_ => { player.Dispose(); }, null);
+                await RunOnUiAsync(() => { player.Dispose(); }).ConfigureAwait(false);
+                Logger.Error($"VLC播放失败明细：resource={ResourceToName(resType)}，session={sessionType}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms");
                 Logger.Error($"VLC播放失败: {ResourceToName(resType)}");
                 return false;
             }
@@ -165,6 +185,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             };
             _sessions[key] = session;
             _restartInfo[key] = session;
+            totalSw.Stop();
+            Logger.Info($"预览启动明细：resource={ResourceToName(resType)}，session={sessionType}，hwnd={parentHwnd}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms，network_cache={_networkCachingMs}ms，live_cache={_liveCachingMs}ms，transport={_rtspTransport}");
 
             Logger.Info($"预览已启动: {ResourceToName(resType)} {sessionType} -> hwnd={parentHwnd}");
             return true;
@@ -176,7 +198,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (_sessions.TryRemove(key, out var session))
             {
                 // VLC dispose must run on UI thread (same as Delphi RunOnMainThread)
-                _uiContext.Send(_ => { session.Player?.Dispose(); }, null);
+                PostToUi(() => { session.Player?.Dispose(); });
                 _restartInfo.TryRemove(key, out _);
                 Logger.Info($"预览已停止: {ResourceToName(resType)} {sessionType}");
                 return true;
@@ -192,12 +214,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public void StopAll()
         {
+            var sessions = new List<PreviewSession>(_sessions.Values);
             // VLC dispose must run on UI thread
-            _uiContext.Send(_ =>
+            PostToUi(() =>
             {
-                foreach (var kvp in _sessions)
-                    kvp.Value.Player?.Dispose();
-            }, null);
+                foreach (var session in sessions)
+                    session.Player?.Dispose();
+            });
             _sessions.Clear();
             Logger.Info("所有预览已停止");
         }
@@ -206,8 +229,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             var restartList = new List<PreviewSession>(_restartInfo.Values);
 
-            foreach (var kvp in _sessions)
-                kvp.Value.Player?.Dispose();
+            await RunOnUiAsync(() =>
+            {
+                foreach (var kvp in _sessions)
+                    kvp.Value.Player?.Dispose();
+            }).ConfigureAwait(false);
             _sessions.Clear();
 
             if (restartList.Count == 0)
@@ -232,5 +258,79 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         public void Dispose() { StopAll(); }
+
+        private async Task WarmupPreviewStreamIfNeeded(PreviewResourceType resType, string rtspUrl,
+            IntPtr parentHwnd, int srcW, int srcH, bool swap)
+        {
+            var key = resType.ToString();
+            if (!_coldStartWarmups.TryAdd(key, 1))
+                return;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var warmupPlayer = new VlcPreviewPlayer();
+            var ok = false;
+            try
+            {
+                await RunOnUiAsync(() =>
+                {
+                    ok = warmupPlayer.Play(rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs,
+                        _rtspTransport, srcW, srcH, swap, visible: false);
+                }).ConfigureAwait(false);
+
+                if (ok)
+                    await Task.Delay(ColdStartWarmupMs).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _coldStartWarmups.TryRemove(key, out _);
+                Logger.Warn($"首次预览预热异常：resource={ResourceToName(resType)}，error={ex.Message}");
+            }
+            finally
+            {
+                await RunOnUiAsync(() => warmupPlayer.Dispose()).ConfigureAwait(false);
+                sw.Stop();
+                Logger.Info($"首次预览预热完成：resource={ResourceToName(resType)}，ok={ok}，耗时={sw.ElapsedMilliseconds}ms");
+            }
+        }
+
+        private Task RunOnUiAsync(Action action)
+        {
+            if (_uiContext == null || SynchronizationContext.Current == _uiContext)
+            {
+                action();
+                return Task.FromResult(true);
+            }
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _uiContext.Post(_ =>
+            {
+                try
+                {
+                    action();
+                    tcs.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"UI线程预览操作异常: {ex.Message}");
+                    tcs.TrySetException(ex);
+                }
+            }, null);
+            return tcs.Task;
+        }
+
+        private void PostToUi(Action action)
+        {
+            if (_uiContext == null || SynchronizationContext.Current == _uiContext)
+            {
+                action();
+                return;
+            }
+
+            _uiContext.Post(_ =>
+            {
+                try { action(); }
+                catch (Exception ex) { Logger.Error($"UI线程预览释放异常: {ex.Message}"); }
+            }, null);
+        }
     }
 }

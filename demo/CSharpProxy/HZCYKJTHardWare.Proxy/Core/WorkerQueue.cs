@@ -15,6 +15,11 @@ namespace HZCYKJTHardWare.Proxy.Core
         public DateTime EnqueueTime { get; set; }
     }
 
+    public interface IQueueResultSink
+    {
+        void TrySetQueueResult(string result);
+    }
+
     /// <summary>
     /// Fixed-size worker queue with one dedicated thread.
     /// - Worker blocks on Take() when idle (no CPU spin)
@@ -108,8 +113,7 @@ namespace HZCYKJTHardWare.Proxy.Core
 
                         // Immediately complete the replaced task's TCS so its HTTP handler returns fast
                         // (otherwise it would wait full timeout, holding DLL's socket)
-                        if (oldTask != null && oldTask.Data is TaskCompletionSource<string> oldTcs)
-                            oldTcs.TrySetResult("{\"error\":true,\"code\":\"capture_failed\"}");
+                        TryCompleteDroppedTask(oldTask);
 
                         Logger.Info($"[队列] {_name} 队列满, 新请求替换旧排队任务 (已替换={_replaced})");
                     }
@@ -158,35 +162,33 @@ namespace HZCYKJTHardWare.Proxy.Core
                 }
 
                 if (task != null)
-                {
-                    ExecuteWithTimeout(task, cts);
-                }
+                    ExecuteWithTiming(task);
             }
             cts.Dispose();
         }
 
-        private void ExecuteWithTimeout(QueueTask<T> task, CancellationTokenSource cts)
+        private void ExecuteWithTiming(QueueTask<T> task)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                // Execute handler on this worker thread with timeout via Task
-                var execTask = Task.Run(() => _handler(task));
-                if (execTask.Wait(_timeoutMs))
-                {
-                    Interlocked.Increment(ref _completed);
-                    sw.Stop();
-                    if (sw.ElapsedMilliseconds > 1000)
-                        Logger.Info($"[队列] {_name} 任务完成, 耗时={sw.ElapsedMilliseconds}ms");
-                    else
-                        Logger.Info($"[队列] {_name} 任务完成, 耗时={sw.ElapsedMilliseconds}ms");
-                }
-                else
+                var queueWaitMs = (DateTime.UtcNow - task.EnqueueTime).TotalMilliseconds;
+                if (queueWaitMs > _timeoutMs)
                 {
                     Interlocked.Increment(ref _timedOut);
-                    sw.Stop();
-                    Logger.Error($"[队列] {_name} 任务超时({_timeoutMs}ms), 已丢弃, 实际耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Warn($"[队列] {_name} 任务排队已超时({_timeoutMs}ms), 已丢弃, 排队耗时={queueWaitMs:F0}ms");
+                    TryCompleteDroppedTask(task);
+                    return;
                 }
+
+                // The queue already owns a dedicated worker thread. Running the handler
+                // directly avoids leaking ThreadPool tasks when a timed-out handler keeps running.
+                _handler(task);
+                Interlocked.Increment(ref _completed);
+                sw.Stop();
+
+                if (sw.ElapsedMilliseconds > 500 || queueWaitMs > 200)
+                    Logger.Info($"[队列] {_name} 任务完成, 执行耗时={sw.ElapsedMilliseconds}ms, 排队耗时={queueWaitMs:F0}ms");
             }
             catch (Exception ex)
             {
@@ -194,6 +196,18 @@ namespace HZCYKJTHardWare.Proxy.Core
                 Logger.Error($"[队列] {_name} 任务异常: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
                 Interlocked.Increment(ref _completed);  // Count as completed (handled exception)
             }
+        }
+
+        private static void TryCompleteDroppedTask(QueueTask<T> task)
+        {
+            if (task == null)
+                return;
+
+            var data = task.Data;
+            if (data is TaskCompletionSource<string> tcs)
+                tcs.TrySetResult("{\"error\":true,\"code\":\"timeout\"}");
+            else if (data is IQueueResultSink sink)
+                sink.TrySetQueueResult("{\"error\":true,\"code\":\"timeout\"}");
         }
 
         public string GetStats()

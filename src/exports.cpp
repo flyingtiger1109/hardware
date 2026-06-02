@@ -55,6 +55,99 @@ static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
 }
 
+class IrisPreviewRestoreWorker {
+public:
+    static IrisPreviewRestoreWorker& Instance() {
+        static IrisPreviewRestoreWorker worker;
+        return worker;
+    }
+
+    void Enqueue(const std::string& delphiServerUrl,
+                 const std::string& requestId,
+                 HWND hwnd) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        delphiServerUrl_ = delphiServerUrl;
+        requestId_ = requestId;
+        hwnd_ = hwnd;
+        hasPending_ = true;
+        LOG_INFO("EXPORT", "虹膜预览恢复请求已进入固定后台队列：request_id=%s", requestId_.c_str());
+        cv_.notify_one();
+    }
+
+private:
+    IrisPreviewRestoreWorker()
+        : thread_([this]() { Run(); }) {
+    }
+
+    ~IrisPreviewRestoreWorker() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+            hasPending_ = false;
+        }
+        cv_.notify_one();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    void Run() {
+        for (;;) {
+            std::string delphiServerUrl;
+            std::string requestId;
+            HWND hwnd = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [this]() { return stopping_ || hasPending_; });
+                if (stopping_) {
+                    return;
+                }
+                delphiServerUrl = delphiServerUrl_;
+                requestId = requestId_;
+                hwnd = hwnd_;
+                hasPending_ = false;
+            }
+
+            if (delphiServerUrl.empty() || requestId.empty() || hwnd == nullptr) {
+                LOG_WARN("EXPORT", "虹膜预览恢复请求参数无效，已跳过：request_id=%s", requestId.c_str());
+                continue;
+            }
+
+            HZCYKJTHardWare::DelphiProxy proxy(delphiServerUrl);
+            std::string rtspUrl;
+            bool restored = false;
+            for (int attempt = 1; attempt <= 50; ++attempt) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (hasPending_ || stopping_) {
+                        LOG_WARN("EXPORT", "虹膜预览恢复请求被新的切换恢复请求替换：request_id=%s", requestId.c_str());
+                        break;
+                    }
+                }
+                if (proxy.GetIrisPreviewUrl(requestId, rtspUrl) &&
+                    HZCYKJTHardWare::PreviewManager::Instance().StartIrisPreviewFromUrl(hwnd, rtspUrl) == HZCYKJTHardWare_RET_OK) {
+                    LOG_INFO("EXPORT", "切换终端后虹膜预览已后台恢复：request_id=%s", requestId.c_str());
+                    restored = true;
+                    break;
+                }
+                Sleep(200);
+            }
+            if (!restored) {
+                LOG_ERROR("EXPORT", "切换终端后虹膜预览后台恢复失败或已被替换：request_id=%s", requestId.c_str());
+            }
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::thread thread_;
+    bool stopping_ = false;
+    bool hasPending_ = false;
+    std::string delphiServerUrl_;
+    std::string requestId_;
+    HWND hwnd_ = nullptr;
+};
+
 static std::string GenerateSyncRequestId(const char* prefix) {
     static std::atomic<int> seq{0};
     int currentSeq = ++seq;
@@ -642,18 +735,13 @@ static int SwitchTerminalBody(int terminalIndex) {
         ctx.current_terminal_index = terminalIndex;
     }
 
-    if (irisRunning) PreviewManager::Instance().StopIrisPreviewRenderer(false);
-
-    std::string rtspUrl;
-    int restoreRet = HZCYKJTHardWare_RET_OK;
-    if (irisRunning &&
-        (!proxy.GetIrisPreviewUrl(irisRequestId, rtspUrl) ||
-         (restoreRet = PreviewManager::Instance().StartIrisPreviewFromUrl(irisHwnd, rtspUrl)) != HZCYKJTHardWare_RET_OK)) {
-        LOG_ERROR("EXPORT", "切换终端后恢复虹膜预览失败：request_id=%s", irisRequestId.c_str());
-        return restoreRet == HZCYKJTHardWare_RET_OK ? HZCYKJTHardWare_RET_HTTP_FAILED : restoreRet;
+    if (irisRunning) {
+        PreviewManager::Instance().StopIrisPreviewRenderer(false);
+        IrisPreviewRestoreWorker::Instance().Enqueue(delphiServerUrl, irisRequestId, irisHwnd);
+        LOG_INFO("EXPORT", "终端切换已受理，虹膜预览恢复转入后台固定队列：request_id=%s", irisRequestId.c_str());
     }
 
-    LOG_INFO("EXPORT", "终端切换已完成：terminal_index=%d", terminalIndex);
+    LOG_INFO("EXPORT", "终端切换指令已受理：terminal_index=%d", terminalIndex);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -703,11 +791,6 @@ static int StartProcessBody(const char* saveDir) {
 
     std::string saveRoot = ResolveSaveRoot(saveDir);
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PROCESS");
-
-    // Create session so callbacks can be matched
-    RequestSessionManager::Instance().CreateSession(
-        requestId, saveRoot, ctx.ocr_timeout_ms);
-    RequestSessionManager::Instance().MarkAccepted(requestId);
 
     // Build callbacks JSON for async operations
     std::string ocrCallback = BuildCallbackUrl(ctx, "/ocr");
@@ -1218,12 +1301,17 @@ static int CaptureIrisImageBody(const char* saveDir) {
 
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
-    if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (!guard.acquired) {
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
@@ -1233,6 +1321,7 @@ static int CaptureIrisImageBody(const char* saveDir) {
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "虹膜抓拍请求发送失败",
                          nullptr, nullptr);
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1255,12 +1344,17 @@ static int RequestOCRBody(const char* saveDir) {
 
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "OCR请求被终端切换拦截：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
-    if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (!guard.acquired) {
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "OCR请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
@@ -1270,6 +1364,7 @@ static int RequestOCRBody(const char* saveDir) {
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "OCR识别请求发送失败",
                          nullptr, nullptr);
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1293,12 +1388,17 @@ static int RequestNfcCardBody(const char* saveDir) {
 
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "NFC请求被终端切换拦截：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
-    if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (!guard.acquired) {
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "NFC请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
@@ -1308,6 +1408,7 @@ static int RequestNfcCardBody(const char* saveDir) {
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "IC卡识别请求发送失败",
                          nullptr, nullptr);
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1336,12 +1437,17 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
 
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
-    if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (!guard.acquired) {
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     if (IsSwitchPending()) {
         LOG_WARN("EXPORT", "授权请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
@@ -1358,8 +1464,9 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "",
-                         "Authorization request HTTP failed",
+                         "授权请求发送失败",
                          nullptr, nullptr);
+        RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 

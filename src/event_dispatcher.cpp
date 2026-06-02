@@ -48,6 +48,41 @@ static bool IsDelphiErrorResponse(const std::string& body, std::string& errorCod
     return true;
 }
 
+static std::string JsonEscape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(ch) < 0x20) {
+                    char buf[8] = {0};
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(ch));
+                    escaped += buf;
+                } else {
+                    escaped += ch;
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+static bool SafeInvokeThirdPartyCallback(THZCYKJTHardWareEventCallback callback, const char* json) {
+    __try {
+        callback(json);
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static std::string GetOcrLampFileName(const EvidenceImage& img) {
     if (img.lamp_type == "1") return "可见光";
     if (img.lamp_type == "2") return "红外光";
@@ -206,7 +241,8 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
         if (processActive &&
             (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT ||
-             resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD)) {
+             resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD ||
+             resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE)) {
             std::string errorCode;
             std::string errorMsg;
             bool isError = IsDelphiErrorResponse(body, errorCode, errorMsg);
@@ -250,6 +286,21 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                                   HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(),
                                   cardText.c_str());
                     }
+                }
+                return;
+            }
+
+            if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
+                if (isError) {
+                    SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
+                              HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
+                              nullptr, body.c_str());
+                } else {
+                    RequestSession fallbackSession;
+                    fallbackSession.request_id = requestId;
+                    fallbackSession.resource_type = resourceType;
+                    fallbackSession.save_dir = JsonHelper::GetString(body, "save_path");
+                    ProcessIrisCallback(requestId, body, fallbackSession);
                 }
                 return;
             }
@@ -843,18 +894,61 @@ void EventDispatcher::SendEvent(const std::string& requestId,
     PostEvent(event);
 }
 
+void EventDispatcher::ProcessTimeouts() {
+    auto timeouts = RequestSessionManager::Instance().CheckTimeouts();
+    for (const auto& session : timeouts) {
+        if (!session) {
+            continue;
+        }
+
+        int eventType = HZCYKJTHardWare_EVENT_REQUEST_TIMEOUT;
+        const char* message = "异步请求超时";
+        if (session->resource_type == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
+            eventType = HZCYKJTHardWare_EVENT_OCR_FAILED;
+            message = "OCR请求超时";
+        } else if (session->resource_type == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
+            eventType = HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED;
+            message = "虹膜抓拍请求超时";
+        } else if (session->resource_type == HZCYKJTHardWare_RESOURCE_NFC_CARD) {
+            eventType = HZCYKJTHardWare_EVENT_NFC_CARD_FAILED;
+            message = "IC卡识别请求超时";
+        } else if (session->resource_type == HZCYKJTHardWare_RESOURCE_AUTHORIZATION) {
+            eventType = HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED;
+            message = "授权请求超时";
+        }
+
+        SendEvent(session->request_id, session->resource_type, eventType,
+                  HZCYKJTHardWare_RET_TIMEOUT, "TIMEOUT", message,
+                  nullptr, nullptr);
+        RequestSessionManager::Instance().MarkCompleted(session->request_id);
+    }
+}
+
 void EventDispatcher::WorkerLoop() {
 LOG_DEBUG("EventDispatcher", "第三方回调分发线程已启动");
 
+    auto lastTimeoutCheck = std::chrono::steady_clock::now();
     while (m_running) {
-        bool hasWork = false;
+        auto nowTick = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(nowTick - lastTimeoutCheck).count() >= 1000) {
+            ProcessTimeouts();
+            lastTimeoutCheck = nowTick;
+        }
 
         {
             EnterCriticalSection(&m_cs);
             while (m_queue.empty() && m_pendingCallbacks.empty() && m_running) {
                 SleepConditionVariableCS(&m_cv, &m_cs, 100);
+                auto waitTick = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(waitTick - lastTimeoutCheck).count() >= 1000) {
+                    break;
+                }
             }
             if (!m_running) { LeaveCriticalSection(&m_cs); break; }
+            if (m_queue.empty() && m_pendingCallbacks.empty()) {
+                LeaveCriticalSection(&m_cs);
+                continue;
+            }
 
             // 先处理回调数据
             if (!m_pendingCallbacks.empty()) {
@@ -892,43 +986,46 @@ LOG_DEBUG("EventDispatcher", "第三方回调分发线程已启动");
                 if (cb) {
                     // Build JSON string and pass to callback
                     std::string json = "{\"event_type\":" + std::to_string(event.event_type) +
-                        ",\"request_id\":\"" + strs.request_id + "\"" +
-                        ",\"resource_type\":\"" + strs.resource_type + "\"" +
+                        ",\"request_id\":\"" + JsonEscape(strs.request_id) + "\"" +
+                        ",\"resource_type\":\"" + JsonEscape(strs.resource_type) + "\"" +
                         ",\"status\":" + std::to_string(event.status) +
-                        ",\"error_code\":\"" + strs.error_code + "\"" +
-                        ",\"message\":\"" + strs.message + "\"" +
+                        ",\"error_code\":\"" + JsonEscape(strs.error_code) + "\"" +
+                        ",\"message\":\"" + JsonEscape(strs.message) + "\"" +
                         ",\"terminal_index\":" + std::to_string(event.terminal_index) +
-                        ",\"terminal_base_url\":\"" + strs.terminal_base_url + "\"" +
-                        ",\"save_path\":\"" + strs.save_path + "\"";
+                        ",\"terminal_base_url\":\"" + JsonEscape(strs.terminal_base_url) + "\"" +
+                        ",\"save_path\":\"" + JsonEscape(strs.save_path) + "\"";
                     if (!strs.ic_number.empty())
-                        json += ",\"ic_number\":\"" + strs.ic_number + "\"";
+                        json += ",\"ic_number\":\"" + JsonEscape(strs.ic_number) + "\"";
                     if (!strs.mrz.empty())
-                        json += ",\"mrz\":\"" + strs.mrz + "\"";
+                        json += ",\"mrz\":\"" + JsonEscape(strs.mrz) + "\"";
                     if (!strs.auth_result.empty())
-                        json += ",\"auth_result\":\"" + strs.auth_result + "\"";
+                        json += ",\"auth_result\":" + strs.auth_result;
                     if (!strs.auth_zjhm.empty())
-                        json += ",\"ZJHM\":\"" + strs.auth_zjhm + "\"";
+                        json += ",\"ZJHM\":\"" + JsonEscape(strs.auth_zjhm) + "\"";
                     if (!strs.auth_zjlb.empty())
-                        json += ",\"ZJLB\":\"" + strs.auth_zjlb + "\"";
+                        json += ",\"ZJLB\":\"" + JsonEscape(strs.auth_zjlb) + "\"";
                     if (!strs.auth_gjdqdm.empty())
-                        json += ",\"GJDQDM\":\"" + strs.auth_gjdqdm + "\"";
+                        json += ",\"GJDQDM\":\"" + JsonEscape(strs.auth_gjdqdm) + "\"";
                     if (!strs.auth_xm.empty())
-                        json += ",\"XM\":\"" + strs.auth_xm + "\"";
+                        json += ",\"XM\":\"" + JsonEscape(strs.auth_xm) + "\"";
                     if (!strs.auth_xb.empty())
-                        json += ",\"XB\":\"" + strs.auth_xb + "\"";
+                        json += ",\"XB\":\"" + JsonEscape(strs.auth_xb) + "\"";
                     if (!strs.auth_csrq.empty())
-                        json += ",\"CSRQ\":\"" + strs.auth_csrq + "\"";
+                        json += ",\"CSRQ\":\"" + JsonEscape(strs.auth_csrq) + "\"";
                     if (!strs.auth_kadm.empty())
-                        json += ",\"KADM\":\"" + strs.auth_kadm + "\"";
+                        json += ",\"KADM\":\"" + JsonEscape(strs.auth_kadm) + "\"";
                     json += "}";
-                    cb(json.c_str());
+                    if (SafeInvokeThirdPartyCallback(cb, json.c_str())) {
+                        LOG_INFO("EventDispatcher", "DLL已回调第三方：event=%d，request_id=%s，resource=%s",
+                                 event.event_type, strs.request_id.c_str(), strs.resource_type.c_str());
+                    } else {
+                        LOG_ERROR("EventDispatcher", "第三方事件回调执行异常，已保护：event=%d，request_id=%s",
+                                  event.event_type, strs.request_id.c_str());
+                    }
                 } else {
                     LOG_DEBUG("EventDispatcher", "第三方事件回调未注册：event=%d request_id=%s",
                              event.event_type, strs.request_id.c_str());
                 }
-
-                LOG_INFO("EventDispatcher", "DLL已回调第三方：event=%d，request_id=%s，resource=%s",
-                         event.event_type, strs.request_id.c_str(), strs.resource_type.c_str());
             } else {
                 LeaveCriticalSection(&m_cs);
             }
@@ -978,6 +1075,13 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     strs.auth_xb = JsonHelper::GetString(body, "XB");
     strs.auth_csrq = JsonHelper::GetString(body, "CSRQ");
     strs.auth_kadm = JsonHelper::GetString(body, "KADM");
+    if (m_queue.size() >= kMaxEventQueueSize) {
+        LOG_WARN("EventDispatcher", "第三方事件队列已满，丢弃最旧事件：queue_size=%zu", m_queue.size());
+        m_queue.pop();
+        if (!m_stringsQueue.empty()) {
+            m_stringsQueue.pop();
+        }
+    }
     m_stringsQueue.push(std::move(strs));
     m_queue.push(event);
     WakeConditionVariable(&m_cv);

@@ -15,7 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         public DllCallbackSender()
         {
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(10);
+            _httpClient.Timeout = TimeSpan.FromSeconds(3);
             _baseUrl = AppConfig.Instance.GetDllCallbackBaseUrl();
         }
 
@@ -57,15 +57,23 @@ namespace HZCYKJTHardWare.Proxy.Server
         private async Task PostCallback(string path, string bodyUtf8)
         {
             var url = _baseUrl + path;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var content = new StringContent(bodyUtf8, Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync(url, content);
-                Logger.Info($"Callback POST {path} -> {(int)response.StatusCode}");
+                using (var content = new StringContent(bodyUtf8, Encoding.UTF8, "application/json"))
+                using (var response = await _httpClient.PostAsync(url, content).ConfigureAwait(false))
+                {
+                    sw.Stop();
+                    if (!response.IsSuccessStatusCode)
+                        Logger.Warn($"[DLL回调] POST {path} 状态异常: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
+                    else if (sw.ElapsedMilliseconds > 500)
+                        Logger.Warn($"[DLL回调] POST {path} 响应较慢: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
+                }
             }
             catch (Exception ex)
             {
-                Logger.Error($"Callback POST {path} failed: {ex.Message}");
+                sw.Stop();
+                Logger.Error($"[DLL回调] POST {path} 失败: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
             }
         }
 

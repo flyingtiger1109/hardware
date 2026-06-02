@@ -36,6 +36,7 @@ private:
 
     void WorkerLoop();
     void ProcessCallback(const CallbackData& cbData);
+    void ProcessTimeouts();
 
     void ProcessFaceCallback(const std::string& requestId,
                              const std::string& body,

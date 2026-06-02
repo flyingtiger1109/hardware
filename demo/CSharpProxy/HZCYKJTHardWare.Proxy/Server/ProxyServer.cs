@@ -20,6 +20,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private TcpListener _dllListener;
         private TcpListener _callbackListener;
         private CancellationTokenSource _cts;
+        private readonly SemaphoreSlim _dllRequestSlots = new SemaphoreSlim(64, 64);
+        private readonly SemaphoreSlim _callbackRequestSlots = new SemaphoreSlim(32, 32);
 
         private readonly TerminalManager _terminalManager;
         private readonly TerminalClient _terminalClient;
@@ -95,8 +97,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
             ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
 
-            Task.Run(() => AcceptLoop(_dllListener, HandleDllRequest, _cts.Token));
-            Task.Run(() => AcceptLoop(_callbackListener, HandleCallbackRequest, _cts.Token));
+            Task.Run(() => AcceptLoop(_dllListener, HandleDllRequest, _dllRequestSlots, _cts.Token));
+            Task.Run(() => AcceptLoop(_callbackListener, HandleCallbackRequest, _callbackRequestSlots, _cts.Token));
 
             // VLC warmup: pre-load VLC to reduce first-playback latency (same as Delphi TVlcWarmupThread)
             // IMPORTANT: Keep DLLs loaded after warmup — do NOT FreeLibrary, or libvlc_new will fail on reload
@@ -132,24 +134,50 @@ namespace HZCYKJTHardWare.Proxy.Server
             _log("[队列统计]\n" + (_queueManager?.GetAllStats() ?? "无"));
         }
 
-        private async Task AcceptLoop(TcpListener listener, Func<TcpClient, Task> handler, CancellationToken ct)
+        private async Task AcceptLoop(TcpListener listener, Func<TcpClient, Task> handler, SemaphoreSlim slots, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     var client = await listener.AcceptTcpClientAsync();
+                    if (!slots.Wait(0))
+                    {
+                        _ = Task.Run(() => RejectBusyClient(client));
+                        continue;
+                    }
+
                     _ = Task.Run(async () =>
                     {
-                        try { await handler(client); }
-                        catch (Exception ex) { _log($"请求处理异常: {ex.Message}"); }
+                        try { await handler(client).ConfigureAwait(false); }
+                        catch (Exception ex) { _log($"[服务] 请求处理异常: {ex.Message}"); }
+                        finally { slots.Release(); }
                     }, ct);
                 }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException) { break; }
                 catch (OperationCanceledException) { break; }
-                catch (Exception ex) { _log($"AcceptLoop 异常: {ex.Message}"); }
+                catch (Exception ex) { _log($"[服务] 接收连接异常: {ex.Message}"); }
             }
+        }
+
+        private static void RejectBusyClient(TcpClient client)
+        {
+            try
+            {
+                using (client)
+                using (var stream = client.GetStream())
+                {
+                    var body = "{\"error\":true,\"code\":\"busy\"}";
+                    var bodyBytes = Encoding.UTF8.GetBytes(body);
+                    var header = $"HTTP/1.1 503 Service Busy\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n";
+                    var headerBytes = Encoding.UTF8.GetBytes(header);
+                    stream.Write(headerBytes, 0, headerBytes.Length);
+                    stream.Write(bodyBytes, 0, bodyBytes.Length);
+                    stream.Flush();
+                }
+            }
+            catch { }
         }
 
         private async Task HandleDllRequest(TcpClient client)
@@ -169,12 +197,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                     await WriteHttpResponse(stream, 200, result);
                 }
 
-                // Drain queued connections to prevent backlog overflow (same as Delphi connection drain)
-                DrainQueuedConnections(_dllListener);
+                // Queue pressure is handled by bounded business queues and connection slots.
+                // Do not drain the TCP backlog here, otherwise valid burst requests are rejected.
             }
             catch (Exception ex)
             {
-                _log($"HandleDllRequest error: {ex.Message}");
+                _log($"[DLL请求] 处理异常: {ex.Message}");
             }
         }
 
@@ -227,65 +255,79 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     _log($"[终端回调] {path}");
 
-                    var result = _callbackHandler.Handle(bodyUtf8);
+                    _ = Task.Run(() =>
+                    {
+                        try { _callbackHandler.Handle(bodyUtf8); }
+                        catch (Exception ex) { _log("[终端回调] 后台处理异常: " + ex.Message); }
+                    });
 
-                    await WriteHttpResponse(stream, 202, result);  // 202 Accepted, same as Delphi
+                    await WriteHttpResponse(stream, 202, "{\"status\":\"accepted\"}");  // 202 Accepted, same as Delphi
                 }
             }
             catch (Exception ex)
             {
-                _log($"HandleCallbackRequest error: {ex.Message}");
+                _log($"[终端回调] HTTP处理异常: {ex.Message}");
             }
         }
 
         private static async Task<(string method, string path, string body)> ReadHttpRequest(NetworkStream stream)
         {
-            var headerBuilder = new StringBuilder();
-            var buf = new byte[1];
+            const int MaxHeaderBytes = 64 * 1024;
+            const int MaxBodyBytes = 64 * 1024 * 1024;
+            var raw = new MemoryStream();
+            var buf = new byte[4096];
+            var marker = Encoding.ASCII.GetBytes("\r\n\r\n");
+            int headerEnd = -1;
             int contentLength = 0;
             string method = "GET";
             string path = "/";
 
-            // Read headers until \r\n\r\n
-            while (true)
+            while (headerEnd < 0)
             {
-                int bytesRead = await stream.ReadAsync(buf, 0, 1);
+                int bytesRead = await stream.ReadAsync(buf, 0, buf.Length).ConfigureAwait(false);
                 if (bytesRead == 0) break;
-                headerBuilder.Append((char)buf[0]);
-
-                var headerStr = headerBuilder.ToString();
-                if (headerStr.EndsWith("\r\n\r\n"))
-                {
-                    // Parse Content-Length
-                    var lines = headerStr.Split(new[] { "\r\n" }, StringSplitOptions.None);
-                    foreach (var line in lines)
-                    {
-                        if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            int.TryParse(line.Substring("Content-Length:".Length).Trim(), out contentLength);
-                        }
-                    }
-                    // Parse method and path from first line
-                    var firstLine = lines[0];
-                    var parts = firstLine.Split(' ');
-                    if (parts.Length >= 2)
-                    {
-                        method = parts[0];
-                        path = parts[1];
-                    }
-                    break;
-                }
+                raw.Write(buf, 0, bytesRead);
+                headerEnd = IndexOf(raw.GetBuffer(), (int)raw.Length, marker);
+                if (raw.Length > MaxHeaderBytes && headerEnd < 0)
+                    throw new InvalidOperationException("HTTP请求头过大");
             }
 
-            // Read body
+            if (headerEnd < 0)
+                return (method, path, "");
+
+            var rawBytes = raw.ToArray();
+            var headerSize = headerEnd + marker.Length;
+            var headerStr = Encoding.ASCII.GetString(rawBytes, 0, headerSize);
+            var lines = headerStr.Split(new[] { "\r\n" }, StringSplitOptions.None);
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                    int.TryParse(line.Substring("Content-Length:".Length).Trim(), out contentLength);
+            }
+
+            var firstLine = lines.Length > 0 ? lines[0] : "";
+            var parts = firstLine.Split(' ');
+            if (parts.Length >= 2)
+            {
+                method = parts[0];
+                path = parts[1];
+            }
+
+            if (contentLength < 0 || contentLength > MaxBodyBytes)
+                throw new InvalidOperationException("HTTP请求体大小异常");
+
             string body = "";
             if (contentLength > 0)
             {
                 var bodyBuf = new byte[contentLength];
-                int totalRead = 0;
+                var alreadyRead = Math.Min(contentLength, rawBytes.Length - headerSize);
+                if (alreadyRead > 0)
+                    Buffer.BlockCopy(rawBytes, headerSize, bodyBuf, 0, alreadyRead);
+
+                int totalRead = alreadyRead;
                 while (totalRead < contentLength)
                 {
-                    int read = await stream.ReadAsync(bodyBuf, totalRead, contentLength - totalRead);
+                    int read = await stream.ReadAsync(bodyBuf, totalRead, contentLength - totalRead).ConfigureAwait(false);
                     if (read == 0) break;
                     totalRead += read;
                 }
@@ -293,6 +335,26 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
 
             return (method, path, body);
+        }
+
+        private static int IndexOf(byte[] source, int sourceLength, byte[] pattern)
+        {
+            if (source == null || pattern == null || pattern.Length == 0 || sourceLength < pattern.Length)
+                return -1;
+            for (int i = 0; i <= sourceLength - pattern.Length; i++)
+            {
+                var matched = true;
+                for (int j = 0; j < pattern.Length; j++)
+                {
+                    if (source[i + j] != pattern[j])
+                    {
+                        matched = false;
+                        break;
+                    }
+                }
+                if (matched) return i;
+            }
+            return -1;
         }
 
         private static async Task WriteHttpResponse(NetworkStream stream, int statusCode, string body)
@@ -322,9 +384,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalManager.ProcessSaveDir = Storage.PathHelper.SafeResolveSaveDir(saveDir);
             _log("[流程] 正在向终端开始流程，url=" + _terminalManager.CurrentBaseUrl + "/process/start，save_dir=" + _terminalManager.ProcessSaveDir);
 
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body);
-            task.Wait();
-            var (ok, _) = task.Result;
+            var (ok, _) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body, 5000)
+                .GetAwaiter().GetResult();
             if (ok)
             {
                 _terminalManager.ProcessActive = true;
@@ -383,9 +444,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body);
-            task.Wait();
-            var (ok, response) = task.Result;
+            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body, 4500)
+                .GetAwaiter().GetResult();
             if (!ok) return (false, "");
 
             // Delphi logic: if saveDir has file extension, save directly to that path
@@ -418,9 +478,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body);
-            task.Wait();
-            var (ok, response) = task.Result;
+            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body, 4500)
+                .GetAwaiter().GetResult();
             if (!ok) return (false, "");
 
             // Delphi logic: if saveDir has file extension, save directly to that path
@@ -458,8 +517,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
 
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body);
-            task.Wait();
+            _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
+                .GetAwaiter().GetResult();
             return requestId;
         }
 
@@ -472,8 +531,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
 
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body);
-            task.Wait();
+            _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
+                .GetAwaiter().GetResult();
             return requestId;
         }
 
@@ -486,8 +545,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
 
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/iris/request", body);
-            task.Wait();
+            _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/iris/request", body, 5000)
+                .GetAwaiter().GetResult();
             return requestId;
         }
 
@@ -501,8 +560,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 $"\"id_no\":\"{JsonHelper.EscapeString(idNo)}\",\"doc_type\":\"{JsonHelper.EscapeString(docType)}\"," +
                 $"\"birthday\":\"{JsonHelper.EscapeString(birthday)}\",\"nationality\":\"{JsonHelper.EscapeString(nationality)}\"}}";
 
-            var task = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", body);
-            task.Wait();
+            _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", body, 5000)
+                .GetAwaiter().GetResult();
             return requestId;
         }
 
@@ -618,9 +677,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
                 _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
                 Logger.Info($"[OCR] 存储回调映射: {requestId} → {dllCallbackUrl}");
-                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body);
-                tt.Wait();
-                if (tt.Result.ok)
+                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
+                    .GetAwaiter().GetResult();
+                if (tt.ok)
                 {
                     _log($"OCR 已转发至终端: request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
@@ -630,7 +689,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
             }
@@ -650,9 +709,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
                 _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
                 Logger.Info($"[NFC] 存储回调映射: {requestId} → {dllCallbackUrl}");
-                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body);
-                tt.Wait();
-                if (tt.Result.ok)
+                var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
+                    .GetAwaiter().GetResult();
+                if (tt.ok)
                 {
                     _log($"NFC 已转发至终端: request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
@@ -662,7 +721,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 tcs?.TrySetResult("{\"error\":true,\"code\":\"terminal_request_failed\"}");
             }

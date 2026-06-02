@@ -90,7 +90,7 @@ private:
     std::string m_preferredSubnetPrefix;
 
     std::string m_delphiServerHost = "127.0.0.1";
-    int m_delphiServerPort = 8080;
+    int m_delphiServerPort = 18080;
     bool m_delphiAutoStart = true;
     std::string m_delphiExecutable = "HZCYKJTHardWare.exe";
     int m_delphiStartWaitMs = 10000;

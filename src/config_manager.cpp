@@ -51,13 +51,13 @@ int ConfigManager::Load(const std::string& dllDir) {
 }
 
 int ConfigManager::ParseJson(const std::string& json) {
-    // delphi_server 配置：新架构下 DLL 只代理到 Delphi 程序。
+    // delphi_server 配置：字段名保持兼容，当前 DLL 转发到 C# Proxy。
     std::string delphiObj = JsonHelper::GetJsonObject(json, "delphi_server");
     if (!delphiObj.empty()) {
         if (JsonHelper::HasKey(delphiObj, "host"))
             m_delphiServerHost = JsonHelper::GetString(delphiObj, "host");
         if (JsonHelper::HasKey(delphiObj, "port"))
-            m_delphiServerPort = JsonHelper::GetInt(delphiObj, "port", 8080);
+            m_delphiServerPort = JsonHelper::GetInt(delphiObj, "port", 18080);
         if (JsonHelper::HasKey(delphiObj, "auto_start"))
             m_delphiAutoStart = JsonHelper::GetBool(delphiObj, "auto_start", true);
         if (JsonHelper::HasKey(delphiObj, "executable"))
@@ -71,7 +71,7 @@ int ConfigManager::ParseJson(const std::string& json) {
         m_delphiServerHost = "127.0.0.1";
     }
     if (m_delphiServerPort <= 0 || m_delphiServerPort > 65535) {
-        m_delphiServerPort = 8080;
+        m_delphiServerPort = 18080;
     }
     if (m_delphiExecutable.empty()) {
         m_delphiExecutable = "HZCYKJTHardWare.exe";
@@ -275,7 +275,7 @@ void ConfigManager::ApplyDefaults() {
     m_preferredSubnetPrefix = "192.168.20";
 
     m_delphiServerHost = "127.0.0.1";
-    m_delphiServerPort = 8080;
+    m_delphiServerPort = 18080;
     m_delphiAutoStart = true;
     m_delphiExecutable = "HZCYKJTHardWare.exe";
     m_delphiStartWaitMs = 10000;
@@ -287,7 +287,7 @@ void ConfigManager::ApplyDefaults() {
 
     m_autoSubnetDevices.clear();
     m_autoSubnetDevices.push_back({1, "terminal_a", "", 30});
-    m_autoSubnetDevices.push_back({2, "terminal_b", "", 11});
+    m_autoSubnetDevices.push_back({2, "terminal_b", "", 31});
 
     m_callbackServerHost.clear();
     m_callbackServerPort = 39091;

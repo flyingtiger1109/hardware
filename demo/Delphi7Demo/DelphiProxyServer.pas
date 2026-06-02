@@ -5,11 +5,12 @@ interface
 uses
   Windows, SysUtils, Classes, WinSock, ExtCtrls,
   TerminalManager, TerminalClient, CallbackParser, FileSaver, PreviewManager, EncodingHelper,
-  VlcPlayer;
+  VlcPlayer, SyncObjs;
 
 type
   TDelphiProxyServer = class;
   TLogCallback = procedure(const Msg: string) of object;
+  TPreviewReadyCallback = procedure of object;
 
   TCallbackReceiverThread = class(TThread)
   private
@@ -33,6 +34,49 @@ type
     procedure StopServer;
   end;
 
+  THttpClientWorker = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+    FWorkerIndex: Integer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer; WorkerIndex: Integer);
+  end;
+
+
+  TProxyQueuedTask = class
+  public
+    Method: string;
+    Path: string;
+    BodyUtf8: string;
+    Response: string;
+    Generation: Integer;
+    WaitForResponse: Boolean;
+    CreatedTick: DWORD;
+    DoneEvent: TEvent;
+    StateLock: TCriticalSection;
+    constructor Create(const AMethod, APath, ABodyUtf8: string; AGeneration: Integer; AWaitForResponse: Boolean);
+    destructor Destroy; override;
+  end;
+
+  TProxyTaskWorker = class(TThread)
+  private
+    FOwner: TDelphiProxyServer;
+    FQueue: TList;
+    FLock: TCriticalSection;
+    FEvent: TEvent;
+    FMaxQueue: Integer;
+    FWorkerName: string;
+    function PopTask: TProxyQueuedTask;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TDelphiProxyServer; const WorkerName: string; MaxQueue: Integer);
+    destructor Destroy; override;
+    function Enqueue(Task: TProxyQueuedTask): Boolean;
+    procedure StopWorker;
+  end;
   TAsyncSwitchThread = class(TThread)
   private
     FOwner: TDelphiProxyServer;
@@ -105,6 +149,7 @@ type
     FDllCallbackPort: Integer;
     FDllCallbackBasePath: string;
     FLogProc: TLogCallback;
+    FExternalPreviewReadyProc: TPreviewReadyCallback;
     FLanIp: string;
     FLocalActivePreviews: TPreviewResourceSet;
     FExternalActivePreviews: TPreviewResourceSet;
@@ -115,7 +160,17 @@ type
     FSwitchGeneration: Integer;
     FLastSwitchTick: DWORD;
     FStateLock: TRTLCriticalSection;
+    FHttpQueue: TList;
+    FHttpQueueLock: TCriticalSection;
+    FHttpQueueEvent: TEvent;
+    FHttpStopping: Boolean;
+    FHttpWorkers: array[0..7] of THttpClientWorker;
+    FFaceCaptureWorker: TProxyTaskWorker;
+    FFingerprintCaptureWorker: TProxyTaskWorker;
+    FOcrWorker: TProxyTaskWorker;
+    FNfcWorker: TProxyTaskWorker;
     procedure DoLog(const Msg: string);
+    procedure NotifyExternalPreviewReady;
     function GenRequestId(const Prefix: string): string;
     function GetLocalLanIp: string;
     function GetCallbackBase: string;
@@ -139,6 +194,15 @@ type
     procedure PruneCompletedCallbacks;
     procedure MarkCompletedCallback(const RequestId: string);
     function IsCompletedCallback(const RequestId: string): Boolean;
+    procedure StartHttpWorkers;
+    procedure StopHttpWorkers;
+    function EnqueueHttpClient(Client: TSocket): Boolean;
+    function PopHttpClient: TSocket;
+    procedure ProcessHttpClient(Client: TSocket);
+    procedure StartBusinessWorkers;
+    procedure StopBusinessWorkers;
+    function QueueBusinessRequest(Worker: TProxyTaskWorker; const WorkerName, Method, Path, BodyUtf8: string; WaitMs: Integer): string;
+    function HandleRequestDirect(const Method, Path, BodyUtf8: string): string;
     function HandleRequest(const Method, Path, BodyUtf8: string): string;
     function HandleTerminalCallback(const BodyUtf8: string): string;
     function MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
@@ -148,6 +212,7 @@ type
     procedure Start;
     procedure Stop;
     procedure SetLogProc(ALogProc: TLogCallback);
+    procedure SetExternalPreviewReadyProc(AProc: TPreviewReadyCallback);
     property TerminalManager: TTerminalManager read FTerminalManager;
     property PreviewManager: TPreviewManager read FPreviewManager;
     // Direct terminal operations (for Delphi UI buttons)
@@ -168,6 +233,11 @@ type
   end;
 
 implementation
+
+const
+  HTTP_QUEUE_LIMIT = 64;
+  HTTP_SOCKET_TIMEOUT_MS = 2000;
+  BUSINESS_WAIT_TIMEOUT_MS = 4500;
 
 function PosExSimple(const SubStr, S: string; Offset: Integer): Integer;
 var I: Integer;
@@ -560,12 +630,19 @@ procedure TDelphiHttpServerThread.StopServer;
 begin Terminate; if FListenSocket <> INVALID_SOCKET then begin closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; end; end;
 
 procedure TDelphiHttpServerThread.Execute;
-var WSA: TWSAData; Addr: TSockAddrIn; Client: TSocket; Buf: array[0..8191] of Char;
-  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen, TimeoutMs: Integer;
-  Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string; P1, P2, CLPos, LineEnd: Integer;
-begin if WSAStartup($0202, WSA) <> 0 then Exit;
-  try FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if FListenSocket = INVALID_SOCKET then Exit;
-    FillChar(Addr, SizeOf(Addr), 0); Addr.sin_family := AF_INET;
+var
+  WSA: TWSAData;
+  Addr: TSockAddrIn;
+  Client: TSocket;
+  TimeoutMs: Integer;
+  ResponseBody, Response: string;
+begin
+  if WSAStartup($0202, WSA) <> 0 then Exit;
+  try
+    FListenSocket := socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if FListenSocket = INVALID_SOCKET then Exit;
+    FillChar(Addr, SizeOf(Addr), 0);
+    Addr.sin_family := AF_INET;
     Addr.sin_addr.S_addr := inet_addr(PChar(FOwner.FDelphiServerHost));
     Addr.sin_port := htons(FOwner.FDelphiServerPort);
     if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
@@ -580,38 +657,387 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     end;
     FOwner.DoLog('[信息] [服务] DLL通信服务程序已启动，http://' + FOwner.FDelphiServerHost + ':' +
       IntToStr(FOwner.FDelphiServerPort));
-    while not Terminated do begin Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
-      TimeoutMs := 5000;
+    while not Terminated do begin
+      Client := accept(FListenSocket, nil, nil);
+      if Client = INVALID_SOCKET then begin
+        if Terminated then Break;
+        Continue;
+      end;
+      TimeoutMs := HTTP_SOCKET_TIMEOUT_MS;
       setsockopt(Client, SOL_SOCKET, SO_RCVTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
       setsockopt(Client, SOL_SOCKET, SO_SNDTIMEO, PChar(@TimeoutMs), SizeOf(TimeoutMs));
-      try Raw := '';
-        repeat RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
-          if RecvLen > 0 then begin SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; end;
-          HeaderEnd := Pos(#13#10#13#10, Raw);
-        until (RecvLen <= 0) or (HeaderEnd > 0);
-        if HeaderEnd > 0 then begin Header := Copy(Raw, 1, HeaderEnd - 1); ContentLength := 0;
-          CLPos := Pos('Content-Length:', Header); if CLPos = 0 then CLPos := Pos('content-length:', Header);
-          if CLPos > 0 then begin CLPos := CLPos + Length('Content-Length:');
-            while (CLPos <= Length(Header)) and (Header[CLPos] in [' ', #9]) do Inc(CLPos);
-            LineEnd := PosExSimple(#13#10, Header, CLPos); if LineEnd = 0 then LineEnd := Length(Header) + 1;
-            ContentLength := StrToIntDef(Trim(Copy(Header, CLPos, LineEnd - CLPos)), 0); end;
-          BodyLen := Length(Raw) - (HeaderEnd + 3); NeedLen := ContentLength - BodyLen;
-          while (NeedLen > 0) do begin RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
-            if RecvLen <= 0 then Break; SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; Dec(NeedLen, RecvLen); end;
-          P1 := Pos(' ', Header); P2 := PosExSimple(' ', Header, P1 + 1);
-          Method := Copy(Header, 1, P1 - 1); Path := Copy(Header, P1 + 1, P2 - P1 - 1);
-          BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
-          FOwner.DoLog('[信息] [DLL请求] 收到DLL下发请求：' + Method + ' ' + Path);
-          ResponseBody := FOwner.HandleRequest(Method, Path, BodyUtf8); end
-        else ResponseBody := '{"error":true,"code":"bad_request"}';
-        Response := 'HTTP/1.1 200 OK'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
+      if not FOwner.EnqueueHttpClient(Client) then begin
+        ResponseBody := '{"error":true,"code":"server_busy"}';
+        Response := 'HTTP/1.1 503 Service Unavailable'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
           'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
         send(Client, Response[1], Length(Response), 0);
-      finally closesocket(Client); end;
+        closesocket(Client);
+        FOwner.DoLog('[警告] [DLL请求] HTTP工作队列已满，已拒绝新请求，防止请求堆积。');
+      end;
     end;
-  finally if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket); FListenSocket := INVALID_SOCKET; WSACleanup; end;
+  finally
+    if FListenSocket <> INVALID_SOCKET then closesocket(FListenSocket);
+    FListenSocket := INVALID_SOCKET;
+    WSACleanup;
+  end;
 end;
 
+// ============================================================
+// THttpClientWorker
+// ============================================================
+constructor THttpClientWorker.Create(AOwner: TDelphiProxyServer; WorkerIndex: Integer);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FOwner := AOwner;
+  FWorkerIndex := WorkerIndex;
+end;
+
+procedure THttpClientWorker.Execute;
+var
+  Client: TSocket;
+begin
+  while not Terminated do begin
+    Client := FOwner.PopHttpClient;
+    if Client = INVALID_SOCKET then begin
+      FOwner.FHttpQueueEvent.WaitFor(500);
+      Continue;
+    end;
+    FOwner.ProcessHttpClient(Client);
+  end;
+end;
+
+procedure TDelphiProxyServer.StartHttpWorkers;
+var
+  I: Integer;
+begin
+  FHttpQueueLock.Acquire;
+  try
+    FHttpStopping := False;
+  finally
+    FHttpQueueLock.Release;
+  end;
+  for I := Low(FHttpWorkers) to High(FHttpWorkers) do begin
+    if FHttpWorkers[I] = nil then begin
+      FHttpWorkers[I] := THttpClientWorker.Create(Self, I + 1);
+      FHttpWorkers[I].Resume;
+    end;
+  end;
+  DoLog('[信息] [DLL请求] HTTP固定工作线程已启动，线程数=' + IntToStr(High(FHttpWorkers) - Low(FHttpWorkers) + 1) +
+    '，队列上限=' + IntToStr(HTTP_QUEUE_LIMIT));
+end;
+
+procedure TDelphiProxyServer.StopHttpWorkers;
+var
+  I: Integer;
+  Client: TSocket;
+begin
+  FHttpQueueLock.Acquire;
+  try
+    FHttpStopping := True;
+    while FHttpQueue.Count > 0 do begin
+      Client := TSocket(FHttpQueue[0]);
+      FHttpQueue.Delete(0);
+      if Client <> INVALID_SOCKET then closesocket(Client);
+    end;
+  finally
+    FHttpQueueLock.Release;
+  end;
+  for I := Low(FHttpWorkers) to High(FHttpWorkers) do begin
+    if FHttpWorkers[I] <> nil then begin
+      FHttpWorkers[I].Terminate;
+      FHttpQueueEvent.SetEvent;
+    end;
+  end;
+  for I := Low(FHttpWorkers) to High(FHttpWorkers) do begin
+    if FHttpWorkers[I] <> nil then begin
+      FHttpWorkers[I].WaitFor;
+      FHttpWorkers[I].Free;
+      FHttpWorkers[I] := nil;
+    end;
+  end;
+end;
+
+function TDelphiProxyServer.EnqueueHttpClient(Client: TSocket): Boolean;
+begin
+  Result := False;
+  FHttpQueueLock.Acquire;
+  try
+    if FHttpStopping then Exit;
+    if FHttpQueue.Count >= HTTP_QUEUE_LIMIT then Exit;
+    FHttpQueue.Add(Pointer(Client));
+    Result := True;
+    FHttpQueueEvent.SetEvent;
+  finally
+    FHttpQueueLock.Release;
+  end;
+end;
+
+function TDelphiProxyServer.PopHttpClient: TSocket;
+begin
+  Result := INVALID_SOCKET;
+  FHttpQueueLock.Acquire;
+  try
+    if FHttpQueue.Count > 0 then begin
+      Result := TSocket(FHttpQueue[0]);
+      FHttpQueue.Delete(0);
+    end;
+  finally
+    FHttpQueueLock.Release;
+  end;
+end;
+
+procedure TDelphiProxyServer.ProcessHttpClient(Client: TSocket);
+var
+  Buf: array[0..8191] of Char;
+  RecvLen, HeaderEnd, ContentLength, BodyLen, NeedLen: Integer;
+  Raw, Header, Method, Path, BodyUtf8, ResponseBody, Response, Chunk: string;
+  P1, P2, CLPos, LineEnd: Integer;
+begin
+  try
+    try
+      Raw := '';
+      HeaderEnd := 0;
+      repeat
+        RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+        if RecvLen > 0 then begin
+          SetString(Chunk, PChar(@Buf[0]), RecvLen);
+          Raw := Raw + Chunk;
+        end;
+        HeaderEnd := Pos(#13#10#13#10, Raw);
+      until (RecvLen <= 0) or (HeaderEnd > 0);
+      if HeaderEnd > 0 then begin
+        Header := Copy(Raw, 1, HeaderEnd - 1);
+        ContentLength := 0;
+        CLPos := Pos('Content-Length:', Header);
+        if CLPos = 0 then CLPos := Pos('content-length:', Header);
+        if CLPos > 0 then begin
+          CLPos := CLPos + Length('Content-Length:');
+          while (CLPos <= Length(Header)) and (Header[CLPos] in [' ', #9]) do Inc(CLPos);
+          LineEnd := PosExSimple(#13#10, Header, CLPos);
+          if LineEnd = 0 then LineEnd := Length(Header) + 1;
+          ContentLength := StrToIntDef(Trim(Copy(Header, CLPos, LineEnd - CLPos)), 0);
+        end;
+        BodyLen := Length(Raw) - (HeaderEnd + 3);
+        NeedLen := ContentLength - BodyLen;
+        while NeedLen > 0 do begin
+          RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
+          if RecvLen <= 0 then Break;
+          SetString(Chunk, PChar(@Buf[0]), RecvLen);
+          Raw := Raw + Chunk;
+          Dec(NeedLen, RecvLen);
+        end;
+        P1 := Pos(' ', Header);
+        P2 := PosExSimple(' ', Header, P1 + 1);
+        if (P1 <= 0) or (P2 <= P1) then begin
+          ResponseBody := '{"error":true,"code":"bad_request"}';
+        end else begin
+          Method := Copy(Header, 1, P1 - 1);
+          Path := Copy(Header, P1 + 1, P2 - P1 - 1);
+          BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
+          DoLog('[信息] [DLL请求] 收到DLL下发请求：' + Method + ' ' + Path);
+          ResponseBody := HandleRequest(Method, Path, BodyUtf8);
+        end;
+      end else begin
+        ResponseBody := '{"error":true,"code":"bad_request"}';
+      end;
+      Response := 'HTTP/1.1 200 OK'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
+        'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
+      send(Client, Response[1], Length(Response), 0);
+    except
+      on E: Exception do begin
+        DoLog('[错误] [DLL请求] HTTP工作线程处理请求异常：' + E.Message);
+        ResponseBody := '{"error":true,"code":"internal_error"}';
+        Response := 'HTTP/1.1 500 Internal Server Error'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
+          'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
+        send(Client, Response[1], Length(Response), 0);
+      end;
+    end;
+  finally
+    closesocket(Client);
+  end;
+end;
+
+// ============================================================
+// TProxyTaskWorker
+// ============================================================
+constructor TProxyQueuedTask.Create(const AMethod, APath, ABodyUtf8: string; AGeneration: Integer; AWaitForResponse: Boolean);
+begin
+  inherited Create;
+  Method := AMethod;
+  Path := APath;
+  BodyUtf8 := ABodyUtf8;
+  Response := '';
+  Generation := AGeneration;
+  WaitForResponse := AWaitForResponse;
+  CreatedTick := GetTickCount;
+  StateLock := TCriticalSection.Create;
+  DoneEvent := TEvent.Create(nil, True, False, '');
+end;
+
+destructor TProxyQueuedTask.Destroy;
+begin
+  DoneEvent.Free;
+  StateLock.Free;
+  inherited Destroy;
+end;
+
+constructor TProxyTaskWorker.Create(AOwner: TDelphiProxyServer; const WorkerName: string; MaxQueue: Integer);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FOwner := AOwner;
+  FWorkerName := WorkerName;
+  FMaxQueue := MaxQueue;
+  FQueue := TList.Create;
+  FLock := TCriticalSection.Create;
+  FEvent := TEvent.Create(nil, False, False, '');
+end;
+
+destructor TProxyTaskWorker.Destroy;
+begin
+  StopWorker;
+  FEvent.Free;
+  FLock.Free;
+  FQueue.Free;
+  inherited Destroy;
+end;
+
+function TProxyTaskWorker.Enqueue(Task: TProxyQueuedTask): Boolean;
+var
+  OldTask: TProxyQueuedTask;
+  FreeOldTask: Boolean;
+  NotifyOldTask: Boolean;
+begin
+  Result := False;
+  if Task = nil then Exit;
+  FLock.Acquire;
+  try
+    if Terminated then Exit;
+    while FQueue.Count >= FMaxQueue do begin
+      OldTask := TProxyQueuedTask(FQueue[0]);
+      FQueue.Delete(0);
+      if OldTask <> nil then begin
+        FreeOldTask := False;
+        NotifyOldTask := False;
+        OldTask.StateLock.Acquire;
+        try
+          OldTask.Response := '{"error":true,"code":"request_replaced"}';
+          FOwner.DoLog('[警告] [业务队列] 新请求已替换等待中的旧请求：队列=' + FWorkerName + '，old_path=' + OldTask.Path + '，new_path=' + Task.Path);
+          if OldTask.WaitForResponse then
+            NotifyOldTask := True
+          else
+            FreeOldTask := True;
+        finally
+          OldTask.StateLock.Release;
+        end;
+        if NotifyOldTask then
+          OldTask.DoneEvent.SetEvent
+        else if FreeOldTask then
+          OldTask.Free;
+      end;
+    end;
+    FQueue.Add(Task);
+    Result := True;
+    FEvent.SetEvent;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TProxyTaskWorker.PopTask: TProxyQueuedTask;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    if FQueue.Count > 0 then begin
+      Result := TProxyQueuedTask(FQueue[0]);
+      FQueue.Delete(0);
+    end;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TProxyTaskWorker.StopWorker;
+var
+  Task: TProxyQueuedTask;
+  FreeTask: Boolean;
+  NotifyTask: Boolean;
+begin
+  Terminate;
+  FEvent.SetEvent;
+  FLock.Acquire;
+  try
+    while FQueue.Count > 0 do begin
+      Task := TProxyQueuedTask(FQueue[0]);
+      FQueue.Delete(0);
+      if Task <> nil then begin
+        FreeTask := False;
+        NotifyTask := False;
+        Task.StateLock.Acquire;
+        try
+          Task.Response := '{"error":true,"code":"service_stopping"}';
+          if Task.WaitForResponse then
+            NotifyTask := True
+          else
+            FreeTask := True;
+        finally
+          Task.StateLock.Release;
+        end;
+        if NotifyTask then
+          Task.DoneEvent.SetEvent
+        else if FreeTask then
+          Task.Free;
+      end;
+    end;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TProxyTaskWorker.Execute;
+var
+  Task: TProxyQueuedTask;
+  FreeTask: Boolean;
+  NotifyTask: Boolean;
+begin
+  while not Terminated do begin
+    Task := PopTask;
+    if Task = nil then begin
+      FEvent.WaitFor(500);
+      Continue;
+    end;
+    try
+      if Task.Generation <> FOwner.CurrentSwitchGeneration then begin
+        Task.Response := '{"error":true,"code":"stale_request"}';
+        FOwner.DoLog('[警告] [业务队列] 丢弃旧终端请求：队列=' + FWorkerName + '，path=' + Task.Path);
+      end else begin
+        Task.Response := FOwner.HandleRequestDirect(Task.Method, Task.Path, Task.BodyUtf8);
+      end;
+    except
+      on E: Exception do begin
+        Task.Response := '{"error":true,"code":"worker_exception"}';
+        FOwner.DoLog('[错误] [业务队列] 工作线程异常：队列=' + FWorkerName + '，错误=' + E.Message);
+      end;
+    end;
+    FreeTask := False;
+    NotifyTask := False;
+    Task.StateLock.Acquire;
+    try
+      if Task.WaitForResponse then
+        NotifyTask := True
+      else
+        FreeTask := True;
+    finally
+      Task.StateLock.Release;
+    end;
+    if NotifyTask then
+      Task.DoneEvent.SetEvent
+    else if FreeTask then
+      Task.Free;
+  end;
+end;
 // ============================================================
 // TAsyncSwitchThread
 // ============================================================
@@ -698,6 +1124,8 @@ begin
     begin
       FOwner.MarkCompletedCallback(FRequestId);
       FOwner.ForgetRequestContext(FRequestId);
+      FOwner.DoLog('[信息] [异步预览] 外部预览已成功回调第三方，通知主窗口最小化到任务栏。');
+      FOwner.NotifyExternalPreviewReady;
     end;
   end
   else
@@ -757,20 +1185,38 @@ begin inherited Create;
   FRequestSaveDirs := TStringList.Create; FRequestCallbacks := TStringList.Create;
   FRequestGenerations := TStringList.Create;
   FCompletedCallbacks := TStringList.Create;
+  FHttpQueue := TList.Create;
+  FHttpQueueLock := TCriticalSection.Create;
+  FHttpQueueEvent := TEvent.Create(nil, False, False, '');
+  FHttpStopping := True;
+  FillChar(FHttpWorkers, SizeOf(FHttpWorkers), 0);
+  FFaceCaptureWorker := nil;
+  FFingerprintCaptureWorker := nil;
+  FOcrWorker := nil;
+  FNfcWorker := nil;
   InitializeCriticalSection(FStateLock);
   FSwitchingTerminal := False; FSwitchGeneration := 0; FLastSwitchTick := 0;
-  FThread := nil; FCallbackThread := nil; FLogProc := nil; FLanIp := '127.0.0.1';
+  FThread := nil; FCallbackThread := nil; FLogProc := nil; FExternalPreviewReadyProc := nil; FLanIp := '127.0.0.1';
   FLocalActivePreviews := [];
   FExternalActivePreviews := [];
   LoadRuntimeConfig;
 end;
 
 destructor TDelphiProxyServer.Destroy;
-begin Stop; FRequestSaveDirs.Free; FRequestCallbacks.Free; FRequestGenerations.Free; FCompletedCallbacks.Free; DeleteCriticalSection(FStateLock); FPreviewManager.Free;
+begin Stop; FRequestSaveDirs.Free; FRequestCallbacks.Free; FRequestGenerations.Free; FCompletedCallbacks.Free; FHttpQueueEvent.Free; FHttpQueueLock.Free; FHttpQueue.Free; DeleteCriticalSection(FStateLock); FPreviewManager.Free;
   FFileSaver.Free; FCallbackParser.Free; FTerminalClient.Free; FTerminalManager.Free; inherited Destroy; end;
 
 procedure TDelphiProxyServer.SetLogProc(ALogProc: TLogCallback);
 begin FLogProc := ALogProc; FPreviewManager.SetLogProc(ALogProc); end;
+
+procedure TDelphiProxyServer.SetExternalPreviewReadyProc(AProc: TPreviewReadyCallback);
+begin FExternalPreviewReadyProc := AProc; end;
+
+procedure TDelphiProxyServer.NotifyExternalPreviewReady;
+begin
+  if Assigned(FExternalPreviewReadyProc) then
+    FExternalPreviewReadyProc;
+end;
 
 procedure TDelphiProxyServer.DoLog(const Msg: string);
 begin if Assigned(FLogProc) then FLogProc(Msg); end;
@@ -785,6 +1231,8 @@ begin if FThread <> nil then Exit;
   DoLog('[信息] [服务] 已检测本机局域网地址：' + FLanIp);
   DoLog('[信息] [终端状态] 当前终端：' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
+  StartHttpWorkers;
+  StartBusinessWorkers;
   DoLog('[信息] [服务] 正在启动DLL通信服务，http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
   DoLog('[信息] [服务] DLL通信终端回调=' + GetCallbackBase);
@@ -792,16 +1240,25 @@ begin if FThread <> nil then Exit;
 
 procedure TDelphiProxyServer.Stop;
 begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
+  StopHttpWorkers;
+  StopBusinessWorkers;
   if FCallbackThread <> nil then begin FCallbackThread.StopServer; FCallbackThread.WaitFor; FCallbackThread.Free; FCallbackThread := nil; end;
   FPreviewManager.StopPreview(prtCamera, pstLocal); FPreviewManager.StopPreview(prtFingerprint, pstLocal); FPreviewManager.StopPreview(prtIris, pstLocal);
   FPreviewManager.StopPreview(prtCamera, pstExternal); FPreviewManager.StopPreview(prtFingerprint, pstExternal); FPreviewManager.StopPreview(prtIris, pstExternal);
   FLocalActivePreviews := []; FExternalActivePreviews := []; DoLog('[信息] [服务] 服务程序已停止。'); end;
 
 function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
-begin Result := False; if DllCallbackUrl = '' then Exit;
+begin
+  Result := False;
+  if DllCallbackUrl = '' then Exit;
   DoLog('[信息] [DLL回调] 正在向DLL回传异步结果，url=' + DllCallbackUrl +
     '，body_size=' + IntToStr(Length(PayloadUtf8)));
-  Result := HttpPostJson(DllCallbackUrl, PayloadUtf8); end;
+  Result := HttpPostJson(DllCallbackUrl, PayloadUtf8);
+  if Result then
+    DoLog('[信息] [DLL回调] DLL回调成功，request_id=' + RequestId)
+  else
+    DoLog('[错误] [DLL回调] DLL回调失败，request_id=' + RequestId + '，url=' + DllCallbackUrl);
+end;
 
 function TDelphiProxyServer.BeginTerminalSwitch(out SwitchGeneration: Integer): Boolean;
 begin
@@ -1244,7 +1701,93 @@ begin Result := FPreviewManager.StopPreview(prtIris, pstLocal);
 // ============================================================
 // HTTP HANDLER (for DLL requests)
 // ============================================================
+procedure TDelphiProxyServer.StartBusinessWorkers;
+begin
+  if FFaceCaptureWorker = nil then FFaceCaptureWorker := TProxyTaskWorker.Create(Self, '人脸抓拍', 1);
+  if FFingerprintCaptureWorker = nil then FFingerprintCaptureWorker := TProxyTaskWorker.Create(Self, '指纹抓拍', 1);
+  if FOcrWorker = nil then FOcrWorker := TProxyTaskWorker.Create(Self, 'OCR读取', 1);
+  if FNfcWorker = nil then FNfcWorker := TProxyTaskWorker.Create(Self, 'IC卡读取', 1);
+  FFaceCaptureWorker.Resume;
+  FFingerprintCaptureWorker.Resume;
+  FOcrWorker.Resume;
+  FNfcWorker.Resume;
+  DoLog('[信息] [业务队列] 固定业务线程已启动：人脸抓拍=1，指纹抓拍=1，OCR=1，IC卡=1；每类最多1个执行中+1个等待中，新请求替换旧等待请求。');
+end;
+
+procedure TDelphiProxyServer.StopBusinessWorkers;
+begin
+  if FFaceCaptureWorker <> nil then begin FFaceCaptureWorker.StopWorker; FFaceCaptureWorker.WaitFor; FFaceCaptureWorker.Free; FFaceCaptureWorker := nil; end;
+  if FFingerprintCaptureWorker <> nil then begin FFingerprintCaptureWorker.StopWorker; FFingerprintCaptureWorker.WaitFor; FFingerprintCaptureWorker.Free; FFingerprintCaptureWorker := nil; end;
+  if FOcrWorker <> nil then begin FOcrWorker.StopWorker; FOcrWorker.WaitFor; FOcrWorker.Free; FOcrWorker := nil; end;
+  if FNfcWorker <> nil then begin FNfcWorker.StopWorker; FNfcWorker.WaitFor; FNfcWorker.Free; FNfcWorker := nil; end;
+end;
+
+function TDelphiProxyServer.QueueBusinessRequest(Worker: TProxyTaskWorker; const WorkerName, Method, Path, BodyUtf8: string; WaitMs: Integer): string;
+var
+  Task: TProxyQueuedTask;
+  CompletedAfterTimeout: Boolean;
+begin
+  Result := '{"error":true,"code":"service_unavailable"}';
+  if Worker = nil then begin
+    DoLog('[错误] [业务队列] 队列未启动：' + WorkerName);
+    Exit;
+  end;
+  Task := TProxyQueuedTask.Create(Method, Path, BodyUtf8, CurrentSwitchGeneration, True);
+  if not Worker.Enqueue(Task) then begin
+    DoLog('[错误] [业务队列] 队列不可用，无法接受请求：队列=' + WorkerName + '，path=' + Path);
+    Task.Free;
+    Exit;
+  end;
+  if Task.DoneEvent.WaitFor(WaitMs) = wrSignaled then begin
+    Result := Task.Response;
+    Task.Free;
+  end else begin
+    CompletedAfterTimeout := False;
+    Task.StateLock.Acquire;
+    try
+      if Task.DoneEvent.WaitFor(0) = wrSignaled then
+        CompletedAfterTimeout := True
+      else begin
+        Task.WaitForResponse := False;
+        DoLog('[错误] [业务队列] 等待业务结果超时，已返回timeout：队列=' + WorkerName + '，path=' + Path + '，timeout=' + IntToStr(WaitMs) + 'ms');
+        Result := '{"error":true,"code":"timeout"}';
+      end;
+    finally
+      Task.StateLock.Release;
+    end;
+    if CompletedAfterTimeout then begin
+      Result := Task.Response;
+      Task.Free;
+    end;
+  end;
+end;
+
 function TDelphiProxyServer.HandleRequest(const Method, Path, BodyUtf8: string): string;
+begin
+  if (Path = '/ping') or (Path = '/terminal/switch') or (Path = '/authorize') or
+     (Path = '/process/start') or (Path = '/process/end') then begin
+    Result := HandleRequestDirect(Method, Path, BodyUtf8);
+    Exit;
+  end;
+  if Path = '/capture/face' then begin
+    Result := QueueBusinessRequest(FFaceCaptureWorker, '人脸抓拍', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Exit;
+  end;
+  if Path = '/capture/fingerprint' then begin
+    Result := QueueBusinessRequest(FFingerprintCaptureWorker, '指纹抓拍', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Exit;
+  end;
+  if Path = '/ocr' then begin
+    Result := QueueBusinessRequest(FOcrWorker, 'OCR读取', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Exit;
+  end;
+  if Path = '/nfc' then begin
+    Result := QueueBusinessRequest(FNfcWorker, 'IC卡读取', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Exit;
+  end;
+  Result := HandleRequestDirect(Method, Path, BodyUtf8);
+end;
+function TDelphiProxyServer.HandleRequestDirect(const Method, Path, BodyUtf8: string): string;
 var RequestId, SaveDir, CallbackUrl, TerminalBaseUrl, SavePath, ResponseUtf8, DllCallbackUrl, PayloadUtf8: string;
   TerminalIndex: Integer; Client: TTerminalClient;
   ThirdPartyHwndVal, FpHwnd, IrisHwnd: HWND;
@@ -1414,6 +1957,7 @@ var ResourceType, RequestId, DllCallbackUrl, SaveDir, SavePath, PayloadUtf8: str
   OcrResult: TOcrCallbackResult; NfcResult: TNfcCallbackResult; ImgResult: TImageCallbackResult;
   I: Integer; ImgPath, ImgName: string; SL: TStringList;
 begin
+  try
   ResourceType := FCallbackParser.GetResourceType(BodyUtf8);
   RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
   DoLog('[信息] [终端回调] 收到终端回调，resource_type=' + ResourceType + '?，request_id=' + RequestId);
@@ -1519,6 +2063,28 @@ begin
 
   else DoLog('[提示] [终端回调] 收到未知资源类型，resource_type=' + ResourceType);
 
-  Result := '{"status":"accepted"}'; end;
+  Result := '{"status":"accepted"}';
+  except
+    on E: Exception do begin
+      DoLog('[错误] [终端回调] 处理终端回调异常：resource_type=' + ResourceType +
+        '，request_id=' + RequestId + '，错误=' + E.Message);
+      if DllCallbackUrl = '' then begin
+        if ResourceType = 'ocr_document' then
+          DllCallbackUrl := GetDllCallbackUrl('/ocr')
+        else if ResourceType = 'nfc_card' then
+          DllCallbackUrl := GetDllCallbackUrl('/nfc-card')
+        else if ResourceType = 'iris_image' then
+          DllCallbackUrl := GetDllCallbackUrl('/iris');
+      end;
+      if (DllCallbackUrl <> '') and (RequestId <> '') then begin
+        PayloadUtf8 := '{' + JsonStr('request_id', RequestId) +
+          ',"error":true,' + JsonStr('code', 'callback_exception') + ',' +
+          JsonStr('message', AnsiToUtf8(E.Message)) + '}';
+        MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8);
+      end;
+      Result := '{"status":"error","code":"callback_exception"}';
+    end;
+  end;
+end;
 
 end.
