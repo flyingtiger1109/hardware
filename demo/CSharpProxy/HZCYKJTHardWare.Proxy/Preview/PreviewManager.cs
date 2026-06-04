@@ -25,7 +25,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
     public class PreviewSession
     {
-        public VlcPreviewPlayer Player { get; set; }
+        public VlcPreviewController Player { get; set; }
         public IntPtr TargetHwnd { get; set; }
         public Control LocalPanel { get; set; }
         public PreviewResourceType ResourceType { get; set; }
@@ -37,6 +37,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
     {
         private const int PreviewUrlTimeoutMs = 5000;
         private const int ColdStartWarmupMs = 800;
+        private const int VlcPlayTimeoutMs = 2500;
+        private const int VlcStopTimeoutMs = 1500;
         private readonly ConcurrentDictionary<string, PreviewSession> _sessions = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, PreviewSession> _restartInfo = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, byte> _coldStartWarmups = new ConcurrentDictionary<string, byte>();
@@ -173,19 +175,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var (srcW, srcH, swap) = GetSourceDimensions(resType);
             await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
 
-            // Create VLC player and play — MUST run on UI thread (same as Delphi RunOnMainThread)
-            var player = new VlcPreviewPlayer();
-            var ok2 = false;
+            // Start VLC on a dedicated preview thread so a native VLC stall cannot freeze the UI.
+            VlcPreviewController player = null;
             var playTick = totalSw.ElapsedMilliseconds;
-            await RunOnUiAsync(() =>
-            {
-                ok2 = player.Play(rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap);
-            }).ConfigureAwait(false);
+            var description = $"{ResourceToName(resType)} {sessionType}";
+            player = await VlcPreviewController.StartAsync(description, rtspUrl, parentHwnd,
+                _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
+                visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
             var playElapsed = totalSw.ElapsedMilliseconds - playTick;
+            var ok2 = player != null && player.IsRunning;
 
             if (!ok2)
             {
-                await RunOnUiAsync(() => { player.Dispose(); }).ConfigureAwait(false);
+                if (player != null)
+                    await player.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 Logger.Error($"VLC播放失败明细：resource={ResourceToName(resType)}，session={sessionType}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms");
                 Logger.Error($"VLC播放失败: {ResourceToName(resType)}");
                 return false;
@@ -237,7 +240,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var key = SessionKey(resType, sessionType);
             if (_sessions.TryRemove(key, out var session))
             {
-                await RunOnUiAsync(() => { session.Player?.Dispose(); }).ConfigureAwait(false);
+                if (session.Player != null)
+                    await session.Player.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 if (!preserveRestartInfo)
                     _restartInfo.TryRemove(key, out _);
                 Logger.Info($"预览已停止: {ResourceToName(resType)} {sessionType}");
@@ -279,11 +283,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private async Task StopAllCore(bool preserveRestartInfo)
         {
             var sessions = new List<PreviewSession>(_sessions.Values);
-            await RunOnUiAsync(() =>
+            var stopTasks = new List<Task>();
+            foreach (var session in sessions)
             {
-                foreach (var session in sessions)
-                    session.Player?.Dispose();
-            }).ConfigureAwait(false);
+                if (session.Player != null)
+                    stopTasks.Add(session.Player.DisposeAsync(VlcStopTimeoutMs));
+            }
+
+            if (stopTasks.Count > 0)
+                await Task.WhenAll(stopTasks).ConfigureAwait(false);
 
             _sessions.Clear();
             if (!preserveRestartInfo)
@@ -336,15 +344,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var warmupPlayer = new VlcPreviewPlayer();
+            VlcPreviewController warmupPlayer = null;
             var ok = false;
             try
             {
-                await RunOnUiAsync(() =>
-                {
-                    ok = warmupPlayer.Play(rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs,
-                        _rtspTransport, srcW, srcH, swap, visible: false);
-                }).ConfigureAwait(false);
+                warmupPlayer = await VlcPreviewController.StartAsync($"{ResourceToName(resType)} 预热",
+                    rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs, _rtspTransport,
+                    srcW, srcH, swap, visible: false, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
+                ok = warmupPlayer != null && warmupPlayer.IsRunning;
 
                 if (ok)
                     await Task.Delay(ColdStartWarmupMs).ConfigureAwait(false);
@@ -356,7 +363,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             finally
             {
-                await RunOnUiAsync(() => warmupPlayer.Dispose()).ConfigureAwait(false);
+                if (warmupPlayer != null)
+                    await warmupPlayer.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 sw.Stop();
                 Logger.Info($"首次预览预热完成：resource={ResourceToName(resType)}，ok={ok}，耗时={sw.ElapsedMilliseconds}ms");
             }

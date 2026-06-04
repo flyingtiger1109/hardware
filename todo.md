@@ -551,10 +551,13 @@
 - [x] C# Proxy UI 日志改为 250ms 批量刷新，并限制待刷 UI 日志队列，降低高频抓拍日志压垮 UI 消息队列的风险。
 - [x] 本轮 C# Proxy `Release|x86` 编译通过：0 warning / 0 error。
 - [x] 根据现场闪退模块 `libsftp_plugin.dll` 定位到 VLC SFTP 访问插件风险；该插件与 RTSP 预览无关，已从 C# Proxy 输出包排除，并在运行时检测到现场残留插件时尝试改名禁用。
+- [x] 根据 `20:55:50` 现场日志定位：切回 Terminal 1 时日志停在 `VLC loaded from C:\BJ\exe\vlc`，未输出 `VLC播放成功/切换完成`，说明切换流程被 VLC native 播放启动阻塞，导致 UI 无响应且 `terminal_switching` 长时间不清。
+- [x] VLC 预览启动/停止改为后台 STA 线程执行，并增加 2500ms 启动超时、1500ms 停止超时；VLC 卡住时不再阻塞 UI 线程，也不再阻塞终端切换完成。
+- [x] VLC 播放启动增加分步骤中文日志：创建实例、创建媒体、创建播放器、创建视频窗口、开始播放，便于后续定位具体 native 卡点。
 
 ### 修改文件
 
-- C# Proxy：`Core/WorkerQueue.cs`、`Infrastructure/Logger.cs`、`MainForm.cs`、`Preview/PreviewManager.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCallbackSender.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/TerminalCallbackHandler.cs`、`Terminal/TerminalClient.cs`、`HZCYKJTHardWare.Proxy.csproj`。
+- C# Proxy：`Core/WorkerQueue.cs`、`Infrastructure/Logger.cs`、`MainForm.cs`、`Preview/PreviewManager.cs`、`Preview/VlcPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCallbackSender.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/TerminalCallbackHandler.cs`、`Terminal/TerminalClient.cs`、`HZCYKJTHardWare.Proxy.csproj`。
 - DLL 工程：`HZCYKJTHardWare.json`、`src/config_manager.cpp`、`src/config_manager.h`、`src/event_dispatcher.cpp`、`src/event_dispatcher.h`、`src/exports.cpp`、`src/request_session_manager.cpp`。
 - 本次未主动修改第三方示例程序源码；工作区中已有 Delphi 示例和第三方示例改动属于既有未提交变更。
 
@@ -565,6 +568,7 @@
 - [ ] 长时间视频预览叠加高频抓拍，确认 UI 可移动、可点击、日志继续刷新且不假死。
 - [ ] 复测“高频人脸/指纹抓拍 + 每 0.5 到 2 秒反复切换终端 + 外部摄像头/指纹预览”，确认预览不出现旧画面延迟、切换不卡顿、Exe 不再闪退。
 - [ ] 复测中重点观察 Exe 日志是否继续输出、DLL 是否不再出现连续 `error=12029` 连接 C# Proxy 失败。
+- [ ] 复测中重点观察终端切换是否还会卡在 `VLC loaded from ...`；若仍有 VLC 卡住，应看到新的 `VLC启动步骤` 最后一条日志，并且 UI 应保持可操作、切换状态应在超时后清除。
 - [ ] 现场部署后确认 `C:\BJ\exe\vlc\plugins\access\libsftp_plugin.dll` 已不存在，或已被改名为 `libsftp_plugin.dll.disabled`；复测 Windows 事件查看器不再出现该模块导致的闪退。
 - [ ] 授权请求真实链路验证：第三方调用 DLL，DLL 转发 C# Proxy，C# Proxy 调终端真实接口，授权结果回调第三方。
 - [ ] 第三方反复启动、退出、重新注册回调，确认旧会话被取消，旧数据不再回调给新注册方。

@@ -286,9 +286,12 @@ namespace HZCYKJTHardWare.Proxy
         private async void btnAuthorize_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
-            var requestId = await Task.Run(() => _server.RequestAuthorize(
+            var result = await Task.Run(() => _server.RequestAuthorize(
                 "H111111111", "24", "HKG", "TEST", "M", "19950101"));
-            AppendLog("授权已下发, request_id: " + requestId);
+            if (result.Ok)
+                AppendLog("授权已下发, request_id: " + result.RequestId);
+            else
+                AppendLog("授权下发失败: " + result.Message + ", request_id: " + result.RequestId);
         }
 
         // --- Logging ---

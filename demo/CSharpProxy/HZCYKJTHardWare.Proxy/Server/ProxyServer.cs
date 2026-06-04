@@ -38,6 +38,13 @@ namespace HZCYKJTHardWare.Proxy.Server
         private string _lanIp;
 
         public string LanIp => _lanIp;
+
+        public class AuthorizeRequestResult
+        {
+            public bool Ok { get; set; }
+            public string RequestId { get; set; }
+            public string Message { get; set; }
+        }
         public QueueManager QueueManager => _queueManager;
 
         public string GetTerminalCallbackBaseUrl()
@@ -252,8 +259,6 @@ namespace HZCYKJTHardWare.Proxy.Server
                     stream.WriteTimeout = 30000;
 
                     var (_, path, bodyUtf8) = await ReadHttpRequest(stream);
-
-                    _log($"[终端回调] {path}");
 
                     _ = Task.Run(() =>
                     {
@@ -550,7 +555,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             return requestId;
         }
 
-        public string RequestAuthorize(string idNo, string docType, string nationality, string name, string sex, string birthday)
+        public AuthorizeRequestResult RequestAuthorize(string idNo, string docType, string nationality, string name, string sex, string birthday)
         {
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var cfg = AppConfig.Instance;
@@ -560,9 +565,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                 $"\"id_no\":\"{JsonHelper.EscapeString(idNo)}\",\"doc_type\":\"{JsonHelper.EscapeString(docType)}\"," +
                 $"\"birthday\":\"{JsonHelper.EscapeString(birthday)}\",\"nationality\":\"{JsonHelper.EscapeString(nationality)}\"}}";
 
-            _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", body, 5000)
+            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", body, 5000)
                 .GetAwaiter().GetResult();
-            return requestId;
+            if (ok)
+            {
+                _log("[授权] 已受理: request_id=" + requestId);
+                return new AuthorizeRequestResult { Ok = true, RequestId = requestId, Message = "" };
+            }
+
+            var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
+            _log("[授权] 下发失败: request_id=" + requestId + ", " + detail);
+            return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = detail };
         }
 
         public async Task<bool> StartLocalPreviewAsync(string resourceType, System.Windows.Forms.Control panel)

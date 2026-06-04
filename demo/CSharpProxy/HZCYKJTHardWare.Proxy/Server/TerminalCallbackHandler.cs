@@ -42,7 +42,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var resourceType = CallbackParser.GetResourceType(bodyUtf8);
-                _log($"[终端回调] resource_type={resourceType}");
+                // ocr_event_status 高频推送，日志已在 HandleOcrEventStatus 内按事件类型精简
+                if (resourceType != "ocr_event_status")
+                    _log($"[终端回调] resource_type={resourceType}");
 
                 switch (resourceType)
             {
@@ -165,8 +167,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Save OCR result JSON
             FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
 
-            // Save evidence images if present
+            // Save evidence images (light source: 红外光/紫外光/可见光 + portrait: 人像)
             SaveEvidenceImages(bodyUtf8, saveDir, result.RequestId);
+
+            // Save MRZ information (MRZ.json with MRZ lines + person_info)
+            SaveMrzJson(bodyUtf8, saveDir, result.RequestId);
 
             // Forward to DLL callback — fallback to default URL if request_id not found (same as Delphi)
             var callbackUrl = GetCallback(result.RequestId);
@@ -316,26 +321,34 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Map OCR evidence lamp type to Chinese name (same as Delphi).
-        /// ImageType=2 or LampType=2 → 红外, LampType=1 → 可见光, LampType=3 → 紫外
+        /// Map OCR evidence lamp type to Chinese filename (aligned with C++ DLL).
+        /// lampType/lamp_type: 1 → 可见光, 2 → 红外光, 3 → 紫外光
+        /// (imageType/image_type is NOT used for light source — image_type == 2 means portrait)
         /// </summary>
         private static string MapEvidenceImageName(string imgJson)
         {
-            var imageType = JsonHelper.ExtractInt(imgJson, "image_type");
-            if (imageType == 0)
-                imageType = (int)JsonHelper.ExtractInt(imgJson, "imageType");
-            if (imageType == 2) return "红外"; // infrared
-
-            var lampType = JsonHelper.ExtractInt(imgJson, "lamp_type");
+            var lampType = JsonHelper.ExtractInt(imgJson, "lampType");
             if (lampType == 0)
-                lampType = (int)JsonHelper.ExtractInt(imgJson, "lampType");
+                lampType = (int)JsonHelper.ExtractInt(imgJson, "lamp_type");
             switch (lampType)
             {
-                case 1: return "可见光"; // visible light
-                case 2: return "红外";    // infrared
-                case 3: return "紫外";   // ultraviolet
+                case 1: return "可见光";
+                case 2: return "红外光";
+                case 3: return "紫外光";
                 default: return "";
             }
+        }
+
+        /// <summary>
+        /// Check if evidence image is a portrait (证件人像图).
+        /// imageType/image_type == 2 means portrait per protocol 2.6.
+        /// </summary>
+        private static bool IsOcrPortraitImage(string imgJson)
+        {
+            var imageType = JsonHelper.ExtractInt(imgJson, "imageType");
+            if (imageType == 0)
+                imageType = (int)JsonHelper.ExtractInt(imgJson, "image_type");
+            return imageType == 2;
         }
 
         private void SaveEvidenceImages(string bodyUtf8, string saveDir, string requestId)
@@ -343,31 +356,105 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var imageItems = CallbackParser.ParseEvidenceImages(bodyUtf8);
+                if (imageItems.Count == 0) return;
+
+                var saveDir2 = PathHelper.EnsureRequestFolder(saveDir, requestId);
+                bool savedVisible = false, savedInfrared = false, savedUltraviolet = false, savedPortrait = false;
+                var savedNames = new System.Collections.Generic.List<string>();
+
                 foreach (var imgJson in imageItems)
                 {
-                    var base64 = JsonHelper.ExtractString(imgJson, "image_base64");
+                    // Extract base64: protocol uses imageData (camelCase), also support snake_case
+                    var base64 = JsonHelper.ExtractString(imgJson, "imageData");
                     if (string.IsNullOrEmpty(base64))
-                        base64 = JsonHelper.ExtractString(imgJson, "base64");
+                        base64 = JsonHelper.ExtractString(imgJson, "image_data");
+                    if (string.IsNullOrEmpty(base64))
+                        base64 = JsonHelper.ExtractString(imgJson, "image_base64");
                     if (string.IsNullOrEmpty(base64)) continue;
 
-                    var imgName = MapEvidenceImageName(imgJson);
-                    if (string.IsNullOrEmpty(imgName)) continue;
+                    // Save light source images by lamp_type (dedup: first of each type only)
+                    var lampName = MapEvidenceImageName(imgJson);
+                    if (!string.IsNullOrEmpty(lampName))
+                    {
+                        bool shouldSave = false;
+                        if (lampName == "可见光" && !savedVisible) { savedVisible = true; shouldSave = true; }
+                        else if (lampName == "红外光" && !savedInfrared) { savedInfrared = true; shouldSave = true; }
+                        else if (lampName == "紫外光" && !savedUltraviolet) { savedUltraviolet = true; shouldSave = true; }
 
-                    var imageType = JsonHelper.ExtractString(imgJson, "image_type");
-                    if (string.IsNullOrEmpty(imageType))
-                        imageType = JsonHelper.ExtractString(imgJson, "imageType");
-                    if (string.IsNullOrEmpty(imageType)) imageType = "jpg";
+                        if (shouldSave)
+                        {
+                            var filePath = System.IO.Path.Combine(saveDir2, lampName + ".jpg");
+                            FileSaver.SaveBase64ImageToFile(base64, filePath);
+                            savedNames.Add(lampName);
+                        }
+                    }
 
-                    var ext = imageType.Contains("bmp") ? ".bmp" : ".jpg";
-                    var saveDir2 = PathHelper.EnsureRequestFolder(saveDir, requestId);
-                    var filePath = System.IO.Path.Combine(saveDir2, imgName + ext);
-                    FileSaver.SaveBase64ImageToFile(base64, filePath);
-                    _log($"[OCR] 照片已保存: type={JsonHelper.ExtractInt(imgJson, "image_type")},lamp={JsonHelper.ExtractInt(imgJson, "lamp_type")},path={filePath}");
+                    // Save portrait image (imageType == 2, first only)
+                    if (!savedPortrait && IsOcrPortraitImage(imgJson))
+                    {
+                        savedPortrait = true;
+                        var filePath = System.IO.Path.Combine(saveDir2, "人像.jpg");
+                        FileSaver.SaveBase64ImageToFile(base64, filePath);
+                        savedNames.Add("人像");
+                    }
                 }
+
+                if (savedNames.Count > 0)
+                    _log($"[OCR] 照片已保存至 {saveDir2}: {string.Join(", ", savedNames)}");
             }
             catch (Exception ex)
             {
                 _log($"[OCR] 保存证据图片异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Save MRZ information as MRZ.json from OCR callback body.
+        /// Extracts MRZ1/MRZ2/MRZ3 and person_info array per protocol 2.6.
+        /// </summary>
+        private void SaveMrzJson(string bodyUtf8, string saveDir, string requestId)
+        {
+            try
+            {
+                var obj = Newtonsoft.Json.Linq.JObject.Parse(bodyUtf8);
+                var data = obj["data"] as Newtonsoft.Json.Linq.JObject;
+                if (data == null) return;
+
+                // Extract MRZ lines (same field names as C++ DLL)
+                var mrz1 = data["MRZ1"]?.ToString() ?? "";
+                var mrz2 = data["MRZ2"]?.ToString() ?? "";
+                var mrz3 = data["MRZ3"]?.ToString() ?? "";
+                if (string.IsNullOrEmpty(mrz1)) mrz1 = data["mrz1"]?.ToString() ?? "";
+                if (string.IsNullOrEmpty(mrz2)) mrz2 = data["mrz2"]?.ToString() ?? "";
+                if (string.IsNullOrEmpty(mrz3)) mrz3 = data["mrz3"]?.ToString() ?? "";
+
+                // Extract person_info array
+                var personInfoArray = data["person_info"] as Newtonsoft.Json.Linq.JArray;
+
+                // Build MRZ.json
+                var mrzObj = new Newtonsoft.Json.Linq.JObject();
+                mrzObj["request_id"] = requestId;
+
+                var mrzLines = new Newtonsoft.Json.Linq.JArray();
+                if (!string.IsNullOrEmpty(mrz1)) mrzLines.Add(mrz1);
+                if (!string.IsNullOrEmpty(mrz2)) mrzLines.Add(mrz2);
+                if (!string.IsNullOrEmpty(mrz3)) mrzLines.Add(mrz3);
+                mrzObj["mrz_lines"] = mrzLines;
+
+                if (personInfoArray != null && personInfoArray.Count > 0)
+                    mrzObj["person_info"] = personInfoArray;
+                else
+                    mrzObj["person_info"] = new Newtonsoft.Json.Linq.JArray();
+
+                var saveDir2 = PathHelper.EnsureRequestFolder(saveDir, requestId);
+                var filePath = System.IO.Path.Combine(saveDir2, "MRZ.json");
+                System.IO.File.WriteAllText(filePath, mrzObj.ToString(Newtonsoft.Json.Formatting.Indented),
+                    System.Text.Encoding.UTF8);
+                _log($"[OCR] MRZ信息已保存: path={filePath}");
+            }
+            catch (Exception ex)
+            {
+                _log($"[OCR] 保存MRZ信息异常: {ex.Message}");
             }
         }
 

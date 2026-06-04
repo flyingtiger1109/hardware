@@ -216,6 +216,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var argvPtr = Marshal.AllocHGlobal(IntPtr.Size * args.Count);
                 Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
 
+                Logger.Info($"VLC启动步骤：创建实例，url={rtspUrl}");
                 _vlcInstance = _fnNew(args.Count, argvPtr);
 
                 for (int i = 0; i < args.Count; i++)
@@ -230,6 +231,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 2) Create media with options
+                Logger.Info($"VLC启动步骤：创建媒体，url={rtspUrl}");
                 var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
                 var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
                 Marshal.FreeHGlobal(mrlPtr);
@@ -255,6 +257,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 AddMediaOption(media, ":no-audio");
 
                 // 3) Create player
+                Logger.Info($"VLC启动步骤：创建播放器，url={rtspUrl}");
                 _mediaPlayer = _fnPlayerNewFromMedia(media);
                 _fnMediaRelease(media);
 
@@ -266,6 +269,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 4) Create child window (STATIC) for VLC — same as Delphi CreateWindowEx('STATIC', WS_CHILD)
+                Logger.Info($"VLC启动步骤：创建视频窗口，url={rtspUrl}，parent={parentHwnd}");
                 var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
                 if (visible)
                     windowStyle |= WS_VISIBLE;
@@ -282,6 +286,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnPlayerSetHwnd(_mediaPlayer, _videoHwnd);
 
                 // 6) Play
+                Logger.Info($"VLC启动步骤：开始播放，url={rtspUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
                     Logger.Error("VLC play returned error");

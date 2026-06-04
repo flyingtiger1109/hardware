@@ -275,13 +275,21 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log("[授权] 转发至终端: request_id=" + requestId);
 
-            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
+            var (ok, response) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
             if (ok)
             {
                 _log("[授权] 已受理: request_id=" + requestId);
                 return "{\"accepted\":true}";
             }
-            return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
+
+            var code = ResultParser.ExtractErrorCode(response);
+            var message = ResultParser.ExtractErrorMessage(response);
+            var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
+            _log("[授权] 下发失败: request_id=" + requestId + ", " + detail);
+
+            if (string.IsNullOrEmpty(code))
+                code = "terminal_request_failed";
+            return "{\"error\":true,\"code\":\"" + JsonHelper.EscapeString(code) + "\",\"message\":\"" + JsonHelper.EscapeString(message) + "\"}";
         }
 
         // ====== Preview Start (replace mode, immediate "accepted") ======

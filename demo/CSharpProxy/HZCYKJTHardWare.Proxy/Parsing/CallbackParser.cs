@@ -245,7 +245,9 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             try
             {
                 var obj = JObject.Parse(bodyUtf8);
-                var arr = obj["evidence_images"] as JArray;
+                // Protocol: evidence_images is inside data section (same as Delphi/C++ behavior)
+                var data = obj["data"] as JObject;
+                var arr = data?["evidence_images"] as JArray ?? obj["evidence_images"] as JArray;
                 if (arr != null)
                 {
                     foreach (var item in arr)

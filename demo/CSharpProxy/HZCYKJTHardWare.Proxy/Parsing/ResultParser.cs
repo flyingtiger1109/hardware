@@ -43,5 +43,35 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 || responseBody.Contains("\"status\":\"failed\"")
                 || responseBody.Contains("\"status\":\"fail\"");
         }
+
+        public static string ExtractErrorCode(string responseBody)
+        {
+            var code = JsonHelper.ExtractString(responseBody, "error_code");
+            if (string.IsNullOrEmpty(code))
+                code = JsonHelper.ExtractString(responseBody, "code");
+            return code;
+        }
+
+        public static string ExtractErrorMessage(string responseBody)
+        {
+            var message = JsonHelper.ExtractString(responseBody, "message");
+            if (string.IsNullOrEmpty(message))
+                message = JsonHelper.ExtractString(responseBody, "msg");
+            return message;
+        }
+
+        public static string FormatErrorDetail(string responseBody, string fallback)
+        {
+            var code = ExtractErrorCode(responseBody);
+            var message = ExtractErrorMessage(responseBody);
+
+            if (!string.IsNullOrEmpty(code) && !string.IsNullOrEmpty(message))
+                return code + ": " + message;
+            if (!string.IsNullOrEmpty(message))
+                return message;
+            if (!string.IsNullOrEmpty(code))
+                return code;
+            return fallback;
+        }
     }
 }
