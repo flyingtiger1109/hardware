@@ -5,6 +5,8 @@ codex_build/
 x64/
 Release/
 Debug/
+demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/bin/
+demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/obj/
 *.obj
 *.dcu
 *.aps

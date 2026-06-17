@@ -582,3 +582,35 @@
 - [ ] 日志系统已从业务线程移走，但高频写盘仍建议观察磁盘 IO；必要时可改为批量 flush。
 - [ ] 如果现场仍有 VLC native 崩溃，需要补充 Windows 事件查看器中 `Faulting module`，确认是否为 `libvlc.dll/libvlccore.dll` 或显卡/窗口句柄相关模块。
 - [ ] 当前编译验证已完成，尚未做真实终端 24 小时压测，性能结论需以现场压测数据确认。
+
+## 授权超时调整（2026-06-17）
+
+### 已完成事项
+
+- [x] 授权异步等待超时从复用 `ocr_ms` 改为独立配置 `authorize_ms`。
+- [x] 默认授权超时调整为 `60000ms`，旧配置缺少 `authorize_ms` 时也按 60 秒处理。
+- [x] 根配置 `HZCYKJTHardWare.json` 新增 `"authorize_ms": 60000`。
+- [x] C# 第三方 Demo 项目补充复制 `Release\HZCYKJTHardWare.dll`，便于 Demo 输出目录直接运行最新 DLL。
+
+### 修改文件
+
+- `HZCYKJTHardWare.json`
+- `src/config_manager.h`
+- `src/config_manager.cpp`
+- `src/hzsjkjt_context.h`
+- `src/hzsjkjt_context.cpp`
+- `src/exports.cpp`
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/HZCYKJTHardWare.CSharpDemo.csproj`
+
+### 兼容性说明
+
+- DLL 导出函数、回调结构、调用约定、错误码均未改变。
+- OCR/NFC 仍使用原 `ocr_ms=10000`，不受本次授权超时调整影响。
+- 部署时需要确保 DLL 同目录的 `HZCYKJTHardWare.json` 包含或默认支持 `authorize_ms=60000`。
+
+### 验证状态
+
+- [x] DLL `Release|Win32` 编译通过：0 warning，0 error。
+- [x] C# 第三方 Demo `Release|x86` 编译通过：0 warning，0 error。
+- [x] Demo 输出目录已包含最新 `HZCYKJTHardWare.dll` 和带 `authorize_ms=60000` 的 `HZCYKJTHardWare.json`。
+- [ ] 真实终端授权“同意/不同意/不操作等待 60 秒超时”现场验证。

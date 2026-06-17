@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 
@@ -243,18 +244,33 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return false;
                 }
 
-                // Media options — exactly same as Delphi VlcPlayer.Play
-                if (string.Equals(rtspTransport, "tcp", StringComparison.OrdinalIgnoreCase))
-                    AddMediaOption(media, ":rtsp-tcp");
-                else if (string.Equals(rtspTransport, "udp", StringComparison.OrdinalIgnoreCase))
-                    AddMediaOption(media, ":rtsp-udp");
-                AddMediaOption(media, $":network-caching={networkCachingMs}");
-                AddMediaOption(media, $":live-caching={liveCachingMs}");
-                AddMediaOption(media, ":drop-late-frames");
-                AddMediaOption(media, ":skip-frames");
-                AddMediaOption(media, ":clock-jitter=0");
-                AddMediaOption(media, ":clock-synchro=0");
-                AddMediaOption(media, ":no-audio");
+                var isHttp = rtspUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                          || rtspUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+                if (isHttp)
+                {
+                    AddMediaOption(media, $":network-caching={networkCachingMs}");
+                    AddMediaOption(media, $":live-caching={liveCachingMs}");
+                    AddMediaOption(media, ":drop-late-frames");
+                    AddMediaOption(media, ":skip-frames");
+                    AddMediaOption(media, ":clock-jitter=0");
+                    AddMediaOption(media, ":clock-synchro=0");
+                    AddMediaOption(media, ":no-audio");
+                }
+                else
+                {
+                    if (string.Equals(rtspTransport, "tcp", StringComparison.OrdinalIgnoreCase))
+                        AddMediaOption(media, ":rtsp-tcp");
+                    else if (string.Equals(rtspTransport, "udp", StringComparison.OrdinalIgnoreCase))
+                        AddMediaOption(media, ":rtsp-udp");
+                    AddMediaOption(media, $":network-caching={networkCachingMs}");
+                    AddMediaOption(media, $":live-caching={liveCachingMs}");
+                    AddMediaOption(media, ":drop-late-frames");
+                    AddMediaOption(media, ":skip-frames");
+                    AddMediaOption(media, ":clock-jitter=0");
+                    AddMediaOption(media, ":clock-synchro=0");
+                    AddMediaOption(media, ":no-audio");
+                }
 
                 // 3) Create player
                 Logger.Info($"VLC启动步骤：创建播放器，url={rtspUrl}");
@@ -499,6 +515,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void Unload()
         {
             Stop();
+            Thread.Sleep(100);
             if (_libVlcHandle != IntPtr.Zero) { FreeLibrary(_libVlcHandle); _libVlcHandle = IntPtr.Zero; }
             if (_libVlcCoreHandle != IntPtr.Zero) { FreeLibrary(_libVlcCoreHandle); _libVlcCoreHandle = IntPtr.Zero; }
             _fnNew = null; _fnRelease = null; _fnMediaNewLocation = null; _fnMediaAddOption = null;

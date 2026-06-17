@@ -7,8 +7,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
     public class AppConfig
     {
-        private static AppConfig _instance;
-        public static AppConfig Instance => _instance ?? (_instance = Load());
+        private static readonly Lazy<AppConfig> _lazy = new Lazy<AppConfig>(() => Load());
+        public static AppConfig Instance => _lazy.Value;
 
         // DLL communication server
         public string DllServerHost { get; set; } = "127.0.0.1";
@@ -46,28 +46,20 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public string VlcDir { get; set; }
 
         /// <summary>
-        /// Config file name. Load order: <exe_dir>\HZCYKJTHardWare.Proxy.json first,
-        /// then fall back to HZCYKJTHardWare.json (Delphi compat).
+        /// Unified config file shared by the DLL and C# proxy.
         /// </summary>
-        private const string PrimaryConfigFile = "HZCYKJTHardWare.Proxy.json";
-        private const string FallbackConfigFile = "HZCYKJTHardWare.json";
+        private const string ConfigFile = "HZCYKJTHardWare.json";
 
         private static AppConfig Load()
         {
             var config = new AppConfig();
             config.ExeDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            // Try primary config first, fall back to Delphi-compatible config
-            var jsonPath = Path.Combine(config.ExeDir, PrimaryConfigFile);
+            var jsonPath = Path.Combine(config.ExeDir, ConfigFile);
             if (!File.Exists(jsonPath))
             {
-                jsonPath = Path.Combine(config.ExeDir, FallbackConfigFile);
-                if (!File.Exists(jsonPath))
-                {
-                    Logger.Warn($"Config file not found: {PrimaryConfigFile} or {FallbackConfigFile}, using defaults");
-                    return config;
-                }
-                Logger.Info($"Using fallback config: {jsonPath}");
+                Logger.Warn($"Config file not found: {ConfigFile}, using defaults");
+                return config;
             }
 
             try
@@ -75,7 +67,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var json = File.ReadAllText(jsonPath, Encoding.UTF8);
                 var obj = JObject.Parse(json);
 
-                // dll_server (C# specific section name; also supports legacy "delphi_server" key)
+                // Supports both the old C# key and the unified DLL key.
                 var dllServer = obj["dll_server"] ?? obj["delphi_server"];
                 if (dllServer != null)
                 {
@@ -99,7 +91,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 {
                     config.TerminalScheme = terminal.Value<string>("scheme") ?? config.TerminalScheme;
                     config.TerminalPort = terminal.Value<int?>("port") ?? config.TerminalPort;
-                    config.SubnetPrefix = terminal.Value<string>("subnet_prefix") ?? config.SubnetPrefix;
+                    config.SubnetPrefix = terminal.Value<string>("subnet_prefix")
+                        ?? terminal.Value<string>("preferred_subnet_prefix")
+                        ?? config.SubnetPrefix;
 
                     // C# key: "devices"; also supports legacy "auto_subnet_devices"
                     var devices = terminal["devices"] ?? terminal["auto_subnet_devices"];
@@ -133,11 +127,13 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.RtspTransport = preview.Value<string>("rtsp_transport") ?? config.RtspTransport;
                 }
 
-                // save (C# specific section)
+                // Supports both the old C# key and the unified DLL key.
                 var save = obj["save"];
                 if (save != null)
                 {
-                    config.DefaultSaveDir = save.Value<string>("default_dir") ?? config.DefaultSaveDir;
+                    config.DefaultSaveDir = save.Value<string>("default_dir")
+                        ?? save.Value<string>("default_root")
+                        ?? config.DefaultSaveDir;
                     config.CreateDateFolder = save.Value<bool?>("create_date_folder") ?? config.CreateDateFolder;
                     config.CreateRequestFolder = save.Value<bool?>("create_request_folder") ?? config.CreateRequestFolder;
                 }

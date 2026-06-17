@@ -141,7 +141,6 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         private void Run()
         {
-            var cts = new CancellationTokenSource();
             while (!_disposed)
             {
                 QueueTask<T> task = null;
@@ -164,7 +163,6 @@ namespace HZCYKJTHardWare.Proxy.Core
                 if (task != null)
                     ExecuteWithTiming(task);
             }
-            cts.Dispose();
         }
 
         private void ExecuteWithTiming(QueueTask<T> task)

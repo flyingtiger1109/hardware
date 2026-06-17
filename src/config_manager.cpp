@@ -218,6 +218,8 @@ int ConfigManager::ParseJson(const std::string& json) {
             m_fingerprintCaptureTimeoutMs = JsonHelper::GetInt(timeoutObj, "fingerprint_capture_ms");
         if (JsonHelper::HasKey(timeoutObj, "ocr_ms"))
             m_ocrTimeoutMs = JsonHelper::GetInt(timeoutObj, "ocr_ms");
+        if (JsonHelper::HasKey(timeoutObj, "authorize_ms"))
+            m_authorizeTimeoutMs = JsonHelper::GetInt(timeoutObj, "authorize_ms");
     }
 
     // save 配置
@@ -300,6 +302,7 @@ void ConfigManager::ApplyDefaults() {
     m_faceCaptureTimeoutMs = 5000;
     m_fingerprintCaptureTimeoutMs = 5000;
     m_ocrTimeoutMs = 10000;
+    m_authorizeTimeoutMs = 60000;
 
     m_saveDefaultRoot = ".\\captures";
     m_cameraDefaultPath = ".\\captures\\camera.jpg";
@@ -347,6 +350,7 @@ int ConfigManager::GetHttpRequestTimeoutMs() const { return m_httpRequestTimeout
 int ConfigManager::GetFaceCaptureTimeoutMs() const { return m_faceCaptureTimeoutMs; }
 int ConfigManager::GetFingerprintCaptureTimeoutMs() const { return m_fingerprintCaptureTimeoutMs; }
 int ConfigManager::GetOcrTimeoutMs() const { return m_ocrTimeoutMs; }
+int ConfigManager::GetAuthorizeTimeoutMs() const { return m_authorizeTimeoutMs; }
 const std::string& ConfigManager::GetSaveDefaultRoot() const { return m_saveDefaultRoot; }
 const std::string& ConfigManager::GetCameraDefaultPath() const { return m_cameraDefaultPath; }
 const std::string& ConfigManager::GetFingerprintDefaultPath() const { return m_fingerprintDefaultPath; }

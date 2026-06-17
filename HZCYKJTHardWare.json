@@ -3,14 +3,14 @@
     "host": "127.0.0.1",
     "port": 18080,
     "auto_start": true,
-    "executable": "HZCYKJTHardWare.exe",
+    "executable": "HZCYKJTHardWare.Proxy.exe",
     "start_wait_ms": 10000,
     "ping_interval_ms": 300
   },
   "terminal_callback_server": {
     "listen_host": "0.0.0.0",
     "public_host": "",
-    "port": 8081,
+    "port": 18081,
     "path": "/terminal-callback"
   },
   "terminal": {
@@ -41,7 +41,7 @@
       {
         "index": 2,
         "name": "terminal_b",
-        "host_suffix": 11
+        "host_suffix": 31
       }
     ]
   },
@@ -57,7 +57,8 @@
     "http_request_ms": 15000,
     "face_capture_ms": 5000,
     "fingerprint_capture_ms": 5000,
-    "ocr_ms": 10000
+    "ocr_ms": 10000,
+    "authorize_ms": 60000
   },
   "save": {
     "default_root": ".\\captures",

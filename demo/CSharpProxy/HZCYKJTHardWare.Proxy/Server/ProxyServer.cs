@@ -99,11 +99,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             _callbackListener.Start(50);
             _log($"回调服务监听: {cfg.CallbackListenHost}:{cfg.CallbackListenPort}");
 
-            // ServicePoint connection lease: recycle connections every 60s to prevent stale connections
-            // after network interruptions. Default is infinite (connections never recycled).
-            ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
-            ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
-
             Task.Run(() => AcceptLoop(_dllListener, HandleDllRequest, _dllRequestSlots, _cts.Token));
             Task.Run(() => AcceptLoop(_callbackListener, HandleCallbackRequest, _callbackRequestSlots, _cts.Token));
 
@@ -404,8 +399,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             _terminalManager.ProcessActive = false;
             _terminalManager.ProcessSaveDir = "";
-            _requestSaveDirs.Clear();
-            _requestCallbacks.Clear();
+            _commandHandler.ClearAllMappings();
             _log("[流程] 流程已结束");
             return "OK";
         }
@@ -580,13 +574,14 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         public async Task<bool> StartLocalPreviewAsync(string resourceType, System.Windows.Forms.Control panel)
         {
-            var resType = resourceType switch
+            PreviewResourceType resType;
+            switch (resourceType)
             {
-                "camera" => PreviewResourceType.Camera,
-                "fingerprint" => PreviewResourceType.Fingerprint,
-                "iris" => PreviewResourceType.Iris,
-                _ => throw new ArgumentException($"Unknown resource type: {resourceType}")
-            };
+                case "camera": resType = PreviewResourceType.Camera; break;
+                case "fingerprint": resType = PreviewResourceType.Fingerprint; break;
+                case "iris": resType = PreviewResourceType.Iris; break;
+                default: throw new ArgumentException($"Unknown resource type: {resourceType}");
+            }
 
             return await _previewManager.StartPreview(resType, PreviewSessionType.Local,
                 IntPtr.Zero, _terminalManager.CurrentBaseUrl, panel);
@@ -594,13 +589,14 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         public void StopLocalPreview(string resourceType)
         {
-            var resType = resourceType switch
+            PreviewResourceType resType;
+            switch (resourceType)
             {
-                "camera" => PreviewResourceType.Camera,
-                "fingerprint" => PreviewResourceType.Fingerprint,
-                "iris" => PreviewResourceType.Iris,
-                _ => throw new ArgumentException($"Unknown resource type: {resourceType}")
-            };
+                case "camera": resType = PreviewResourceType.Camera; break;
+                case "fingerprint": resType = PreviewResourceType.Fingerprint; break;
+                case "iris": resType = PreviewResourceType.Iris; break;
+                default: throw new ArgumentException($"Unknown resource type: {resourceType}");
+            }
 
             _previewManager.StopPreview(resType, PreviewSessionType.Local);
         }
@@ -624,7 +620,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _log("[终端切换] 当前终端=" + _terminalManager.CurrentName);
 
                 phase = sw.ElapsedMilliseconds;
-                _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl).GetAwaiter().GetResult();
+                _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl,
+                    () => _queueManager.IsGenerationValid(req.Generation)).GetAwaiter().GetResult();
                 _log($"[性能] 终端切换启动 耗时={sw.ElapsedMilliseconds - phase}ms");
                 _log($"[性能] 终端切换总耗时={sw.ElapsedMilliseconds}ms");
             }

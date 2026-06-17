@@ -44,6 +44,7 @@ public:
     int face_capture_timeout_ms = 15000;
     int fingerprint_capture_timeout_ms = 15000;
     int ocr_timeout_ms = 20000;
+    int authorize_timeout_ms = 60000;
 
     // 预览状态
     bool camera_preview_running = false;

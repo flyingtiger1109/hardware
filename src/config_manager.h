@@ -57,6 +57,7 @@ public:
     int GetFaceCaptureTimeoutMs() const;
     int GetFingerprintCaptureTimeoutMs() const;
     int GetOcrTimeoutMs() const;
+    int GetAuthorizeTimeoutMs() const;
 
     const std::string& GetSaveDefaultRoot() const;
     const std::string& GetCameraDefaultPath() const;
@@ -110,6 +111,7 @@ private:
     int m_faceCaptureTimeoutMs = 15000;
     int m_fingerprintCaptureTimeoutMs = 15000;
     int m_ocrTimeoutMs = 20000;
+    int m_authorizeTimeoutMs = 60000;
 
     std::string m_saveDefaultRoot;
     std::string m_cameraDefaultPath = ".\\captures\\camera.jpg";

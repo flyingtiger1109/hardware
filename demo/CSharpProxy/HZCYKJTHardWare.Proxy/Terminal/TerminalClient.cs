@@ -16,14 +16,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         public TerminalClient()
         {
             // Increase global connection limit to prevent socket exhaustion under high-frequency requests
-            ServicePointManager.DefaultConnectionLimit = 50;
-            ServicePointManager.Expect100Continue = false;
-            ServicePointManager.ReusePort = true;
-
             var handler = new HttpClientHandler
             {
                 AllowAutoRedirect = false,
-                MaxConnectionsPerServer = 20,  // Limit concurrent connections per terminal
                 UseProxy = false
             };
 

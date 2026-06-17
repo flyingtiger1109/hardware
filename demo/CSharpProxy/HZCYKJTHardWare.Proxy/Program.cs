@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -24,6 +25,12 @@ namespace HZCYKJTHardWare.Proxy
             int minWorker, minIo;
             ThreadPool.GetMinThreads(out minWorker, out minIo);
             ThreadPool.SetMinThreads(Math.Max(minWorker, 20), Math.Max(minIo, 20));
+
+            // ServicePointManager: connection pool and DNS settings (process-wide, set once)
+            ServicePointManager.DefaultConnectionLimit = 50;
+            ServicePointManager.Expect100Continue = false;
+            ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
+            ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
 
             // === Global exception handlers for long-running stability ===
             AppDomain.CurrentDomain.UnhandledException += (sender, args) =>

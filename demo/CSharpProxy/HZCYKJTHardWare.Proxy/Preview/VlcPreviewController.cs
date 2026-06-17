@@ -7,7 +7,7 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 
 namespace HZCYKJTHardWare.Proxy.Preview
 {
-    public sealed class VlcPreviewController : IDisposable
+    public sealed class VlcPreviewController : IPreviewController
     {
         private readonly BlockingCollection<Action> _actions = new BlockingCollection<Action>();
         private readonly TaskCompletionSource<bool> _startTcs =

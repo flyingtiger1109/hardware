@@ -14,7 +14,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly DllCallbackSender _dllCallback;
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
         private readonly ConcurrentDictionary<string, string> _requestCallbacks;
-        private readonly ConcurrentDictionary<string, byte> _processedCallbacks;  // Dedup: {requestId}_{resourceType}
+        private readonly ConcurrentDictionary<string, long> _processedCallbacks;  // Dedup: {requestId}_{resourceType}
         private readonly Action<string> _log;
 
         // Callback types that should only be forwarded once per request_id (not event streams like ocr_event_status)
@@ -33,7 +33,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             _dllCallback = dllCallback;
             _requestSaveDirs = requestSaveDirs;
             _requestCallbacks = requestCallbacks;
-            _processedCallbacks = new ConcurrentDictionary<string, byte>();
+            _processedCallbacks = new ConcurrentDictionary<string, long>();
             _log = log;
         }
 
@@ -483,7 +483,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private bool TryMarkProcessed(string requestId, string resourceType)
         {
             var key = requestId + "_" + resourceType;
-            return _processedCallbacks.TryAdd(key, 0);
+            return _processedCallbacks.TryAdd(key, DateTime.UtcNow.Ticks);
         }
 
         /// <summary>
@@ -493,8 +493,18 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (_processedCallbacks.Count > 5000)
             {
-                _processedCallbacks.Clear();
-                _log("[回调去重] 已清理去重缓存");
+                var cutoff = DateTime.UtcNow.AddMinutes(-10).Ticks;
+                var removed = 0;
+                foreach (var kv in _processedCallbacks)
+                {
+                    if (kv.Value < cutoff)
+                    {
+                        _processedCallbacks.TryRemove(kv.Key, out _);
+                        removed++;
+                    }
+                }
+                if (removed > 0)
+                    _log($"[回调去重] 已清理 {removed} 条过期去重记录");
             }
         }
     }

@@ -23,6 +23,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly PreviewManager _previewManager;
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
         private readonly ConcurrentDictionary<string, string> _requestCallbacks;
+        private readonly ConcurrentDictionary<string, long> _requestTimestamps = new ConcurrentDictionary<string, long>();
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
         private readonly QueueManager _queueManager;
@@ -60,12 +61,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (_queueManager.SwitchingTerminal)
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
-            // Dictionary cleanup
+            // Dictionary cleanup: remove entries older than 60 seconds
             if (++_requestCount % 500 == 0)
-            {
-                if (_requestSaveDirs.Count > 2000) _requestSaveDirs.Clear();
-                if (_requestCallbacks.Count > 2000) _requestCallbacks.Clear();
-            }
+                CleanupExpiredRequests(TimeSpan.FromSeconds(60));
 
             // Parse request fields
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
@@ -78,6 +76,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
                 _requestCallbacks[requestId] = callbackUrl;
+                _requestTimestamps[requestId] = DateTime.UtcNow.Ticks;
             }
 
             var gen = _queueManager.TerminalGeneration;
@@ -243,8 +242,30 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalManager.ProcessSaveDir = "";
             _requestSaveDirs.Clear();
             _requestCallbacks.Clear();
+            _requestTimestamps.Clear();
             _log("[流程] 流程已结束");
             return "{\"status\":\"ok\"}";
+        }
+
+        private void CleanupExpiredRequests(TimeSpan maxAge)
+        {
+            var cutoff = DateTime.UtcNow.Ticks - maxAge.Ticks;
+            foreach (var kv in _requestTimestamps)
+            {
+                if (kv.Value < cutoff)
+                {
+                    _requestTimestamps.TryRemove(kv.Key, out _);
+                    _requestSaveDirs.TryRemove(kv.Key, out _);
+                    _requestCallbacks.TryRemove(kv.Key, out _);
+                }
+            }
+        }
+
+        public void ClearAllMappings()
+        {
+            _requestSaveDirs.Clear();
+            _requestCallbacks.Clear();
+            _requestTimestamps.Clear();
         }
 
         private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId, string callbackUrl)
@@ -309,30 +330,34 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             // Start preview on thread pool (not blocking HTTP), then send callback
             var terminalBaseUrl = _terminalManager.CurrentBaseUrl;
-            var resourceName = resType switch
+            string resourceName;
+            switch (resType)
             {
-                PreviewResourceType.Camera => "face_image",
-                PreviewResourceType.Fingerprint => "fingerprint_image",
-                PreviewResourceType.Iris => "iris_image",
-                _ => "unknown"
-            };
+                case PreviewResourceType.Camera: resourceName = "face_image"; break;
+                case PreviewResourceType.Fingerprint: resourceName = "fingerprint_image"; break;
+                case PreviewResourceType.Iris: resourceName = "iris_image"; break;
+                default: resourceName = "unknown"; break;
+            }
 
             // Execute preview start asynchronously (don't block HTTP response)
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    if (_queueManager.SwitchingTerminal || !_queueManager.IsGenerationValid(gen))
+                    Func<bool> shouldContinue = () => !_queueManager.SwitchingTerminal && _queueManager.IsGenerationValid(gen);
+
+                    if (!shouldContinue())
                     {
                         _log($"[预览管理] 外部预览已跳过: {resType}, 原因=终端正在切换或请求已过期, hwnd={hwnd}");
                         return;
                     }
 
-                    var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl);
+                    var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl, shouldContinue: shouldContinue);
                     if (ok)
                     {
-                        if (_queueManager.SwitchingTerminal || !_queueManager.IsGenerationValid(gen))
+                        if (!shouldContinue())
                         {
+                            _previewManager.StopPreview(resType, PreviewSessionType.External);
                             _log($"[预览管理] 外部预览启动后发现终端已切换，等待切换流程接管: {resType}, hwnd={hwnd}");
                             return;
                         }
@@ -346,6 +371,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                     }
                     else
                     {
+                        if (!shouldContinue())
+                        {
+                            _log($"[预览管理] 外部预览启动已过期，跳过失败回调: {resType}, hwnd={hwnd}");
+                            return;
+                        }
+
                         if (!string.IsNullOrEmpty(callbackUrl))
                         {
                             var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" + hwndValue + ",\"error\":true,\"code\":\"preview_failed\"}";

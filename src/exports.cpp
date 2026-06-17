@@ -525,6 +525,7 @@ static int InitSdkBody() {
         ctx.face_capture_timeout_ms = cfg.GetFaceCaptureTimeoutMs();
         ctx.fingerprint_capture_timeout_ms = cfg.GetFingerprintCaptureTimeoutMs();
         ctx.ocr_timeout_ms = cfg.GetOcrTimeoutMs();
+        ctx.authorize_timeout_ms = cfg.GetAuthorizeTimeoutMs();
 
         ctx.save_default_root = cfg.GetSaveDefaultRoot();
         ctx.save_camera_default_path = cfg.GetCameraDefaultPath();
@@ -1429,7 +1430,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
-    int timeoutMs = ctx.ocr_timeout_ms;
+    int timeoutMs = ctx.authorize_timeout_ms;
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
 
