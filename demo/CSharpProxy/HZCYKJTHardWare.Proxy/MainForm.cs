@@ -19,6 +19,7 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Timer _uiLogTimer;
         private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
         private int _pendingUiLogCount;
+        private bool _exitRequested;
 
         public MainForm()
         {
@@ -36,6 +37,26 @@ namespace HZCYKJTHardWare.Proxy
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (!_exitRequested && e.CloseReason == CloseReason.UserClosing)
+            {
+                var action = ShowCloseActionDialog();
+                if (action == CloseAction.MinimizeToTray)
+                {
+                    e.Cancel = true;
+                    AppendLog("关闭窗口：最小化到托盘，后台服务继续运行");
+                    HideToTray();
+                    return;
+                }
+
+                if (action == CloseAction.Cancel)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+
+                _exitRequested = true;
+            }
+
             if (_trayIcon != null)
                 _trayIcon.Visible = false;
 
@@ -59,7 +80,7 @@ namespace HZCYKJTHardWare.Proxy
 
             _trayMenu = new ContextMenuStrip();
             _trayMenu.Items.Add("显示主窗口", null, (s, e) => RestoreFromTray());
-            _trayMenu.Items.Add("退出程序", null, (s, e) => Close());
+            _trayMenu.Items.Add("退出程序", null, (s, e) => RequestApplicationExit());
 
             _trayIcon = new NotifyIcon
             {
@@ -69,6 +90,85 @@ namespace HZCYKJTHardWare.Proxy
                 Visible = true
             };
             _trayIcon.DoubleClick += (s, e) => RestoreFromTray();
+        }
+
+        private enum CloseAction
+        {
+            Cancel,
+            MinimizeToTray,
+            Exit
+        }
+
+        private CloseAction ShowCloseActionDialog()
+        {
+            var selectedAction = CloseAction.Cancel;
+
+            using (var dialog = new Form())
+            using (var message = new Label())
+            using (var buttonsPanel = new FlowLayoutPanel())
+            using (var btnMinimize = new Button())
+            using (var btnExit = new Button())
+            {
+                dialog.Text = "关闭后端服务";
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.StartPosition = FormStartPosition.CenterParent;
+                dialog.ClientSize = new Size(620, 230);
+                dialog.MaximizeBox = false;
+                dialog.MinimizeBox = false;
+                dialog.ShowInTaskbar = false;
+                dialog.Font = Font;
+
+                message.AutoSize = false;
+                message.Location = new Point(24, 34);
+                message.Size = new Size(572, 64);
+                message.Text = "请选择关闭方式：\r\n最小化到托盘会保持后台服务继续运行。";
+                message.TextAlign = ContentAlignment.MiddleCenter;
+
+                buttonsPanel.AutoSize = false;
+                buttonsPanel.FlowDirection = FlowDirection.LeftToRight;
+                buttonsPanel.Location = new Point(92, 142);
+                buttonsPanel.Size = new Size(436, 52);
+                buttonsPanel.WrapContents = false;
+
+                btnMinimize.Text = "最小化到托盘";
+                btnMinimize.AutoSize = true;
+                btnMinimize.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                btnMinimize.MinimumSize = new Size(230, 40);
+                btnMinimize.Margin = new Padding(0, 4, 32, 4);
+                btnMinimize.Click += (s, e) =>
+                {
+                    selectedAction = CloseAction.MinimizeToTray;
+                    dialog.DialogResult = DialogResult.OK;
+                    dialog.Close();
+                };
+
+                btnExit.Text = "退出程序";
+                btnExit.AutoSize = true;
+                btnExit.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                btnExit.MinimumSize = new Size(170, 40);
+                btnExit.Margin = new Padding(0, 4, 0, 4);
+                btnExit.Click += (s, e) =>
+                {
+                    selectedAction = CloseAction.Exit;
+                    dialog.DialogResult = DialogResult.OK;
+                    dialog.Close();
+                };
+
+                dialog.AcceptButton = btnMinimize;
+                buttonsPanel.Controls.Add(btnMinimize);
+                buttonsPanel.Controls.Add(btnExit);
+                dialog.Controls.Add(message);
+                dialog.Controls.Add(buttonsPanel);
+                dialog.ShowDialog(this);
+            }
+
+            return selectedAction;
+        }
+
+        private void RequestApplicationExit()
+        {
+            _exitRequested = true;
+            Close();
         }
 
         private static Icon LoadApplicationIcon()
