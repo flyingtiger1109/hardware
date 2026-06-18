@@ -179,7 +179,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 if (_readerThread != null && _readerThread.IsAlive)
-                    _readerThread.Join(1000);
+                {
+                    var joined = _readerThread.Join(1000);
+                    if (!joined)
+                    {
+                        Logger.Warn($"HTTP MJPEG reader thread stop timeout: {_description}, thread={_readerThread.Name}, stopRequested={_stopRequested}, cancellationRequested={_cts.IsCancellationRequested}, url={_url}");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -316,8 +322,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private void AppendBytes(List<byte> buffer, byte[] bytes, int count)
         {
-            for (int i = 0; i < count; i++)
-                buffer.Add(bytes[i]);
+            if (count <= 0)
+                return;
+
+            buffer.AddRange(new ArraySegment<byte>(bytes, 0, count));
 
             if (buffer.Count <= MaxBufferedBytes)
                 return;
@@ -486,10 +494,16 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private void AbortRequest()
         {
+            HttpWebRequest request = null;
             try
             {
                 lock (_requestLock)
-                    _request?.Abort();
+                {
+                    request = _request;
+                    _request = null;
+                }
+
+                request?.Abort();
             }
             catch { }
         }

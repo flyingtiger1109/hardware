@@ -9,6 +9,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
     public static class Logger
     {
         private const int MaxQueueLength = 10000;
+        private const int FlushBatchSize = 100;
+        private const int FlushIntervalMs = 1000;
         private static readonly object _writerLock = new object();
         private static readonly BlockingCollection<LogEntry> _queue;
         private static readonly string _logDir;
@@ -16,6 +18,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static StreamWriter _writer;
         private static string _currentLogPath;
         private static long _droppedCount;
+        private static int _pendingFlushCount;
+        private static DateTime _lastFlushUtc = DateTime.UtcNow;
         private const string LogNamePrefix = "HZCYKJTHardWareExe_Logs";
 
         static Logger()
@@ -70,7 +74,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 lock (_writerLock)
                 {
-                    _writer?.Flush();
+                    FlushWriterLocked();
                 }
             }
             catch { }
@@ -78,11 +82,23 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static void WriterLoop()
         {
-            foreach (var entry in _queue.GetConsumingEnumerable())
+            while (true)
             {
                 try
                 {
-                    WriteToFile(entry);
+                    LogEntry entry;
+                    if (_queue.TryTake(out entry, FlushIntervalMs))
+                    {
+                        WriteToFile(entry);
+                    }
+                    else
+                    {
+                        FlushIdleWriter();
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    break;
                 }
                 catch
                 {
@@ -111,8 +127,28 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [警告] 日志队列已满，已丢弃 {dropped} 条日志");
 
                 _writer.WriteLine(entry.Line);
-                _writer.Flush();
+                _pendingFlushCount++;
+
+                var elapsedMs = (DateTime.UtcNow - _lastFlushUtc).TotalMilliseconds;
+                if (_pendingFlushCount >= FlushBatchSize || elapsedMs >= FlushIntervalMs)
+                    FlushWriterLocked();
             }
+        }
+
+        private static void FlushIdleWriter()
+        {
+            lock (_writerLock)
+            {
+                if (_pendingFlushCount > 0)
+                    FlushWriterLocked();
+            }
+        }
+
+        private static void FlushWriterLocked()
+        {
+            _writer?.Flush();
+            _pendingFlushCount = 0;
+            _lastFlushUtc = DateTime.UtcNow;
         }
 
         private struct LogEntry

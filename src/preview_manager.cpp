@@ -24,8 +24,6 @@ static void FillCurrentTerminal(HZCYKJTHardWare_EVENT& event) {
     EventDispatcher::Instance().PostEvent(event);
 }
 
-namespace { PreviewManager* g_pPreviewMgr = nullptr; }
-
 namespace {
 class CriticalSectionGuard {
 public:
@@ -41,8 +39,8 @@ private:
 }
 
 PreviewManager& PreviewManager::Instance() {
-    if (!g_pPreviewMgr) g_pPreviewMgr = new PreviewManager();
-    return *g_pPreviewMgr;
+    static PreviewManager instance;
+    return instance;
 }
 
 PreviewManager::PreviewManager() { InitializeCriticalSection(&m_cs); }

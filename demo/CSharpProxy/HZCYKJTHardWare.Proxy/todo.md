@@ -741,3 +741,41 @@ The previous backbuffer-only anti-flicker change removed flicker but caused part
 ### 回退方式
 
 - 回退 `MainForm.Designer.cs` 和 `MainForm.cs` 中本次卡片拆分与缩放归一化参数修改即可恢复“流程与终端”合并卡片。
+## 2026-06-18 方案A稳定性优化记录
+
+### 本次修改内容
+
+1. `MjpegPreviewController.AbortRequest` 改为锁内仅交换并清空 `_request`，锁外调用 `Abort()`，避免在 `_requestLock` 内执行可能阻塞的外部 API。
+2. `MjpegPreviewController.JoinReaderThread` 增加 reader 线程停止超时日志，记录线程名、停止标志、取消状态和 URL，便于高频启停问题定位。
+3. `MjpegPreviewController.AppendBytes` 改为批量追加读取缓冲，减少高频 MJPEG 数据逐字节写入开销。
+4. `Logger` 从每条日志立即 `Flush()` 改为按 100 条或 1 秒空闲批量刷盘，保留 `Logger.Flush()` 主动立即刷盘语义。
+5. `src/preview_manager.cpp` 中 `PreviewManager::Instance()` 改为 C++ 函数内静态单例，消除裸指针懒初始化的线程安全风险。
+
+### 兼容性说明
+
+- DLL 导出函数：未修改。
+- 第三方调用参数：未修改。
+- JSON 请求/响应字段：未修改。
+- 错误码和回调格式：未修改。
+- 新增第三方依赖：无。
+- 部署方式：未修改。
+
+### 风险与注意事项
+
+1. `Logger` 改为批量刷盘后，异常进程退出时最后 1 秒内的少量日志仍依赖 `ProcessExit` 中的 `Flush(1000)`，需要长稳验证。
+2. `MjpegPreviewController.AppendBytes` 使用 `ArraySegment<byte>` 批量追加，需要通过 .NET Framework 4.6 编译验证确认目标框架兼容。
+3. `PreviewManager::Instance()` 改为静态局部对象后，进程卸载时会执行析构；正常 `ReleaseSdk()` 仍会先 `StopAllRenderers()`，需要通过重复 Init/Release 验证析构时序无副作用。
+
+### 验证状态
+
+- [ ] C# Proxy x86 Release 编译验证：待验证。
+- [ ] DLL Win32 Release 编译验证：待验证。
+- [ ] MJPEG 预览高频启停 100 次：待验证。
+- [ ] InitSdk/ReleaseSdk 重复调用：待验证。
+- [ ] 高频日志写入：待验证。
+
+### 回退方式
+
+- 回退本次修改文件：`Preview/MjpegPreviewController.cs`、`Infrastructure/Logger.cs`、`src/preview_manager.cpp`、`todo.md`。
+- 如现场出现 MJPEG 停止异常，可先回退 `MjpegPreviewController.cs`。
+- 如日志丢失排查困难，可先恢复 `Logger.cs` 每条写入后立即 `Flush()` 的旧逻辑。
