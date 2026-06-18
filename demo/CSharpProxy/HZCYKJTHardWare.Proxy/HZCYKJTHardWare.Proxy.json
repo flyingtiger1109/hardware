@@ -16,12 +16,12 @@
     "devices": [
       {
         "index": 1,
-        "name": "终端1",
+        "name": "左通道",
         "host_suffix": 30
       },
       {
         "index": 2,
-        "name": "终端2",
+        "name": "右通道",
         "host_suffix": 31
       }
     ]

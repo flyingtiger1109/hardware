@@ -406,37 +406,45 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         public string SwitchTerminal(int index)
         {
+            return SwitchTerminalAsync(index).GetAwaiter().GetResult();
+        }
+
+        public async Task<string> SwitchTerminalAsync(int index)
+        {
+            var targetName = index == 1 ? AppConfig.Instance.Terminal1Name : AppConfig.Instance.Terminal2Name;
             if (_terminalManager.IsSameTerminal(index))
-                return $"已在目标终端，无需切换";
+                return $"已在{targetName}，无需切换";
 
-            // Run switch with performance timing (matching HandleTerminalSwitch)
-            Task.Run(async () =>
+            var terminalSwitched = false;
+            try
             {
-                try
-                {
-                    var stopWatch = System.Diagnostics.Stopwatch.StartNew();
+                var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 
-                    _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + index);
-                    await _previewManager.StopAllAsync(preserveRestartInfo: true).ConfigureAwait(false);
-                    _log(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
+                _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + index);
+                await _previewManager.StopAllAsync(preserveRestartInfo: true).ConfigureAwait(false);
+                _log(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
 
-                    var phaseTick = stopWatch.ElapsedMilliseconds;
-                    _terminalManager.SwitchTo(index);
-                    _log(string.Format("[性能] 终端管理器切换 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
-                    _log("[终端切换] 当前终端已切换为：" + _terminalManager.CurrentName + " " + _terminalManager.CurrentBaseUrl);
+                var phaseTick = stopWatch.ElapsedMilliseconds;
+                _terminalManager.SwitchTo(index);
+                terminalSwitched = true;
+                _log(string.Format("[性能] 终端管理器切换 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
+                _log("[终端切换] 当前终端已切换为：" + _terminalManager.CurrentName + " " + _terminalManager.CurrentBaseUrl);
 
-                    phaseTick = stopWatch.ElapsedMilliseconds;
-                    _log("[终端切换] 正在" + _terminalManager.CurrentName + "上恢复活动预览");
-                    await _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl);
-                    _log(string.Format("[性能] 终端切换启动 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
-                    _log(string.Format("[性能] 终端切换总耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
-                }
-                catch (Exception ex)
-                {
-                    _log($"终端切换失败: {ex.Message}");
-                }
-            });
-            return $"已切换到终端 {index}";
+                phaseTick = stopWatch.ElapsedMilliseconds;
+                _log("[终端切换] 正在" + _terminalManager.CurrentName + "上恢复活动预览");
+                await _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl);
+                _log(string.Format("[性能] 终端切换启动 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
+                _log(string.Format("[性能] 终端切换总耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
+            }
+            catch (Exception ex)
+            {
+                _log($"终端切换失败: {ex.Message}");
+                if (terminalSwitched)
+                    return $"已切换到{targetName}，但恢复预览失败: {ex.Message}";
+                return $"切换到{targetName}失败: {ex.Message}";
+            }
+
+            return $"已切换到{targetName}";
         }
 
         public (bool ok, string path) CaptureFace(string saveDir)

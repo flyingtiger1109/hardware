@@ -25,6 +25,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public int TerminalPort { get; set; } = 9098;
         public int Terminal1HostSuffix { get; set; } = 30;
         public int Terminal2HostSuffix { get; set; } = 31;
+        public string Terminal1Name { get; set; } = "左通道";
+        public string Terminal2Name { get; set; } = "右通道";
         public string SubnetPrefix { get; set; } = "192.168.20";
 
         // DLL callback server (where to send results back to DLL)
@@ -95,16 +97,25 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                         ?? terminal.Value<string>("preferred_subnet_prefix")
                         ?? config.SubnetPrefix;
 
-                    // C# key: "devices"; also supports legacy "auto_subnet_devices"
-                    var devices = terminal["devices"] ?? terminal["auto_subnet_devices"];
+                    // C# key: "devices"; also supports legacy "auto_subnet_devices" and fixed terminal names.
+                    var devices = terminal["devices"] ?? terminal["auto_subnet_devices"] ?? terminal["fixed_terminals"];
                     if (devices != null)
                     {
                         foreach (var dev in devices)
                         {
                             var index = dev.Value<int?>("index") ?? 0;
-                            var suffix = dev.Value<int?>("host_suffix") ?? 0;
-                            if (index == 1) config.Terminal1HostSuffix = suffix;
-                            if (index == 2) config.Terminal2HostSuffix = suffix;
+                            var name = dev.Value<string>("name");
+                            var suffix = dev.Value<int?>("host_suffix");
+                            if (index == 1)
+                            {
+                                if (suffix.HasValue) config.Terminal1HostSuffix = suffix.Value;
+                                if (!string.IsNullOrWhiteSpace(name)) config.Terminal1Name = name;
+                            }
+                            if (index == 2)
+                            {
+                                if (suffix.HasValue) config.Terminal2HostSuffix = suffix.Value;
+                                if (!string.IsNullOrWhiteSpace(name)) config.Terminal2Name = name;
+                            }
                         }
                     }
                 }

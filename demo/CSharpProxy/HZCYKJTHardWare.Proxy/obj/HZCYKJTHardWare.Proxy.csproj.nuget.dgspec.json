@@ -22,7 +22,7 @@
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
-          "net48"
+          "net46"
         ],
         "sources": {
           "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
@@ -30,9 +30,9 @@
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
-          "net48": {
-            "framework": "net48",
-            "targetAlias": "net48",
+          "net46": {
+            "framework": "net46",
+            "targetAlias": "net46",
             "projectReferences": {}
           }
         },
@@ -49,16 +49,20 @@
         "SdkAnalysisLevel": "10.0.300"
       },
       "frameworks": {
-        "net48": {
-          "framework": "net48",
-          "targetAlias": "net48",
+        "net46": {
+          "framework": "net46",
+          "targetAlias": "net46",
           "dependencies": {
             "Newtonsoft.Json": {
               "target": "Package",
               "version": "[13.0.3, )"
+            },
+            "System.ValueTuple": {
+              "target": "Package",
+              "version": "[4.5.0, )"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.300\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.301\\RuntimeIdentifierGraph.json"
         }
       },
       "runtimes": {

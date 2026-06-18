@@ -23,24 +23,24 @@
     "fixed_terminals": [
       {
         "index": 1,
-        "name": "terminal_a",
+        "name": "左通道",
         "base_url": ""
       },
       {
         "index": 2,
-        "name": "terminal_b",
+        "name": "右通道",
         "base_url": ""
       }
     ],
     "auto_subnet_devices": [
       {
         "index": 1,
-        "name": "terminal_a",
+        "name": "左通道",
         "host_suffix": 30
       },
       {
         "index": 2,
-        "name": "terminal_b",
+        "name": "右通道",
         "host_suffix": 31
       }
     ]

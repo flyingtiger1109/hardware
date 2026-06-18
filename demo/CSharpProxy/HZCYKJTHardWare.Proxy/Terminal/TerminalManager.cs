@@ -5,7 +5,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     public class TerminalManager
     {
         private readonly string[] _terminalUrls = new string[2];
-        private readonly string[] _terminalNames = { "Terminal 1", "Terminal 2" };
+        private readonly string[] _terminalNames = new string[2];
         private int _currentIndex = 1; // 1-based
         private readonly object _lock = new object();
 
@@ -19,6 +19,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var cfg = AppConfig.Instance;
             _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
             _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
+            _terminalNames[0] = cfg.Terminal1Name;
+            _terminalNames[1] = cfg.Terminal2Name;
         }
 
         public int CurrentIndex
@@ -64,6 +66,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var cfg = AppConfig.Instance;
             _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
             _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
+            _terminalNames[0] = cfg.Terminal1Name;
+            _terminalNames[1] = cfg.Terminal2Name;
         }
     }
 }
