@@ -779,3 +779,44 @@ The previous backbuffer-only anti-flicker change removed flicker but caused part
 - 回退本次修改文件：`Preview/MjpegPreviewController.cs`、`Infrastructure/Logger.cs`、`src/preview_manager.cpp`、`todo.md`。
 - 如现场出现 MJPEG 停止异常，可先回退 `MjpegPreviewController.cs`。
 - 如日志丢失排查困难，可先恢复 `Logger.cs` 每条写入后立即 `Flush()` 的旧逻辑。
+
+## 2026-06-18 方案B稳定性优化记录
+
+### 本次修改内容
+
+1. `TerminalClient.PostJsonAsync` 新增可选 `CancellationToken` 参数，保留原有超时行为，未传取消令牌的旧调用不受影响。
+2. `PreviewManager` 预览 URL 请求接入 `shouldContinue` 取消监控：终端切换或 generation 失效时，可提前取消正在等待的预览 URL HTTP 请求。
+3. `PreviewManager.StartPreviewCore` 在首次取 URL、重试取 URL、预热后、正式启动播放器前均补充过期检查，避免切换后继续启动旧预览。
+4. `VlcPreviewController.DisposeAsync` 在停止请求完成或超时后增加 `_thread.Join` 兜底等待，并记录未退出线程状态。
+5. `ProxyServer` 将请求映射时间戳提升为共享字典，并统一登记保存目录、DLL 回调地址和时间戳。
+6. `TerminalCallbackHandler` 在 OCR、NFC、虹膜、人脸、指纹、授权最终回调处理后清理 request 映射。
+7. `DllCommandHandler` 的映射清理由 60 秒改为 10 分钟兜底清理；正常路径以回调完成清理为主，降低误删活跃请求概率。
+
+### 兼容性说明
+
+- DLL 导出函数：未修改。
+- 第三方调用参数：未修改。
+- JSON 请求/响应字段：未修改。
+- 错误码和回调格式：未修改。
+- 新增第三方依赖：无。
+- 部署方式：未修改。
+
+### 风险与注意事项
+
+1. `PreviewManager` 使用 100ms 轮询监控 `shouldContinue`，只在请求预览 URL 期间存在，理论开销很低，仍需高频切换验证。
+2. 回调完成后立即清理 request 映射，重复回调仍依赖 `_processedCallbacks` 去重；如果终端存在非常规“同一 request_id 多次最终结果”行为，需要现场确认。
+3. `VlcPreviewController` 增加 join 兜底后，Dispose 最多额外等待 100-500ms，换取更清晰的线程退出语义。
+
+### 验证状态
+
+- [x] C# Proxy x86 Release 编译验证：通过，0 warning / 0 error。
+- [ ] 终端快速切换期间预览 URL 请求取消验证：待验证。
+- [ ] VLC 预览高频启停线程数验证：待验证。
+- [ ] OCR/NFC/虹膜回调完成后映射清理验证：待验证。
+- [ ] 长耗时回调超过 60 秒不丢保存目录验证：待验证。
+
+### 回退方式
+
+- 回退本次修改文件：`Terminal/TerminalClient.cs`、`Preview/PreviewManager.cs`、`Preview/VlcPreviewController.cs`、`Server/ProxyServer.cs`、`Server/DllCommandHandler.cs`、`Server/TerminalCallbackHandler.cs`、`todo.md`。
+- 如出现预览 URL 请求异常，可先回退 `TerminalClient.cs` 和 `PreviewManager.cs` 中取消令牌相关修改。
+- 如出现回调保存目录异常，可先回退 `ProxyServer.cs`、`DllCommandHandler.cs`、`TerminalCallbackHandler.cs` 中映射清理相关修改。

@@ -14,6 +14,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly DllCallbackSender _dllCallback;
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
         private readonly ConcurrentDictionary<string, string> _requestCallbacks;
+        private readonly ConcurrentDictionary<string, long> _requestTimestamps;
         private readonly ConcurrentDictionary<string, long> _processedCallbacks;  // Dedup: {requestId}_{resourceType}
         private readonly Action<string> _log;
 
@@ -27,12 +28,14 @@ namespace HZCYKJTHardWare.Proxy.Server
             DllCallbackSender dllCallback,
             ConcurrentDictionary<string, string> requestSaveDirs,
             ConcurrentDictionary<string, string> requestCallbacks,
+            ConcurrentDictionary<string, long> requestTimestamps,
             Action<string> log)
         {
             _terminalClient = terminalClient;
             _dllCallback = dllCallback;
             _requestSaveDirs = requestSaveDirs;
             _requestCallbacks = requestCallbacks;
+            _requestTimestamps = requestTimestamps;
             _processedCallbacks = new ConcurrentDictionary<string, long>();
             _log = log;
         }
@@ -184,6 +187,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             _ = _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath);
+            CleanupRequestMapping(result.RequestId);
             CleanupProcessedIfNeeded();
         }
 
@@ -203,6 +207,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
             }
             _ = _dllCallback.SendNfcResult(result.RequestId, result.CardText);
+            CleanupRequestMapping(result.RequestId);
             CleanupProcessedIfNeeded();
         }
 
@@ -230,6 +235,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
             }
             _ = _dllCallback.SendIrisResult(result.RequestId, savePath);
+            CleanupRequestMapping(result.RequestId);
             CleanupProcessedIfNeeded();
         }
 
@@ -246,6 +252,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
                     saveDir, result.RequestId, "face");
             }
+            CleanupRequestMapping(result.RequestId);
         }
 
         private void HandleFingerprintImage(string bodyUtf8)
@@ -261,6 +268,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
                     saveDir, result.RequestId, "fingerprint");
             }
+            CleanupRequestMapping(result.RequestId);
         }
 
         /// <summary>
@@ -317,6 +325,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log($"[授权回调] 转发至DLL: request_id={result.RequestId}, auth_result={authResult}");
             _ = _dllCallback.PostCallbackRaw("/authorize", payload);
+            CleanupRequestMapping(result.RequestId);
             CleanupProcessedIfNeeded();
         }
 
@@ -462,6 +471,16 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             _requestSaveDirs.TryGetValue(requestId, out var dir);
             return PathHelper.SafeResolveSaveDir(dir);
+        }
+
+        private void CleanupRequestMapping(string requestId)
+        {
+            if (string.IsNullOrEmpty(requestId))
+                return;
+
+            _requestSaveDirs.TryRemove(requestId, out _);
+            _requestCallbacks.TryRemove(requestId, out _);
+            _requestTimestamps.TryRemove(requestId, out _);
         }
 
         /// <summary>

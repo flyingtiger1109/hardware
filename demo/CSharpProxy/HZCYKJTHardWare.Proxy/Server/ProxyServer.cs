@@ -33,6 +33,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<string, string> _requestCallbacks = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, long> _requestTimestamps = new ConcurrentDictionary<string, long>();
 
         private readonly Action<string> _log;
         private string _lanIp;
@@ -50,6 +51,18 @@ namespace HZCYKJTHardWare.Proxy.Server
         public string GetTerminalCallbackBaseUrl()
         {
             return AppConfig.Instance.GetTerminalCallbackBaseUrl(_lanIp);
+        }
+
+        private void RememberRequestMapping(string requestId, string saveDir, string callbackUrl = null)
+        {
+            if (string.IsNullOrEmpty(requestId))
+                return;
+
+            if (!string.IsNullOrEmpty(saveDir))
+                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+            if (!string.IsNullOrEmpty(callbackUrl))
+                _requestCallbacks[requestId] = callbackUrl;
+            _requestTimestamps[requestId] = DateTime.UtcNow.Ticks;
         }
 
         public ProxyServer(Action<string> log)
@@ -73,12 +86,12 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _commandHandler = new DllCommandHandler(
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
-                _requestSaveDirs, _requestCallbacks, _log,
+                _requestSaveDirs, _requestCallbacks, _requestTimestamps, _log,
                 GetTerminalCallbackBaseUrl, _queueManager);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _dllCallback,
-                _requestSaveDirs, _requestCallbacks, _log);
+                _requestSaveDirs, _requestCallbacks, _requestTimestamps, _log);
         }
 
         public void Start()
@@ -522,7 +535,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var callbackBase = GetTerminalCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
 
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+            RememberRequestMapping(requestId, saveDir);
 
             _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
                 .GetAwaiter().GetResult();
@@ -536,7 +549,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var callbackBase = GetTerminalCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
 
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+            RememberRequestMapping(requestId, saveDir);
 
             _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
                 .GetAwaiter().GetResult();
@@ -550,7 +563,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var callbackBase = GetTerminalCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
 
-            _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
+            RememberRequestMapping(requestId, saveDir);
 
             _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/iris/request", body, 5000)
                 .GetAwaiter().GetResult();
@@ -692,8 +705,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var callbackBase = GetTerminalCallbackBaseUrl();
                 var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
                 var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
-                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-                _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
+                RememberRequestMapping(requestId, saveDir, dllCallbackUrl);  // DLL callback, not terminal callback
                 Logger.Info($"[OCR] 存储回调映射: {requestId} → {dllCallbackUrl}");
                 var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
                     .GetAwaiter().GetResult();
@@ -724,8 +736,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var callbackBase = GetTerminalCallbackBaseUrl();
                 var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
                 var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
-                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-                _requestCallbacks[requestId] = dllCallbackUrl;  // DLL callback, not terminal callback
+                RememberRequestMapping(requestId, saveDir, dllCallbackUrl);  // DLL callback, not terminal callback
                 Logger.Info($"[NFC] 存储回调映射: {requestId} → {dllCallbackUrl}");
                 var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
                     .GetAwaiter().GetResult();
