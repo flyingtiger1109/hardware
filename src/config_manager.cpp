@@ -7,11 +7,29 @@
 
 namespace HZCYKJTHardWare {
 
+namespace {
+
+std::string ResolveConfigPath(const std::string& dllDir) {
+    DWORD required = GetEnvironmentVariableW(L"HZCYKJTHARDWARE_CONFIG", nullptr, 0);
+    if (required > 1) {
+        std::wstring buffer(required, L'\0');
+        DWORD written = GetEnvironmentVariableW(L"HZCYKJTHARDWARE_CONFIG", &buffer[0], required);
+        if (written > 0 && written < required) {
+            buffer.resize(written);
+            return PathHelper::WideToUtf8(buffer);
+        }
+    }
+
+    return PathHelper::Join(dllDir, "HZCYKJTHardWare.json");
+}
+
+} // namespace
+
 int ConfigManager::Load(const std::string& dllDir) {
     // 始终先填充默认值，后续由 JSON 文件中存在的字段覆盖
     ApplyDefaults();
 
-    std::string configPath = PathHelper::Join(dllDir, "HZCYKJTHardWare.json");
+    std::string configPath = ResolveConfigPath(dllDir);
 
     if (!PathHelper::FileExists(configPath)) {
         m_hasConfigFile = false;

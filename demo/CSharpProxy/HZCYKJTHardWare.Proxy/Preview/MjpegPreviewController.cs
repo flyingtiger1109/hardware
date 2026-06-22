@@ -81,7 +81,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var completed = await Task.WhenAny(controller._startTcs.Task, Task.Delay(timeoutMs)).ConfigureAwait(false);
             if (completed != controller._startTcs.Task)
             {
-                Logger.Warn($"HTTP MJPEG preview start timeout, fallback will be tried: {description}, timeout={timeoutMs}ms, url={url}");
+                Logger.Warn($"HTTP MJPEG预览启动超时，将尝试VLC回退：{description}，timeout={timeoutMs}ms，url={url}");
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
                 return null;
             }
@@ -93,7 +93,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG preview start exception, fallback will be tried: {description}, error={ex.Message}");
+                Logger.Warn($"HTTP MJPEG预览启动异常，将尝试VLC回退：{description}，错误={ex.Message}");
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
                 return null;
             }
@@ -120,7 +120,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             var joined = await Task.Run(() => _thread.Join(timeoutMs)).ConfigureAwait(false);
             if (!joined)
-                Logger.Warn($"HTTP MJPEG preview stop timeout: {_description}, timeout={timeoutMs}ms");
+                Logger.Warn($"HTTP MJPEG预览停止超时：{_description}，timeout={timeoutMs}ms");
         }
 
         public void Dispose()
@@ -151,7 +151,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"HTTP MJPEG preview thread exception: {_description}, error={ex.Message}", ex);
+                Logger.Error($"HTTP MJPEG预览线程异常：{_description}，错误={ex.Message}", ex);
                 _startTcs.TrySetResult(false);
             }
             finally
@@ -183,13 +183,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var joined = _readerThread.Join(1000);
                     if (!joined)
                     {
-                        Logger.Warn($"HTTP MJPEG reader thread stop timeout: {_description}, thread={_readerThread.Name}, stopRequested={_stopRequested}, cancellationRequested={_cts.IsCancellationRequested}, url={_url}");
+                        Logger.Warn($"HTTP MJPEG读取线程停止超时：{_description}，线程={_readerThread.Name}，已请求停止={_stopRequested}，已请求取消={_cts.IsCancellationRequested}，url={_url}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG reader thread join failed: {_description}, error={ex.Message}");
+                Logger.Warn($"等待HTTP MJPEG读取线程退出失败：{_description}，错误={ex.Message}");
             }
         }
 
@@ -197,7 +197,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             if (_parentHwnd == IntPtr.Zero || !IsWindow(_parentHwnd))
             {
-                Logger.Error($"HTTP MJPEG preview invalid parent HWND: {_description}, hwnd={_parentHwnd}");
+                Logger.Error($"HTTP MJPEG预览父窗口句柄无效：{_description}，hwnd={_parentHwnd}");
                 return false;
             }
 
@@ -210,12 +210,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 0, 0, 1, 1, _parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
             if (_videoHwnd == IntPtr.Zero)
             {
-                Logger.Error($"HTTP MJPEG preview failed to create child window: {_description}");
+                Logger.Error($"HTTP MJPEG预览创建子窗口失败：{_description}");
                 return false;
             }
 
             ApplyFillLayout();
-            Logger.Info($"HTTP MJPEG preview window created: {_description}, videoHwnd={_videoHwnd}, parent={_parentHwnd}, source={_sourceWidth}x{_sourceHeight}, swap={_swapDimensions}");
+            Logger.Info($"HTTP MJPEG预览窗口已创建：{_description}，videoHwnd={_videoHwnd}，parent={_parentHwnd}，source={_sourceWidth}x{_sourceHeight}，交换宽高={_swapDimensions}");
             return true;
         }
 
@@ -231,7 +231,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG preview destroy window failed: {_description}, error={ex.Message}");
+                Logger.Warn($"HTTP MJPEG预览销毁窗口失败：{_description}，错误={ex.Message}");
             }
             finally
             {
@@ -252,7 +252,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 using (var response = (HttpWebResponse)request.GetResponse())
                 using (var stream = response.GetResponseStream())
                 {
-                    Logger.Info($"HTTP MJPEG stream opened: {_description}, contentType={response.ContentType}, url={_url}");
+                    Logger.Info($"HTTP MJPEG视频流已打开：{_description}，contentType={response.ContentType}，url={_url}");
                     if (stream == null)
                     {
                         _startTcs.TrySetResult(false);
@@ -273,7 +273,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (!_stopRequested)
                 {
-                    Logger.Warn($"HTTP MJPEG stream ended: {_description}, url={_url}");
+                    Logger.Warn($"HTTP MJPEG视频流已结束：{_description}，url={_url}");
                     _startTcs.TrySetResult(false);
                 }
             }
@@ -281,7 +281,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (!_stopRequested)
                 {
-                    Logger.Warn($"HTTP MJPEG stream error: {_description}, status={ex.Status}, error={ex.Message}");
+                    Logger.Warn($"HTTP MJPEG视频流错误：{_description}，status={ex.Status}，错误={ex.Message}");
                     _startTcs.TrySetResult(false);
                 }
             }
@@ -289,7 +289,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (!_stopRequested)
                 {
-                    Logger.Warn($"HTTP MJPEG reader exception: {_description}, error={ex.Message}");
+                    Logger.Warn($"HTTP MJPEG读取线程异常：{_description}，错误={ex.Message}");
                     _startTcs.TrySetResult(false);
                 }
             }
@@ -415,7 +415,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG render frame failed: {_description}, error={ex.Message}");
+                Logger.Warn($"HTTP MJPEG渲染帧失败：{_description}，错误={ex.Message}");
                 _renderedFrameSeq = seq;
             }
         }
@@ -481,7 +481,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG apply fill layout failed: {_description}, error={ex.Message}");
+                Logger.Warn($"HTTP MJPEG应用填充布局失败：{_description}，错误={ex.Message}");
             }
         }
 

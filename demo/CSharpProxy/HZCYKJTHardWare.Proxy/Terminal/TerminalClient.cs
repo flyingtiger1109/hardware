@@ -73,7 +73,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 sw.Stop();
                 if (cancellationToken.IsCancellationRequested)
                 {
-                    Logger.Warn($"[Terminal Request] POST {path} cancelled, elapsed={sw.ElapsedMilliseconds}ms");
+                    Logger.Warn($"[终端请求] POST {path} 已取消，耗时={sw.ElapsedMilliseconds}ms");
                     return (false, "{\"error\":true,\"code\":\"cancelled\"}");
                 }
 

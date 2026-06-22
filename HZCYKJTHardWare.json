@@ -1,7 +1,7 @@
 {
   "delphi_server": {
     "host": "127.0.0.1",
-    "port": 18080,
+    "port": 8089,
     "auto_start": true,
     "executable": "HZCYKJTHardWare.Proxy.exe",
     "start_wait_ms": 10000,
@@ -10,7 +10,7 @@
   "terminal_callback_server": {
     "listen_host": "0.0.0.0",
     "public_host": "",
-    "port": 18081,
+    "port": 8089,
     "path": "/terminal-callback"
   },
   "terminal": {

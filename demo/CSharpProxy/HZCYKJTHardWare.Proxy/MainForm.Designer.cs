@@ -50,7 +50,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelLog = new RoundedPanel();
             this.panelLogHeader = new System.Windows.Forms.Panel();
             this.lblLogTitle = new System.Windows.Forms.Label();
-            this.memoLog = new System.Windows.Forms.TextBox();
+            this.memoLog = new System.Windows.Forms.ListView();
 
             // Buttons
             this.btnStartServer = new System.Windows.Forms.Button();
@@ -323,17 +323,26 @@ namespace HZCYKJTHardWare.Proxy
 
             this.memoLog.BackColor = System.Drawing.Color.FromArgb(17, 24, 39);
             this.memoLog.BorderStyle = System.Windows.Forms.BorderStyle.None;
+            this.memoLog.CacheVirtualItems += new System.Windows.Forms.CacheVirtualItemsEventHandler(this.memoLog_CacheVirtualItems);
+            this.memoLog.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
+            new System.Windows.Forms.ColumnHeader()});
             this.memoLog.Dock = System.Windows.Forms.DockStyle.Fill;
             this.memoLog.ForeColor = System.Drawing.Color.FromArgb(229, 231, 235);
+            this.memoLog.FullRowSelect = true;
+            this.memoLog.HeaderStyle = System.Windows.Forms.ColumnHeaderStyle.None;
+            this.memoLog.HideSelection = false;
             this.memoLog.Location = new System.Drawing.Point(16, 38);
             this.memoLog.Margin = new System.Windows.Forms.Padding(0);
-            this.memoLog.Multiline = true;
+            this.memoLog.MultiSelect = true;
             this.memoLog.Name = "memoLog";
-            this.memoLog.ReadOnly = true;
-            this.memoLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
             this.memoLog.Font = new System.Drawing.Font("Consolas", 9F);
+            this.memoLog.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(this.memoLog_RetrieveVirtualItem);
+            this.memoLog.Resize += new System.EventHandler(this.memoLog_Resize);
+            this.memoLog.ShowGroups = false;
             this.memoLog.Size = new System.Drawing.Size(1068, 249);
-            this.memoLog.WordWrap = true;
+            this.memoLog.UseCompatibleStateImageBehavior = false;
+            this.memoLog.View = System.Windows.Forms.View.Details;
+            this.memoLog.VirtualMode = true;
 
             // === MainForm ===
             this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
@@ -620,7 +629,7 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Panel panelPreviewHeader;
         private System.Windows.Forms.Label lblPreviewTitle;
         private System.Windows.Forms.TableLayoutPanel tablePreview;
-        private System.Windows.Forms.TextBox memoLog;
+        private System.Windows.Forms.ListView memoLog;
         private System.Windows.Forms.Panel panelLog;
         private System.Windows.Forms.Panel panelLogHeader;
         private System.Windows.Forms.Label lblLogTitle;

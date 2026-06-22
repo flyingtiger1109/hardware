@@ -43,6 +43,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public bool CreateDateFolder { get; set; } = true;
         public bool CreateRequestFolder { get; set; } = true;
 
+        // Log settings. "info" is the production default; "debug" enables performance diagnostics.
+        public string LogLevel { get; set; } = "info";
+
         // Paths
         public string ExeDir { get; set; }
         public string VlcDir { get; set; }
@@ -51,16 +54,17 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         /// Unified config file shared by the DLL and C# proxy.
         /// </summary>
         private const string ConfigFile = "HZCYKJTHardWare.json";
+        private const string ConfigPathEnvironmentVariable = "HZCYKJTHARDWARE_CONFIG";
 
         private static AppConfig Load()
         {
             var config = new AppConfig();
             config.ExeDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            var jsonPath = Path.Combine(config.ExeDir, ConfigFile);
+            var jsonPath = ResolveConfigPath(config.ExeDir);
             if (!File.Exists(jsonPath))
             {
-                Logger.Warn($"Config file not found: {ConfigFile}, using defaults");
+                Logger.Warn($"未找到配置文件：{ConfigFile}，使用默认配置");
                 return config;
             }
 
@@ -149,14 +153,39 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.CreateRequestFolder = save.Value<bool?>("create_request_folder") ?? config.CreateRequestFolder;
                 }
 
-                Logger.Info($"Config loaded from {jsonPath}");
+                var log = obj["log"];
+                if (log != null)
+                    config.LogLevel = log.Value<string>("level") ?? config.LogLevel;
+
+                Logger.SetDebugEnabled(string.Equals(config.LogLevel, "debug", StringComparison.OrdinalIgnoreCase));
+
+                Logger.Info($"配置加载完成：{jsonPath}");
             }
             catch (Exception ex)
             {
-                Logger.Error($"Failed to load config: {ex.Message}");
+                Logger.Error($"加载配置失败：{ex.Message}");
             }
 
             return config;
+        }
+
+        private static string ResolveConfigPath(string exeDir)
+        {
+            var configuredPath = Environment.GetEnvironmentVariable(ConfigPathEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(configuredPath))
+            {
+                try
+                {
+                    return Path.GetFullPath(configuredPath);
+                }
+                catch
+                {
+                    // The missing-file warning below includes the configured path.
+                    return configuredPath;
+                }
+            }
+
+            return Path.Combine(exeDir, ConfigFile);
         }
 
         public string GetDllServerUrl()

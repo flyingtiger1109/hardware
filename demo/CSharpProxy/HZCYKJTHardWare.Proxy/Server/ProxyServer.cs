@@ -435,19 +435,19 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + index);
                 await _previewManager.StopAllAsync(preserveRestartInfo: true).ConfigureAwait(false);
-                _log(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
+                Logger.Debug(string.Format("[性能] 终端切换停止 耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
 
                 var phaseTick = stopWatch.ElapsedMilliseconds;
                 _terminalManager.SwitchTo(index);
                 terminalSwitched = true;
-                _log(string.Format("[性能] 终端管理器切换 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
+                Logger.Debug(string.Format("[性能] 终端管理器切换 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
                 _log("[终端切换] 当前终端已切换为：" + _terminalManager.CurrentName + " " + _terminalManager.CurrentBaseUrl);
 
                 phaseTick = stopWatch.ElapsedMilliseconds;
                 _log("[终端切换] 正在" + _terminalManager.CurrentName + "上恢复活动预览");
                 await _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl);
-                _log(string.Format("[性能] 终端切换启动 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
-                _log(string.Format("[性能] 终端切换总耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
+                Logger.Debug(string.Format("[性能] 终端切换启动 耗时={0}毫秒", stopWatch.ElapsedMilliseconds - phaseTick));
+                Logger.Debug(string.Format("[性能] 终端切换总耗时={0}毫秒", stopWatch.ElapsedMilliseconds));
             }
             catch (Exception ex)
             {
@@ -466,7 +466,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body, 4500)
                 .GetAwaiter().GetResult();
-            if (!ok) return (false, "");
+            if (!ok)
+            {
+                _log("[人脸抓拍] 抓拍失败：终端请求失败");
+                return (false, "");
+            }
 
             // Delphi logic: if saveDir has file extension, save directly to that path
             string savePath = "";
@@ -490,8 +494,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                     }
                 }
             }
+            if (string.IsNullOrEmpty(savePath))
+            {
+                _log("[人脸抓拍] 抓拍失败：未获取到有效图片");
+                return (false, "");
+            }
+
             _log($"[人脸抓拍] 图片保存成功：{savePath}");
-            return (!string.IsNullOrEmpty(savePath), savePath);
+            return (true, savePath);
         }
 
         public (bool ok, string path) CaptureFingerprint(string saveDir)
@@ -500,7 +510,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body, 4500)
                 .GetAwaiter().GetResult();
-            if (!ok) return (false, "");
+            if (!ok)
+            {
+                _log("[指纹抓拍] 抓拍失败：终端请求失败");
+                return (false, "");
+            }
 
             // Delphi logic: if saveDir has file extension, save directly to that path
             string savePath = "";
@@ -524,8 +538,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                     }
                 }
             }
+            if (string.IsNullOrEmpty(savePath))
+            {
+                _log("[指纹抓拍] 抓拍失败：未获取到有效图片");
+                return (false, "");
+            }
+
             _log($"[指纹抓拍] 图片保存成功：{savePath}");
-            return (!string.IsNullOrEmpty(savePath), savePath);
+            return (true, savePath);
         }
 
         public string RequestOCR(string saveDir)
@@ -633,18 +653,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 _previewManager.StopAllAsync(preserveRestartInfo: true).GetAwaiter().GetResult();
-                _log($"[性能] 终端切换停止 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Debug($"[性能] 终端切换停止 耗时={sw.ElapsedMilliseconds}ms");
 
                 var phase = sw.ElapsedMilliseconds;
                 _terminalManager.SwitchTo(req.TerminalIndex);
-                _log($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
+                Logger.Debug($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
                 _log("[终端切换] 当前终端=" + _terminalManager.CurrentName);
 
                 phase = sw.ElapsedMilliseconds;
                 _previewManager.RestartPreviewsOnTerminalSwitch(_terminalManager.CurrentBaseUrl,
                     () => _queueManager.IsGenerationValid(req.Generation)).GetAwaiter().GetResult();
-                _log($"[性能] 终端切换启动 耗时={sw.ElapsedMilliseconds - phase}ms");
-                _log($"[性能] 终端切换总耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Debug($"[性能] 终端切换启动 耗时={sw.ElapsedMilliseconds - phase}ms");
+                Logger.Debug($"[性能] 终端切换总耗时={sw.ElapsedMilliseconds}ms");
             }
             catch (Exception ex)
             {
@@ -706,12 +726,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
                 var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
                 RememberRequestMapping(requestId, saveDir, dllCallbackUrl);  // DLL callback, not terminal callback
-                Logger.Info($"[OCR] 存储回调映射: {requestId} → {dllCallbackUrl}");
+                Logger.Debug($"[OCR] 存储回调映射: {requestId} → {dllCallbackUrl}");
                 var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
                     .GetAwaiter().GetResult();
                 if (tt.ok)
                 {
-                    _log($"OCR 已转发至终端: request_id={requestId}");
+                    Logger.Debug($"[OCR] 已转发至终端: request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
                 }
                 else
@@ -737,12 +757,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var dllCallbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
                 var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
                 RememberRequestMapping(requestId, saveDir, dllCallbackUrl);  // DLL callback, not terminal callback
-                Logger.Info($"[NFC] 存储回调映射: {requestId} → {dllCallbackUrl}");
+                Logger.Debug($"[NFC] 存储回调映射: {requestId} → {dllCallbackUrl}");
                 var tt = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
                     .GetAwaiter().GetResult();
                 if (tt.ok)
                 {
-                    _log($"NFC 已转发至终端: request_id={requestId}");
+                    Logger.Debug($"[NFC] 已转发至终端: request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" + requestId + "\"}");
                 }
                 else

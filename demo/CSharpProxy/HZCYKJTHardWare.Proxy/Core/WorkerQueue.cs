@@ -224,7 +224,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             {
                 _worker.Join(3000);
                 if (_worker.IsAlive)
-                    Logger.Warn($"[队列] {_name} worker 线程未能及时退出");
+                    Logger.Warn($"[队列] {_name} 工作线程未能及时退出");
             }
             _worker = null;
             _buffer = null;

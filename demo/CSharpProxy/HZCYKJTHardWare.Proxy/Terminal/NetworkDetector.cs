@@ -16,17 +16,17 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     if (ip.AddressFamily == AddressFamily.InterNetwork &&
                         ip.ToString().StartsWith(subnetPrefix))
                     {
-                        Logger.Info($"Detected LAN IP: {ip} (subnet: {subnetPrefix})");
+                        Logger.Info($"已检测到局域网IP：{ip}（网段：{subnetPrefix}）");
                         return ip.ToString();
                     }
                 }
             }
             catch (SocketException ex)
             {
-                Logger.Error("Failed to detect LAN IP", ex);
+                Logger.Error("检测局域网IP失败", ex);
             }
 
-            Logger.Warn($"No IP found matching subnet prefix: {subnetPrefix}");
+            Logger.Warn($"未找到匹配网段的IP：{subnetPrefix}");
             return "";
         }
     }

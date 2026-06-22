@@ -33,7 +33,8 @@ namespace HZCYKJTHardWare.Proxy.Storage
             catch { /* Disk check must not throw */ }
         }
 
-        public static string SaveBase64Image(string base64Str, string mimeType, string saveDir, string requestId, string prefix)
+        public static string SaveBase64Image(string base64Str, string mimeType, string saveDir, string requestId, string prefix,
+            bool logSuccess = true)
         {
             if (string.IsNullOrEmpty(base64Str)) return "";
 
@@ -44,7 +45,10 @@ namespace HZCYKJTHardWare.Proxy.Storage
                 var filePath = PathHelper.ResolveExactSaveFile(saveDir, requestId, prefix, ext);
                 CheckDiskSpace(filePath);
                 File.WriteAllBytes(filePath, data);
-                Logger.Info($"已保存图片: {filePath} ({data.Length} 字节)");
+                if (logSuccess)
+                    Logger.Info($"已保存图片: {filePath} ({data.Length} 字节)");
+                else
+                    Logger.Debug($"已保存图片: {filePath} ({data.Length} 字节)");
                 return filePath;
             }
             catch (Exception ex)
@@ -54,7 +58,7 @@ namespace HZCYKJTHardWare.Proxy.Storage
             }
         }
 
-        public static string SaveBase64ImageToFile(string base64Str, string filePath)
+        public static string SaveBase64ImageToFile(string base64Str, string filePath, bool logSuccess = true)
         {
             if (string.IsNullOrEmpty(base64Str)) return "";
 
@@ -66,7 +70,10 @@ namespace HZCYKJTHardWare.Proxy.Storage
                     Directory.CreateDirectory(dir);
                 CheckDiskSpace(filePath);
                 File.WriteAllBytes(filePath, data);
-                Logger.Info($"已保存图片: {filePath} ({data.Length} 字节)");
+                if (logSuccess)
+                    Logger.Info($"已保存图片: {filePath} ({data.Length} 字节)");
+                else
+                    Logger.Debug($"已保存图片: {filePath} ({data.Length} 字节)");
                 return filePath;
             }
             catch (Exception ex)
@@ -76,7 +83,8 @@ namespace HZCYKJTHardWare.Proxy.Storage
             }
         }
 
-        public static string SaveJsonFile(string jsonStr, string saveDir, string requestId, string fileName)
+        public static string SaveJsonFile(string jsonStr, string saveDir, string requestId, string fileName,
+            bool logSuccess = true)
         {
             if (string.IsNullOrEmpty(jsonStr)) return "";
 
@@ -86,7 +94,10 @@ namespace HZCYKJTHardWare.Proxy.Storage
                 var filePath = Path.Combine(dir, fileName);
                 CheckDiskSpace(filePath);
                 File.WriteAllText(filePath, jsonStr, System.Text.Encoding.UTF8);
-                Logger.Info($"已保存JSON: {filePath}");
+                if (logSuccess)
+                    Logger.Info($"已保存JSON: {filePath}");
+                else
+                    Logger.Debug($"已保存JSON: {filePath}");
                 return filePath;
             }
             catch (Exception ex)

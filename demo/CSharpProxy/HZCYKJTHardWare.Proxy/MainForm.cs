@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
 using System.Threading;
@@ -16,9 +16,10 @@ namespace HZCYKJTHardWare.Proxy
         private NotifyIcon _trayIcon;
         private ContextMenuStrip _trayMenu;
         private Icon _appIcon;
-        private System.Windows.Forms.Timer _uiLogTimer;
-        private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
-        private int _pendingUiLogCount;
+        private ContextMenuStrip _logContextMenu;
+        private const int MaxUiLogEntries = 10000;
+        private SegmentedUiLogHistoryStore _uiLogStore;
+        private int _uiLogRefreshPosted;
         private bool _exitRequested;
         private float _uiScaleFactor = 1.0f;
         private bool _applyingUiScale;
@@ -30,14 +31,14 @@ namespace HZCYKJTHardWare.Proxy
         public MainForm()
         {
             InitializeComponent();
+            InitializeUiLogStore();
             InitializeStatusSummary();
             InitializeTrayIcon();
-            InitializeUiLogTimer();
         }
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            Logger.Info("应用程序启动中...");
+            AppendLog("应用程序启动中...");
             // Auto-start server on launch
             BeginInvoke(new Action(() => btnStartServer_Click(null, null)));
         }
@@ -67,8 +68,6 @@ namespace HZCYKJTHardWare.Proxy
             if (_trayIcon != null)
                 _trayIcon.Visible = false;
 
-            _uiLogTimer?.Stop();
-            FlushPendingUiLogs();
             StopServer();
             Logger.Flush(1000);
         }
@@ -226,11 +225,174 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
-        private void InitializeUiLogTimer()
+        private void InitializeUiLogStore()
         {
-            _uiLogTimer = new System.Windows.Forms.Timer { Interval = 250 };
-            _uiLogTimer.Tick += (s, e) => FlushPendingUiLogs();
-            _uiLogTimer.Start();
+            _uiLogStore = new SegmentedUiLogHistoryStore(MaxUiLogEntries);
+            _uiLogStore.Changed += UiLogStore_Changed;
+            Logger.LogWritten += Logger_LogWritten;
+            _uiLogStore.Start(DateTime.Now.ToString("yyyyMMdd"));
+            _logContextMenu = new ContextMenuStrip();
+            _logContextMenu.Items.Add("复制选中日志", null, (sender, e) => CopySelectedLogLines());
+            memoLog.ContextMenuStrip = _logContextMenu;
+            memoLog.KeyDown += memoLog_KeyDown;
+            ResizeLogColumn();
+        }
+
+        private void Logger_LogWritten(object sender, LogWrittenEventArgs e)
+        {
+            var store = _uiLogStore;
+            if (store == null || IsDisposed || !e.IsUiVisible || string.IsNullOrEmpty(e.Line))
+                return;
+
+            store.AddPersistedLine(e.Date, e.Line);
+        }
+
+        private void UiLogStore_Changed(object sender, EventArgs e)
+        {
+            if (Interlocked.Exchange(ref _uiLogRefreshPosted, 1) != 0)
+                return;
+
+            if (IsDisposed || Disposing || !IsHandleCreated)
+            {
+                Interlocked.Exchange(ref _uiLogRefreshPosted, 0);
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(new Action(RefreshLogView));
+            }
+            catch (ObjectDisposedException)
+            {
+                Interlocked.Exchange(ref _uiLogRefreshPosted, 0);
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Exchange(ref _uiLogRefreshPosted, 0);
+            }
+        }
+
+        private void RefreshLogView()
+        {
+            Interlocked.Exchange(ref _uiLogRefreshPosted, 0);
+            if (IsDisposed || Disposing || _uiLogStore == null)
+                return;
+
+            var followTail = IsLogViewAtBottom();
+            memoLog.VirtualListSize = _uiLogStore.Count;
+            memoLog.Invalidate();
+            if (followTail && memoLog.VirtualListSize > 0)
+                memoLog.EnsureVisible(memoLog.VirtualListSize - 1);
+            RedrawVisibleLogItems();
+        }
+
+        private void RedrawVisibleLogItems()
+        {
+            try
+            {
+                if (memoLog.VirtualListSize == 0 || memoLog.TopItem == null)
+                    return;
+
+                var first = memoLog.TopItem.Index;
+                var visibleRows = Math.Max(1, memoLog.ClientSize.Height / Math.Max(1, memoLog.Font.Height + 4));
+                var last = Math.Min(memoLog.VirtualListSize - 1, first + visibleRows + 1);
+                memoLog.RedrawItems(first, last, true);
+            }
+            catch
+            {
+                // Redraw failures must not affect service processing or logging.
+            }
+        }
+
+        private bool IsLogViewAtBottom()
+        {
+            try
+            {
+                if (memoLog.VirtualListSize == 0 || memoLog.TopItem == null)
+                    return true;
+
+                var lastItemBounds = memoLog.GetItemRect(
+                    memoLog.VirtualListSize - 1,
+                    ItemBoundsPortion.Entire);
+                return lastItemBounds.Top >= 0 && lastItemBounds.Bottom <= memoLog.ClientSize.Height;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private void memoLog_RetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
+        {
+            string line;
+            if (_uiLogStore == null || !_uiLogStore.TryGetLine(e.ItemIndex, out line))
+                line = "[正在读取当天历史日志…]";
+
+            var item = new ListViewItem(line);
+            if (line.IndexOf("[错误]", StringComparison.Ordinal) >= 0)
+                item.ForeColor = Color.FromArgb(248, 113, 113);
+            else if (line.IndexOf("[警告]", StringComparison.Ordinal) >= 0)
+                item.ForeColor = Color.FromArgb(251, 191, 36);
+            e.Item = item;
+        }
+
+        private void memoLog_CacheVirtualItems(object sender, CacheVirtualItemsEventArgs e)
+        {
+            _uiLogStore?.PrefetchRange(e.StartIndex, e.EndIndex);
+        }
+
+        private void memoLog_Resize(object sender, EventArgs e)
+        {
+            ResizeLogColumn();
+        }
+
+        private void memoLog_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (!e.Control || e.KeyCode != Keys.C)
+                return;
+
+            CopySelectedLogLines();
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+        }
+
+        private void CopySelectedLogLines()
+        {
+            if (_uiLogStore == null || memoLog.SelectedIndices.Count == 0)
+                return;
+
+            var selectedIndexes = new List<int>();
+            foreach (int index in memoLog.SelectedIndices)
+                selectedIndexes.Add(index);
+            selectedIndexes.Sort();
+
+            var text = new StringBuilder();
+            foreach (var index in selectedIndexes)
+            {
+                string line;
+                if (_uiLogStore.TryGetLine(index, out line) && !string.IsNullOrEmpty(line))
+                    text.AppendLine(line);
+            }
+
+            if (text.Length == 0)
+                return;
+
+            try
+            {
+                Clipboard.SetText(text.ToString().TrimEnd('\r', '\n'));
+            }
+            catch
+            {
+                // Clipboard access can be temporarily held by another Windows process.
+            }
+        }
+
+        private void ResizeLogColumn()
+        {
+            if (memoLog.Columns.Count == 0)
+                return;
+
+            memoLog.Columns[0].Width = Math.Max(200, memoLog.ClientSize.Width - 4);
         }
 
         private void InitializeStatusSummary()
@@ -578,7 +740,6 @@ namespace HZCYKJTHardWare.Proxy
                 _server = new ProxyServer(AppendLog);
                 _server.Start();
                 SetServiceStatus(true);
-                AppendLog("服务已启动");
             }
             catch (Exception ex)
             {
@@ -600,7 +761,6 @@ namespace HZCYKJTHardWare.Proxy
                 _server.Stop();
                 _server = null;
                 SetServiceStatus(false);
-                AppendLog("服务已停止");
             }
             catch (Exception ex)
             {
@@ -666,29 +826,27 @@ namespace HZCYKJTHardWare.Proxy
         private async void btnFaceCapture_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
-            var (ok, path) = await Task.Run(() => _server.CaptureFace(AppConfig.Instance.DefaultSaveDir));
-            AppendLog(ok ? $"人脸抓拍成功: {path}" : "人脸抓拍失败");
+            await Task.Run(() => _server.CaptureFace(AppConfig.Instance.DefaultSaveDir));
         }
 
         private async void btnFingerprintCapture_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
-            var (ok, path) = await Task.Run(() => _server.CaptureFingerprint(AppConfig.Instance.DefaultSaveDir));
-            AppendLog(ok ? $"指纹抓拍成功: {path}" : "指纹抓拍失败");
+            await Task.Run(() => _server.CaptureFingerprint(AppConfig.Instance.DefaultSaveDir));
         }
 
         private async void btnOCR_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
-            var requestId = await Task.Run(() => _server.RequestOCR(AppConfig.Instance.DefaultSaveDir));
-            AppendLog("OCR 已下发, request_id: " + requestId);
+            await Task.Run(() => _server.RequestOCR(AppConfig.Instance.DefaultSaveDir));
+            AppendLog("OCR识别请求已发送");
         }
 
         private async void btnNfcCard_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
-            var requestId = await Task.Run(() => _server.RequestNfc(AppConfig.Instance.DefaultSaveDir));
-            AppendLog("IC 卡已下发, request_id: " + requestId);
+            await Task.Run(() => _server.RequestNfc(AppConfig.Instance.DefaultSaveDir));
+            AppendLog("NFC读卡请求已发送");
         }
 
         private async void btnIrisCapture_Click(object sender, EventArgs e)
@@ -761,84 +919,7 @@ namespace HZCYKJTHardWare.Proxy
 
         private void AppendLog(string message)
         {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            EnqueueUiLog(line);
-            Logger.Info(message);
-        }
-
-        private const int MaxPendingUiLogLines = 5000;
-        private const int MaxUiLogFlushBatch = 300;
-
-        private void EnqueueUiLog(string line)
-        {
-            _pendingUiLogs.Enqueue(line);
-            var pending = Interlocked.Increment(ref _pendingUiLogCount);
-            if (pending <= MaxPendingUiLogLines)
-                return;
-
-            if (_pendingUiLogs.TryDequeue(out _))
-                Interlocked.Decrement(ref _pendingUiLogCount);
-        }
-
-        private void FlushPendingUiLogs()
-        {
-            if (IsDisposed)
-                return;
-
-            if (InvokeRequired)
-            {
-                if (!IsDisposed && IsHandleCreated)
-                    BeginInvoke(new Action(FlushPendingUiLogs));
-                return;
-            }
-
-            var sb = new StringBuilder();
-            var count = 0;
-            while (count < MaxUiLogFlushBatch && _pendingUiLogs.TryDequeue(out var line))
-            {
-                Interlocked.Decrement(ref _pendingUiLogCount);
-                sb.AppendLine(line);
-                count++;
-            }
-
-            if (count > 0)
-                AppendLogToMemo(sb.ToString(), count);
-        }
-
-        private const int MaxLogLines = 3000;  // Prevent UI crash from unbounded log growth
-        private const int TrimLogLinesBatch = 300;
-        private int _uiLogLineCount;
-
-        private void AppendLogToMemo(string text, int lineCount)
-        {
-            try
-            {
-                memoLog.AppendText(text);
-                _uiLogLineCount += lineCount;
-
-                // Trim in batches. Reading memoLog.Lines on every log is expensive during high-frequency requests.
-                if (_uiLogLineCount > MaxLogLines + TrimLogLinesBatch)
-                {
-                    var lines = memoLog.Lines;
-                    if (lines.Length > MaxLogLines)
-                    {
-                        var keep = new string[MaxLogLines];
-                        Array.Copy(lines, lines.Length - MaxLogLines, keep, 0, MaxLogLines);
-                        memoLog.Lines = keep;
-                        _uiLogLineCount = keep.Length;
-                    }
-                    else
-                    {
-                        _uiLogLineCount = lines.Length;
-                    }
-                }
-                memoLog.SelectionStart = memoLog.TextLength;
-                memoLog.ScrollToCaret();
-            }
-            catch
-            {
-                // Log area must never crash the program
-            }
+            Logger.InfoForUi(message);
         }
 
         private void DisposeTrayResources()
@@ -857,11 +938,17 @@ namespace HZCYKJTHardWare.Proxy
 
         private void DisposeUiLogResources()
         {
-            if (_uiLogTimer != null)
+            Logger.LogWritten -= Logger_LogWritten;
+            if (_logContextMenu != null)
             {
-                _uiLogTimer.Stop();
-                _uiLogTimer.Dispose();
-                _uiLogTimer = null;
+                _logContextMenu.Dispose();
+                _logContextMenu = null;
+            }
+            if (_uiLogStore != null)
+            {
+                _uiLogStore.Changed -= UiLogStore_Changed;
+                _uiLogStore.Dispose();
+                _uiLogStore = null;
             }
         }
     }

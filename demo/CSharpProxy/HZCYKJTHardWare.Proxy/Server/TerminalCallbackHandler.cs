@@ -45,9 +45,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var resourceType = CallbackParser.GetResourceType(bodyUtf8);
-                // ocr_event_status 高频推送，日志已在 HandleOcrEventStatus 内按事件类型精简
+                // 回调资源类型只用于协议排障，正常运行不需要逐条记录。
                 if (resourceType != "ocr_event_status")
-                    _log($"[终端回调] resource_type={resourceType}");
+                    Logger.Debug($"[终端回调] resource_type={resourceType}");
 
                 switch (resourceType)
             {
@@ -146,17 +146,23 @@ namespace HZCYKJTHardWare.Proxy.Server
             var errorCode = JsonHelper.ExtractString(bodyUtf8, "error_code");
             var message = JsonHelper.ExtractString(bodyUtf8, "message");
 
-            // Only "证件检测" and "证件离开" show in UI; all others write to log file only
-            bool showInUi = (eventType == "event_type_card_detect" || eventType == "event_type_card_leave");
-
-            var logLine = !string.IsNullOrEmpty(errorCode)
+            var debugLogLine = !string.IsNullOrEmpty(errorCode)
                 ? $"[OCR事件] request_id={requestId}, event={chineseEvent}, error={errorCode}, message={message}"
                 : $"[OCR事件] request_id={requestId}, event={chineseEvent}";
 
-            if (showInUi)
-                _log(logLine);           // UI + file
+            var isFailure = !string.IsNullOrEmpty(errorCode) ||
+                            eventType.EndsWith("_fail", StringComparison.OrdinalIgnoreCase);
+            if (isFailure)
+            {
+                var warningLine = string.IsNullOrEmpty(errorCode)
+                    ? $"[OCR事件] {chineseEvent}"
+                    : string.IsNullOrEmpty(message)
+                        ? $"[OCR事件] {chineseEvent}，错误码={errorCode}"
+                        : $"[OCR事件] {chineseEvent}，错误码={errorCode}，原因={message}";
+                Logger.WarnForUi(warningLine);
+            }
             else
-                Logger.Info(logLine);    // file only
+                Logger.Debug(debugLogLine);
         }
 
         private void HandleOcrDocument(string bodyUtf8)
@@ -165,26 +171,41 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!result.Valid) { _log("[OCR回调] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"[OCR回调] request_id={result.RequestId}, mrz={result.Mrz}");
+            if (!TryMarkProcessed(result.RequestId, "ocr_document"))
+            {
+                Logger.Debug("[OCR回调] 重复OCR结果，已去重: " + result.RequestId);
+                return;
+            }
+
+            _log($"[OCR回调] MRZ={result.Mrz}");
 
             // Save OCR result JSON
-            FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
+            var ocrJsonPath = FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json", false);
 
             // Save evidence images (light source: 红外光/紫外光/可见光 + portrait: 人像)
-            SaveEvidenceImages(bodyUtf8, saveDir, result.RequestId);
+            var savedPhotoNames = SaveEvidenceImages(bodyUtf8, saveDir, result.RequestId);
 
             // Save MRZ information (MRZ.json with MRZ lines + person_info)
-            SaveMrzJson(bodyUtf8, saveDir, result.RequestId);
+            var mrzSaved = SaveMrzJson(bodyUtf8, saveDir, result.RequestId);
+
+            var savedArtifacts = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrEmpty(ocrJsonPath)) savedArtifacts.Add("识别结果JSON");
+            if (mrzSaved) savedArtifacts.Add("MRZ信息");
+            if (savedPhotoNames.Count > 0) savedArtifacts.Add("照片（" + string.Join("、", savedPhotoNames) + "）");
+            if (savedArtifacts.Count > 0)
+            {
+                var artifactDir = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
+                _log($"[OCR] 已保存{string.Join("、", savedArtifacts)}，目录={artifactDir}");
+            }
+            else
+            {
+                _log("[OCR] 结果文件保存失败");
+            }
 
             // Forward to DLL callback — fallback to default URL if request_id not found (same as Delphi)
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
                 callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
-            if (!TryMarkProcessed(result.RequestId, "ocr_document"))
-            {
-                _log("[OCR回调] 重复OCR结果，已去重: " + result.RequestId);
-                return;
-            }
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             _ = _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath);
             CleanupRequestMapping(result.RequestId);
@@ -196,16 +217,17 @@ namespace HZCYKJTHardWare.Proxy.Server
             var result = CallbackParser.ParseNfcCard(bodyUtf8);
             if (!result.Valid) { _log("[IC卡回调] 数据无效"); return; }
 
-            _log($"[IC卡回调] request_id={result.RequestId}, card_text={result.CardText}");
+            if (!TryMarkProcessed(result.RequestId, "nfc_card"))
+            {
+                Logger.Debug("[NFC] 重复读卡回调，已去重: " + result.RequestId);
+                return;
+            }
+
+            _log($"[NFC] 读卡成功：卡号={result.CardText}");
 
             var callbackUrl = GetCallback(result.RequestId);
             if (string.IsNullOrEmpty(callbackUrl))
                 callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
-            if (!TryMarkProcessed(result.RequestId, "nfc_card"))
-            {
-                _log("[IC卡回调] 重复回调，已去重: " + result.RequestId);
-                return;
-            }
             _ = _dllCallback.SendNfcResult(result.RequestId, result.CardText);
             CleanupRequestMapping(result.RequestId);
             CleanupProcessedIfNeeded();
@@ -360,16 +382,16 @@ namespace HZCYKJTHardWare.Proxy.Server
             return imageType == 2;
         }
 
-        private void SaveEvidenceImages(string bodyUtf8, string saveDir, string requestId)
+        private System.Collections.Generic.List<string> SaveEvidenceImages(string bodyUtf8, string saveDir, string requestId)
         {
+            var savedNames = new System.Collections.Generic.List<string>();
             try
             {
                 var imageItems = CallbackParser.ParseEvidenceImages(bodyUtf8);
-                if (imageItems.Count == 0) return;
+                if (imageItems.Count == 0) return savedNames;
 
                 var saveDir2 = PathHelper.EnsureRequestFolder(saveDir, requestId);
                 bool savedVisible = false, savedInfrared = false, savedUltraviolet = false, savedPortrait = false;
-                var savedNames = new System.Collections.Generic.List<string>();
 
                 foreach (var imgJson in imageItems)
                 {
@@ -393,8 +415,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                         if (shouldSave)
                         {
                             var filePath = System.IO.Path.Combine(saveDir2, lampName + ".jpg");
-                            FileSaver.SaveBase64ImageToFile(base64, filePath);
-                            savedNames.Add(lampName);
+                            if (!string.IsNullOrEmpty(FileSaver.SaveBase64ImageToFile(base64, filePath, false)))
+                                savedNames.Add(lampName);
                         }
                     }
 
@@ -403,31 +425,29 @@ namespace HZCYKJTHardWare.Proxy.Server
                     {
                         savedPortrait = true;
                         var filePath = System.IO.Path.Combine(saveDir2, "人像.jpg");
-                        FileSaver.SaveBase64ImageToFile(base64, filePath);
-                        savedNames.Add("人像");
+                        if (!string.IsNullOrEmpty(FileSaver.SaveBase64ImageToFile(base64, filePath, false)))
+                            savedNames.Add("人像");
                     }
                 }
-
-                if (savedNames.Count > 0)
-                    _log($"[OCR] 照片已保存至 {saveDir2}: {string.Join(", ", savedNames)}");
             }
             catch (Exception ex)
             {
                 _log($"[OCR] 保存证据图片异常: {ex.Message}");
             }
+            return savedNames;
         }
 
         /// <summary>
         /// Save MRZ information as MRZ.json from OCR callback body.
         /// Extracts MRZ1/MRZ2/MRZ3 and person_info array per protocol 2.6.
         /// </summary>
-        private void SaveMrzJson(string bodyUtf8, string saveDir, string requestId)
+        private bool SaveMrzJson(string bodyUtf8, string saveDir, string requestId)
         {
             try
             {
                 var obj = Newtonsoft.Json.Linq.JObject.Parse(bodyUtf8);
                 var data = obj["data"] as Newtonsoft.Json.Linq.JObject;
-                if (data == null) return;
+                if (data == null) return false;
 
                 // Extract MRZ lines (same field names as C++ DLL)
                 var mrz1 = data["MRZ1"]?.ToString() ?? "";
@@ -459,11 +479,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var filePath = System.IO.Path.Combine(saveDir2, "MRZ.json");
                 System.IO.File.WriteAllText(filePath, mrzObj.ToString(Newtonsoft.Json.Formatting.Indented),
                     System.Text.Encoding.UTF8);
-                _log($"[OCR] MRZ信息已保存: path={filePath}");
+                return true;
             }
             catch (Exception ex)
             {
                 _log($"[OCR] 保存MRZ信息异常: {ex.Message}");
+                return false;
             }
         }
 

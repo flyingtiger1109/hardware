@@ -132,11 +132,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (IsHttpPreviewUrl(cached.Url))
                 {
-                    Logger.Info($"HTTP MJPEG Preview URL cache bypass: resource={ResourceToName(resType)}, terminal={terminalBaseUrl}");
+                    Logger.Info($"HTTP MJPEG预览URL跳过缓存：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}");
                 }
                 else
                 {
-                    Logger.Info($"Preview URL cache hit: resource={ResourceToName(resType)}, terminal={terminalBaseUrl}");
+                    Logger.Info($"预览URL命中缓存：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}");
                     return cached.Url;
                 }
             }
@@ -163,7 +163,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             sw.Stop();
             if (cancellationToken.IsCancellationRequested)
             {
-                Logger.Warn($"Preview URL request cancelled: resource={ResourceToName(resType)}, terminal={terminalBaseUrl}, elapsed={sw.ElapsedMilliseconds}ms");
+                Logger.Warn($"预览URL请求已取消：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms");
                 return null;
             }
 
@@ -223,7 +223,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 catch (ObjectDisposedException) { }
                 catch (Exception ex)
                 {
-                    Logger.Warn($"Preview shouldContinue watcher error: {ex.Message}");
+                    Logger.Warn($"预览继续条件监视异常：{ex.Message}");
                 }
             });
             return cts;
@@ -283,21 +283,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var latestUrl = await FetchPreviewUrl(cached.ResourceType, cached.TerminalBaseUrl).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(latestUrl))
                     {
-                        Logger.Warn($"Preview URL validation failed, keeping old cache: resource={ResourceToName(cached.ResourceType)}, terminal={cached.TerminalBaseUrl}");
+                        Logger.Warn($"预览URL校验失败，保留旧缓存：resource={ResourceToName(cached.ResourceType)}，terminal={cached.TerminalBaseUrl}");
                         continue;
                     }
 
                     cached.LastValidatedUtc = DateTime.UtcNow;
                     if (!string.Equals(cached.Url, latestUrl, StringComparison.Ordinal))
                     {
-                        Logger.Warn($"Preview URL changed, updating cache: resource={ResourceToName(cached.ResourceType)}, terminal={cached.TerminalBaseUrl}");
+                        Logger.Warn($"预览URL已变化，更新缓存：resource={ResourceToName(cached.ResourceType)}，terminal={cached.TerminalBaseUrl}");
                         UpdatePreviewUrlCache(cached.ResourceType, cached.TerminalBaseUrl, latestUrl);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"Preview URL validation error: {ex.Message}");
+                Logger.Warn($"预览URL校验异常：{ex.Message}");
             }
             finally
             {
@@ -415,8 +415,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (ok2)
                         goto PreviewStarted;
                 }
-                Logger.Error($"Preview play failed detail: resource={ResourceToName(resType)}, session={sessionType}, player={(isHttpPreview ? "mjpeg+vlc_fallback" : "vlc")}, url_elapsed={urlElapsed}ms, play_elapsed={playElapsed}ms, total_elapsed={totalSw.ElapsedMilliseconds}ms");
-                Logger.Error($"Preview play failed: {ResourceToName(resType)}");
+                Logger.Error($"预览播放失败明细：resource={ResourceToName(resType)}，session={sessionType}，player={(isHttpPreview ? "mjpeg+vlc_fallback" : "vlc")}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms");
+                Logger.Error($"预览播放失败：{ResourceToName(resType)}");
                 return false;
             }
 
@@ -453,18 +453,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     srcW, srcH, swap, visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
                 if (mjpegPlayer != null && mjpegPlayer.IsRunning)
                 {
-                    Logger.Info($"Preview player selected: mjpeg, description={description}, url={previewUrl}");
+                    Logger.Info($"预览播放器选择：HTTP MJPEG，description={description}，url={previewUrl}");
                     return mjpegPlayer;
                 }
 
-                Logger.Warn($"HTTP MJPEG preview failed, falling back to VLC: description={description}, url={previewUrl}");
+                Logger.Warn($"HTTP MJPEG预览失败，回退至VLC：description={description}，url={previewUrl}");
             }
 
             var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
                 visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
-                Logger.Info($"Preview player selected: vlc, description={description}, url={previewUrl}");
+                Logger.Info($"预览播放器选择：VLC，description={description}，url={previewUrl}");
 
             return vlcPlayer;
         }

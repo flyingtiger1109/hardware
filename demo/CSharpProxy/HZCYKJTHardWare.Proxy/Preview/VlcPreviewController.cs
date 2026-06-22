@@ -145,7 +145,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var joined = await Task.Run(() => _thread.Join(joinTimeout)).ConfigureAwait(false);
                 if (!joined)
                 {
-                    Logger.Warn($"VLC preview thread join timeout: {_description}, timeout={joinTimeout}ms, stopRequested={_stopRequested}");
+                    Logger.Warn($"VLC预览线程等待退出超时：{_description}，timeout={joinTimeout}ms，已请求停止={_stopRequested}");
                 }
             }
         }

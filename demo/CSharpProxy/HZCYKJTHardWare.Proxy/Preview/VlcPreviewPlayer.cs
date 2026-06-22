@@ -71,7 +71,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (!LoadVlc())
                 {
-                    Logger.Warn("VLC warmup: failed to load VLC libraries");
+                    Logger.Warn("VLC预热失败：无法加载VLC库");
                     return;
                 }
 
@@ -97,11 +97,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _fnRelease(instance);
                 }
                 WarmupMs = (int)sw.ElapsedMilliseconds;
-                Logger.Info($"VLC warmup completed: {WarmupMs}ms");
             }
             catch (Exception ex)
             {
-                Logger.Warn($"VLC warmup failed: {ex.Message}");
+                Logger.Warn($"VLC预热失败：{ex.Message}");
             }
         }
 
@@ -139,7 +138,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (TryLoadFromDir(dir)) return true;
             }
 
-            Logger.Error("VLC not found");
+            Logger.Error("未找到VLC运行库");
             return false;
         }
 
@@ -175,7 +174,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (_fnNew == null || _fnPlayerPlay == null) { Unload(); return false; }
 
                 _vlcDir = dir;
-                Logger.Info($"VLC loaded from {dir}");
+                Logger.Info($"VLC加载成功：目录={dir}");
                 return true;
             }
             catch { return false; }
@@ -226,7 +225,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_vlcInstance == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC instance");
+                    Logger.Error("创建VLC实例失败");
                     CleanupPartial();
                     return false;
                 }
@@ -239,7 +238,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (media == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC media");
+                    Logger.Error("创建VLC媒体对象失败");
                     CleanupPartial();
                     return false;
                 }
@@ -279,7 +278,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_mediaPlayer == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC media player");
+                    Logger.Error("创建VLC播放器失败");
                     CleanupPartial();
                     return false;
                 }
@@ -293,7 +292,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
                 if (_videoHwnd == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create video child window");
+                    Logger.Error("创建视频子窗口失败");
                     CleanupPartial();
                     return false;
                 }
@@ -305,7 +304,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Logger.Info($"VLC启动步骤：开始播放，url={rtspUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
-                    Logger.Error("VLC play returned error");
+                    Logger.Error("VLC开始播放失败");
                     CleanupPartial();
                     return false;
                 }
@@ -393,7 +392,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"SetParentWindow failed: {ex.Message}");
+                Logger.Error($"设置视频窗口父句柄失败：{ex.Message}");
                 return false;
             }
         }
@@ -474,7 +473,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
+                Logger.Error($"应用视频填充布局失败：{ex.Message}");
             }
         }
 
