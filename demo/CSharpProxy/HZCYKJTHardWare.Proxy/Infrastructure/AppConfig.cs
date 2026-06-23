@@ -25,8 +25,6 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public int TerminalPort { get; set; } = 9098;
         public int Terminal1HostSuffix { get; set; } = 30;
         public int Terminal2HostSuffix { get; set; } = 31;
-        public string Terminal1Name { get; set; } = "左通道";
-        public string Terminal2Name { get; set; } = "右通道";
         public string SubnetPrefix { get; set; } = "192.168.20";
 
         // DLL callback server (where to send results back to DLL)
@@ -43,28 +41,27 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public bool CreateDateFolder { get; set; } = true;
         public bool CreateRequestFolder { get; set; } = true;
 
-        // Log settings. "info" is the production default; "debug" enables performance diagnostics.
-        public string LogLevel { get; set; } = "info";
-
         // Paths
         public string ExeDir { get; set; }
         public string VlcDir { get; set; }
+
+        // Log settings
+        public string LogLevel { get; set; } = "info";
 
         /// <summary>
         /// Unified config file shared by the DLL and C# proxy.
         /// </summary>
         private const string ConfigFile = "HZCYKJTHardWare.json";
-        private const string ConfigPathEnvironmentVariable = "HZCYKJTHARDWARE_CONFIG";
 
         private static AppConfig Load()
         {
             var config = new AppConfig();
             config.ExeDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            var jsonPath = ResolveConfigPath(config.ExeDir);
+            var jsonPath = Path.Combine(config.ExeDir, ConfigFile);
             if (!File.Exists(jsonPath))
             {
-                Logger.Warn($"未找到配置文件：{ConfigFile}，使用默认配置");
+                Logger.Warn($"Config file not found: {ConfigFile}, using defaults");
                 return config;
             }
 
@@ -101,25 +98,16 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                         ?? terminal.Value<string>("preferred_subnet_prefix")
                         ?? config.SubnetPrefix;
 
-                    // C# key: "devices"; also supports legacy "auto_subnet_devices" and fixed terminal names.
-                    var devices = terminal["devices"] ?? terminal["auto_subnet_devices"] ?? terminal["fixed_terminals"];
+                    // C# key: "devices"; also supports legacy "auto_subnet_devices"
+                    var devices = terminal["devices"] ?? terminal["auto_subnet_devices"];
                     if (devices != null)
                     {
                         foreach (var dev in devices)
                         {
                             var index = dev.Value<int?>("index") ?? 0;
-                            var name = dev.Value<string>("name");
-                            var suffix = dev.Value<int?>("host_suffix");
-                            if (index == 1)
-                            {
-                                if (suffix.HasValue) config.Terminal1HostSuffix = suffix.Value;
-                                if (!string.IsNullOrWhiteSpace(name)) config.Terminal1Name = name;
-                            }
-                            if (index == 2)
-                            {
-                                if (suffix.HasValue) config.Terminal2HostSuffix = suffix.Value;
-                                if (!string.IsNullOrWhiteSpace(name)) config.Terminal2Name = name;
-                            }
+                            var suffix = dev.Value<int?>("host_suffix") ?? 0;
+                            if (index == 1) config.Terminal1HostSuffix = suffix;
+                            if (index == 2) config.Terminal2HostSuffix = suffix;
                         }
                     }
                 }
@@ -155,37 +143,19 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
                 var log = obj["log"];
                 if (log != null)
+                {
                     config.LogLevel = log.Value<string>("level") ?? config.LogLevel;
+                }
 
-                Logger.SetDebugEnabled(string.Equals(config.LogLevel, "debug", StringComparison.OrdinalIgnoreCase));
-
-                Logger.Info($"配置加载完成：{jsonPath}");
+                Logger.SetMinLevel(config.LogLevel);
+                Logger.Info($"配置文件已加载: {jsonPath}");
             }
             catch (Exception ex)
             {
-                Logger.Error($"加载配置失败：{ex.Message}");
+                Logger.Error($"Failed to load config: {ex.Message}");
             }
 
             return config;
-        }
-
-        private static string ResolveConfigPath(string exeDir)
-        {
-            var configuredPath = Environment.GetEnvironmentVariable(ConfigPathEnvironmentVariable);
-            if (!string.IsNullOrWhiteSpace(configuredPath))
-            {
-                try
-                {
-                    return Path.GetFullPath(configuredPath);
-                }
-                catch
-                {
-                    // The missing-file warning below includes the configured path.
-                    return configuredPath;
-                }
-            }
-
-            return Path.Combine(exeDir, ConfigFile);
         }
 
         public string GetDllServerUrl()

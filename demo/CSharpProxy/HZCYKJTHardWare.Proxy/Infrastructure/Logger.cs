@@ -6,30 +6,9 @@ using System.Threading;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
-    public sealed class LogWrittenEventArgs : EventArgs
-    {
-        public LogWrittenEventArgs(string date, string line)
-            : this(date, line, false)
-        {
-        }
-
-        public LogWrittenEventArgs(string date, string line, bool isUiVisible)
-        {
-            Date = date;
-            Line = line;
-            IsUiVisible = isUiVisible;
-        }
-
-        public string Date { get; private set; }
-        public string Line { get; private set; }
-        public bool IsUiVisible { get; private set; }
-    }
-
     public static class Logger
     {
         private const int MaxQueueLength = 10000;
-        private const int FlushBatchSize = 100;
-        private const int FlushIntervalMs = 1000;
         private static readonly object _writerLock = new object();
         private static readonly BlockingCollection<LogEntry> _queue;
         private static readonly string _logDir;
@@ -37,14 +16,23 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static StreamWriter _writer;
         private static string _currentLogPath;
         private static long _droppedCount;
-        private static int _pendingFlushCount;
-        private static DateTime _lastFlushUtc = DateTime.UtcNow;
-        private static volatile bool _debugEnabled;
         private const string LogNamePrefix = "HZCYKJTHardWareExe_Logs";
 
-        // Raised by the logger worker after a line is accepted for file output.
-        // Subscribers must return quickly and must never touch WinForms controls directly.
-        public static event EventHandler<LogWrittenEventArgs> LogWritten;
+        // Log level filtering: 0=Debug, 1=Info, 2=Warn, 3=Error
+        private static int _minLevel = 1; // default Info
+
+        public static void SetMinLevel(string level)
+        {
+            switch (level?.ToLower())
+            {
+                case "debug": _minLevel = 0; break;
+                case "info":  _minLevel = 1; break;
+                case "warn":  _minLevel = 2; break;
+                case "error": _minLevel = 3; break;
+            }
+        }
+
+        public static string LogDirectory => _logDir;
 
         static Logger()
         {
@@ -62,48 +50,26 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             AppDomain.CurrentDomain.ProcessExit += (s, e) => Flush(1000);
         }
 
-        public static void Info(string message) => Write("信息", message, false);
-        public static void InfoForUi(string message) => Write("信息", message, true);
-        public static void Debug(string message)
-        {
-            if (_debugEnabled)
-                Write("调试", message, false);
-        }
-        public static void Warn(string message) => Write("警告", message);
-        public static void WarnForUi(string message) => Write("警告", message, true);
-        public static void Error(string message) => Write("错误", message);
-        public static void Error(string message, Exception ex) => Write("错误", $"{message}: {ex}");
-
-        public static void SetDebugEnabled(bool enabled)
-        {
-            _debugEnabled = enabled;
-        }
-
-        public static string GetLogFilePath(string date)
-        {
-            if (string.IsNullOrEmpty(date))
-                date = DateTime.Now.ToString("yyyyMMdd");
-            return Path.Combine(_logDir, $"{LogNamePrefix}_{date}.log");
-        }
+        public static void Debug(string message) => Write("调试", message, 0);
+        public static void Info(string message) => Write("信息", message, 1);
+        public static void Warn(string message) => Write("警告", message, 2);
+        public static void Error(string message) => Write("错误", message, 3);
+        public static void Error(string message, Exception ex) => Write("错误", $"{message}: {ex}", 3);
 
         /// <summary>
         /// Non-blocking log writer with automatic cross-day file rollover.
         /// Log format matches Delphi: [yyyy-MM-dd HH:mm:ss.fff] [级别] message
         /// </summary>
-        public static void Write(string level, string message)
+        public static void Write(string level, string message, int levelNum)
         {
-            Write(level, message, false);
-        }
-
-        private static void Write(string level, string message, bool isUiVisible)
-        {
+            if (levelNum < _minLevel) return;
             try
             {
                 var now = DateTime.Now;
                 var date = now.ToString("yyyyMMdd");
                 var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}";
 
-                if (!_queue.TryAdd(new LogEntry { Date = date, Line = line, IsUiVisible = isUiVisible }, 0))
+                if (!_queue.TryAdd(new LogEntry { Date = date, Line = line }, 0))
                     Interlocked.Increment(ref _droppedCount);
             }
             catch
@@ -122,7 +88,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 lock (_writerLock)
                 {
-                    FlushWriterLocked();
+                    _writer?.Flush();
                 }
             }
             catch { }
@@ -130,23 +96,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static void WriterLoop()
         {
-            while (true)
+            foreach (var entry in _queue.GetConsumingEnumerable())
             {
                 try
                 {
-                    LogEntry entry;
-                    if (_queue.TryTake(out entry, FlushIntervalMs))
-                    {
-                        WriteToFile(entry);
-                    }
-                    else
-                    {
-                        FlushIdleWriter();
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    break;
+                    WriteToFile(entry);
                 }
                 catch
                 {
@@ -157,13 +111,12 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static void WriteToFile(LogEntry entry)
         {
-            string droppedLine = null;
             lock (_writerLock)
             {
                 if (!Directory.Exists(_logDir))
                     Directory.CreateDirectory(_logDir);
 
-                var filePath = GetLogFilePath(entry.Date);
+                var filePath = Path.Combine(_logDir, $"{LogNamePrefix}_{entry.Date}.log");
                 if (_writer == null || !string.Equals(_currentLogPath, filePath, StringComparison.OrdinalIgnoreCase))
                 {
                     _writer?.Dispose();
@@ -173,56 +126,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
                 var dropped = Interlocked.Exchange(ref _droppedCount, 0);
                 if (dropped > 0)
-                {
-                    droppedLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [警告] 日志队列已满，已丢弃 {dropped} 条日志";
-                    _writer.WriteLine(droppedLine);
-                }
+                    _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [警告] 日志队列已满，已丢弃 {dropped} 条日志");
 
                 _writer.WriteLine(entry.Line);
-                _pendingFlushCount++;
-
-                var elapsedMs = (DateTime.UtcNow - _lastFlushUtc).TotalMilliseconds;
-                if (_pendingFlushCount >= FlushBatchSize || elapsedMs >= FlushIntervalMs)
-                    FlushWriterLocked();
-
-            }
-
-            PublishLineWritten(entry.Date, droppedLine, false);
-            PublishLineWritten(entry.Date, entry.Line, entry.IsUiVisible);
-        }
-
-        private static void FlushIdleWriter()
-        {
-            lock (_writerLock)
-            {
-                if (_pendingFlushCount > 0)
-                    FlushWriterLocked();
-            }
-        }
-
-        private static void FlushWriterLocked()
-        {
-            _writer?.Flush();
-            _pendingFlushCount = 0;
-            _lastFlushUtc = DateTime.UtcNow;
-        }
-
-        private static void PublishLineWritten(string date, string line, bool isUiVisible)
-        {
-            if (string.IsNullOrEmpty(line))
-                return;
-
-            var handler = LogWritten;
-            if (handler == null)
-                return;
-
-            try
-            {
-                handler(null, new LogWrittenEventArgs(date, line, isUiVisible));
-            }
-            catch
-            {
-                // Observers are optional and must never affect the file logger.
+                _writer.Flush();
             }
         }
 
@@ -230,7 +137,6 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             public string Date;
             public string Line;
-            public bool IsUiVisible;
         }
     }
 }

@@ -79,7 +79,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 IsBackground = true
             };
             _worker.Start();
-            Logger.Info($"[队列] {_name} 已启动, 最大长度={_maxLength}, 替换模式={_replaceOld}");
+            Logger.Debug($"[队列] {_name} 已启动, 最大长度={_maxLength}, 替换模式={_replaceOld}");
         }
 
         /// <summary>
@@ -224,7 +224,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             {
                 _worker.Join(3000);
                 if (_worker.IsAlive)
-                    Logger.Warn($"[队列] {_name} 工作线程未能及时退出");
+                    Logger.Warn($"[队列] {_name} worker 线程未能及时退出");
             }
             _worker = null;
             _buffer = null;

@@ -119,12 +119,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return $"{terminalBaseUrl}|{resType}";
         }
 
-        public async Task<string> RequestPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
-            bool forceRefresh = false, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<string> RequestPreviewUrl(PreviewResourceType resType, string terminalBaseUrl, bool forceRefresh = false)
         {
-            if (cancellationToken.IsCancellationRequested)
-                return null;
-
             var cacheKey = PreviewUrlCacheKey(resType, terminalBaseUrl);
             if (!forceRefresh &&
                 _previewUrlCache.TryGetValue(cacheKey, out var cached) &&
@@ -132,41 +128,30 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (IsHttpPreviewUrl(cached.Url))
                 {
-                    Logger.Info($"HTTP MJPEG预览URL跳过缓存：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}");
+                    Logger.Debug($"预览URL缓存跳过：resource={ResourceToName(resType)}");
                 }
                 else
                 {
-                    Logger.Info($"预览URL命中缓存：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}");
+                    Logger.Debug($"预览URL缓存命中：resource={ResourceToName(resType)}");
                     return cached.Url;
                 }
             }
 
-            if (cancellationToken.IsCancellationRequested)
-                return null;
-
-            var previewUrl = await FetchPreviewUrl(resType, terminalBaseUrl, cancellationToken).ConfigureAwait(false);
+            var previewUrl = await FetchPreviewUrl(resType, terminalBaseUrl).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(previewUrl))
                 UpdatePreviewUrlCache(resType, terminalBaseUrl, previewUrl);
             return previewUrl;
         }
 
-        private async Task<string> FetchPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
-            CancellationToken cancellationToken = default(CancellationToken))
+        private async Task<string> FetchPreviewUrl(PreviewResourceType resType, string terminalBaseUrl)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var path = ResourceToTerminalPath(resType);
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var body = $"{{\"request_id\":\"{requestId}\"}}";
 
-            var (ok, response) = await _terminalClient.PostJsonAsync(terminalBaseUrl, path, body,
-                PreviewUrlTimeoutMs, cancellationToken).ConfigureAwait(false);
+            var (ok, response) = await _terminalClient.PostJsonAsync(terminalBaseUrl, path, body, PreviewUrlTimeoutMs).ConfigureAwait(false);
             sw.Stop();
-            if (cancellationToken.IsCancellationRequested)
-            {
-                Logger.Warn($"预览URL请求已取消：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms");
-                return null;
-            }
-
             if (!ok)
             {
                 Logger.Warn($"预览URL请求失败：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms");
@@ -174,64 +159,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             var previewUrl = ResultParser.ExtractPreviewUrl(response);
-            Logger.Info($"预览URL请求完成：resource={ResourceToName(resType)}，terminal={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms，url_empty={string.IsNullOrEmpty(previewUrl)}");
+            Logger.Debug($"预览URL请求完成：resource={ResourceToName(resType)}，耗时={sw.ElapsedMilliseconds}ms");
             return previewUrl;
-        }
-
-        private async Task<string> RequestPreviewUrlWhileCurrent(PreviewResourceType resType,
-            string terminalBaseUrl, bool forceRefresh, Func<bool> shouldContinue)
-        {
-            if (!CanContinue(shouldContinue))
-                return null;
-
-            var cts = CreateShouldContinueCancellation(shouldContinue);
-            try
-            {
-                return await RequestPreviewUrl(resType, terminalBaseUrl, forceRefresh, cts.Token)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                try { cts.Cancel(); } catch { }
-                cts.Dispose();
-            }
-        }
-
-        private static CancellationTokenSource CreateShouldContinueCancellation(Func<bool> shouldContinue)
-        {
-            var cts = new CancellationTokenSource();
-            if (shouldContinue == null)
-                return cts;
-
-            var token = cts.Token;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    while (!token.IsCancellationRequested)
-                    {
-                        if (!shouldContinue())
-                        {
-                            cts.Cancel();
-                            return;
-                        }
-
-                        await Task.Delay(100, token).ConfigureAwait(false);
-                    }
-                }
-                catch (OperationCanceledException) { }
-                catch (ObjectDisposedException) { }
-                catch (Exception ex)
-                {
-                    Logger.Warn($"预览继续条件监视异常：{ex.Message}");
-                }
-            });
-            return cts;
-        }
-
-        private static bool CanContinue(Func<bool> shouldContinue)
-        {
-            return shouldContinue == null || shouldContinue();
         }
 
         private void UpdatePreviewUrlCache(PreviewResourceType resType, string terminalBaseUrl, string previewUrl)
@@ -283,21 +212,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var latestUrl = await FetchPreviewUrl(cached.ResourceType, cached.TerminalBaseUrl).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(latestUrl))
                     {
-                        Logger.Warn($"预览URL校验失败，保留旧缓存：resource={ResourceToName(cached.ResourceType)}，terminal={cached.TerminalBaseUrl}");
+                        Logger.Warn($"Preview URL validation failed, keeping old cache: resource={ResourceToName(cached.ResourceType)}, terminal={cached.TerminalBaseUrl}");
                         continue;
                     }
 
                     cached.LastValidatedUtc = DateTime.UtcNow;
                     if (!string.Equals(cached.Url, latestUrl, StringComparison.Ordinal))
                     {
-                        Logger.Warn($"预览URL已变化，更新缓存：resource={ResourceToName(cached.ResourceType)}，terminal={cached.TerminalBaseUrl}");
+                        Logger.Warn($"Preview URL changed, updating cache: resource={ResourceToName(cached.ResourceType)}, terminal={cached.TerminalBaseUrl}");
                         UpdatePreviewUrlCache(cached.ResourceType, cached.TerminalBaseUrl, latestUrl);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"预览URL校验异常：{ex.Message}");
+                Logger.Warn($"Preview URL validation error: {ex.Message}");
             }
             finally
             {
@@ -326,7 +255,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var totalSw = System.Diagnostics.Stopwatch.StartNew();
             var key = SessionKey(resType, sessionType);
 
-            if (!CanContinue(shouldContinue))
+            if (shouldContinue != null && !shouldContinue())
                 return false;
 
             // If already running for same target, skip
@@ -339,19 +268,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             // Get preview URL from terminal
             var urlTick = totalSw.ElapsedMilliseconds;
-            var rtspUrl = await RequestPreviewUrlWhileCurrent(resType, terminalBaseUrl,
-                forceRefresh: false, shouldContinue: shouldContinue).ConfigureAwait(false);
+            var rtspUrl = await RequestPreviewUrl(resType, terminalBaseUrl);
             var urlElapsed = totalSw.ElapsedMilliseconds - urlTick;
             if (string.IsNullOrEmpty(rtspUrl))
             {
-                if (!CanContinue(shouldContinue))
-                    return false;
-
                 Logger.Error($"获取预览URL失败: {ResourceToName(resType)}");
                 return false;
             }
 
-            if (!CanContinue(shouldContinue))
+            if (shouldContinue != null && !shouldContinue())
                 return false;
 
             // Determine parent HWND
@@ -376,7 +301,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!isHttpPreview)
                 await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
 
-            if (!CanContinue(shouldContinue))
+            if (shouldContinue != null && !shouldContinue())
                 return false;
 
             // HTTP MJPEG uses a dedicated low-latency reader. Other protocols keep the VLC path.
@@ -393,20 +318,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (player != null)
                     await player.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 ClearPreviewUrlCache(resType, terminalBaseUrl);
-                if (!CanContinue(shouldContinue))
-                    return false;
-
-                var retryUrl = await RequestPreviewUrlWhileCurrent(resType, terminalBaseUrl,
-                    forceRefresh: true, shouldContinue: shouldContinue).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(retryUrl) && CanContinue(shouldContinue))
+                var retryUrl = await RequestPreviewUrl(resType, terminalBaseUrl, forceRefresh: true).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(retryUrl) && (shouldContinue == null || shouldContinue()))
                 {
                     rtspUrl = retryUrl;
                     isHttpPreview = IsHttpPreviewUrl(rtspUrl);
                     if (!isHttpPreview)
                         await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
-                    if (!CanContinue(shouldContinue))
-                        return false;
-
                     playTick = totalSw.ElapsedMilliseconds;
                     player = await StartPreviewPlayerAsync(description, rtspUrl, parentHwnd, srcW, srcH, swap, isHttpPreview)
                         .ConfigureAwait(false);
@@ -415,13 +333,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (ok2)
                         goto PreviewStarted;
                 }
-                Logger.Error($"预览播放失败明细：resource={ResourceToName(resType)}，session={sessionType}，player={(isHttpPreview ? "mjpeg+vlc_fallback" : "vlc")}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms");
-                Logger.Error($"预览播放失败：{ResourceToName(resType)}");
+                Logger.Error($"Preview play failed detail: resource={ResourceToName(resType)}, session={sessionType}, player={(isHttpPreview ? "mjpeg+vlc_fallback" : "vlc")}, url_elapsed={urlElapsed}ms, play_elapsed={playElapsed}ms, total_elapsed={totalSw.ElapsedMilliseconds}ms");
+                Logger.Error($"Preview play failed: {ResourceToName(resType)}");
                 return false;
             }
 
         PreviewStarted:
-            if (!CanContinue(shouldContinue))
+            if (shouldContinue != null && !shouldContinue())
             {
                 await player.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 return false;
@@ -438,9 +356,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sessions[key] = session;
             _restartInfo[key] = session;
             totalSw.Stop();
-            Logger.Info($"预览启动明细：resource={ResourceToName(resType)}，session={sessionType}，hwnd={parentHwnd}，取URL耗时={urlElapsed}ms，播放耗时={playElapsed}ms，总耗时={totalSw.ElapsedMilliseconds}ms，player={(player is MjpegPreviewController ? "mjpeg" : "vlc")}，network_cache={_networkCachingMs}ms，live_cache={_liveCachingMs}ms，transport={_rtspTransport}");
+            Logger.Debug($"预览启动明细：resource={ResourceToName(resType)}，session={sessionType}，hwnd={parentHwnd}，耗时={totalSw.ElapsedMilliseconds}ms");
 
-            Logger.Info($"预览已启动: {ResourceToName(resType)} {sessionType} -> hwnd={parentHwnd}");
+            Logger.Info($"预览已启动: {ResourceToName(resType)} {sessionType}");
             return true;
         }
 
@@ -453,18 +371,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     srcW, srcH, swap, visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
                 if (mjpegPlayer != null && mjpegPlayer.IsRunning)
                 {
-                    Logger.Info($"预览播放器选择：HTTP MJPEG，description={description}，url={previewUrl}");
+                    Logger.Debug($"预览播放器选择: mjpeg");
                     return mjpegPlayer;
                 }
 
-                Logger.Warn($"HTTP MJPEG预览失败，回退至VLC：description={description}，url={previewUrl}");
+                Logger.Debug($"HTTP MJPEG预览失败，回退到VLC: {description}");
             }
 
             var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
                 visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
-                Logger.Info($"预览播放器选择：VLC，description={description}，url={previewUrl}");
+                Logger.Debug($"预览播放器选择: vlc");
 
             return vlcPlayer;
         }
@@ -554,7 +472,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sessions.Clear();
             if (!preserveRestartInfo)
                 _restartInfo.Clear();
-            Logger.Info("所有预览已停止");
+            Logger.Debug("所有预览已停止");
         }
 
         public async Task RestartPreviewsOnTerminalSwitch(string newTerminalBaseUrl, Func<bool> shouldContinue = null)
@@ -562,7 +480,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             await _operationLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                if (!CanContinue(shouldContinue))
+                if (shouldContinue != null && !shouldContinue())
                     return;
 
                 var restartList = new List<PreviewSession>(_restartInfo.Values);
@@ -570,12 +488,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 await Task.Delay(VlcReleaseSettleMs).ConfigureAwait(false);
 
-                if (!CanContinue(shouldContinue))
+                if (shouldContinue != null && !shouldContinue())
                     return;
 
                 if (restartList.Count == 0)
                 {
-                    Logger.Info("无活跃预览需要重启");
+                    Logger.Debug("无活跃预览需要重启");
                     return;
                 }
 
@@ -585,7 +503,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     var info = restartList[i];
 
-                    if (!CanContinue(shouldContinue))
+                    if (shouldContinue != null && !shouldContinue())
                         return;
 
                     try

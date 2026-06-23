@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "http_client.h"
 #include "logger.h"
 #include "path_helper.h"
@@ -26,7 +26,7 @@ HttpClient::HttpClient() {
                               WINHTTP_NO_PROXY_NAME,
                               WINHTTP_NO_PROXY_BYPASS, 0);
     if (!m_hSession) {
-        LOG_ERROR("HttpClient", "HTTP客户端初始化失败：WinHttpOpen error=%lu", GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP客户端初始化失败：WinHttpOpen 错误码=%lu", GetLastError());
     }
 }
 
@@ -48,7 +48,7 @@ bool HttpClient::PostJson(const std::string& url,
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HttpClient", "HTTP请求失败：WinHTTP session 未初始化");
+        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHTTP session 未初始化");
         return false;
     }
 
@@ -70,7 +70,7 @@ bool HttpClient::PostJson(const std::string& url,
     urlComp.dwExtraInfoLength = 256;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HttpClient", "HTTP请求失败：URL解析失败，url=%s", url.c_str());
+        LOG_ERROR("HTTP请求", "HTTP请求失败：URL解析失败，url=%s", url.c_str());
         return false;
     }
 
@@ -78,7 +78,7 @@ bool HttpClient::PostJson(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HttpClient", "HTTP请求失败：连接终端失败，host=%s，port=%d", PathHelper::WideToUtf8(hostName).c_str(), port);
+        LOG_ERROR("HTTP请求", "HTTP请求失败：连接终端失败，host=%s，port=%d", PathHelper::WideToUtf8(hostName).c_str(), port);
         return false;
     }
 
@@ -89,7 +89,7 @@ bool HttpClient::PostJson(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HttpClient", "HTTP请求失败：WinHttpOpenRequest 失败");
+        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHttpOpenRequest 失败");
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -106,14 +106,14 @@ bool HttpClient::PostJson(const std::string& url,
                             (LPVOID)utf8Body.c_str(), (DWORD)utf8Body.size(),
                             (DWORD)utf8Body.size(), 0)) {
         DWORD err = GetLastError();
-        LOG_ERROR("HttpClient", "HTTP请求失败：发送请求失败，error=%lu", err);
+        LOG_ERROR("HTTP请求", "HTTP请求失败：发送请求失败，错误码=%lu", err);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR("HttpClient", "HTTP请求失败：接收响应失败，error=%lu", GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP请求失败：接收响应失败，错误码=%lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -144,7 +144,7 @@ bool HttpClient::PostJson(const std::string& url,
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
-    LOG_DEBUG("HttpClient", "HTTP POST完成：url=%s，status=%d，response_size=%zu",
+    LOG_DEBUG("HTTP请求", "HTTP POST完成：url=%s，status=%d，response_size=%zu",
               url.c_str(), responseStatusCode, responseBody.size());
 
     return true;
@@ -159,7 +159,7 @@ bool HttpClient::Get(const std::string& url,
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：WinHTTP session 未初始化，url=%s", url.c_str());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：WinHTTP session 未初始化，url=%s", url.c_str());
         return false;
     }
 
@@ -177,7 +177,7 @@ bool HttpClient::Get(const std::string& url,
     urlComp.dwUrlPathLength = 1024;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：URL解析失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：URL解析失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
         return false;
     }
 
@@ -185,7 +185,7 @@ bool HttpClient::Get(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：创建连接失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：创建连接失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
         return false;
     }
 
@@ -195,7 +195,7 @@ bool HttpClient::Get(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：创建请求失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：创建请求失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -205,14 +205,14 @@ bool HttpClient::Get(const std::string& url,
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：发送请求失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：发送请求失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR("HttpClient", "HTTP GET失败：接收响应失败，url=%s，error=%lu", url.c_str(), GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP GET失败：接收响应失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -241,7 +241,7 @@ bool HttpClient::Get(const std::string& url,
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
-    LOG_DEBUG("HttpClient", "HTTP GET完成：url=%s，status=%d，response_size=%zu",
+    LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu",
               url.c_str(), responseStatusCode, responseBody.size());
 
     return true;

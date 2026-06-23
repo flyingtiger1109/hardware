@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "config_manager.h"
 #include "include/HZCYKJTHardWare_types.h"
 #include "logger.h"
@@ -7,34 +7,16 @@
 
 namespace HZCYKJTHardWare {
 
-namespace {
-
-std::string ResolveConfigPath(const std::string& dllDir) {
-    DWORD required = GetEnvironmentVariableW(L"HZCYKJTHARDWARE_CONFIG", nullptr, 0);
-    if (required > 1) {
-        std::wstring buffer(required, L'\0');
-        DWORD written = GetEnvironmentVariableW(L"HZCYKJTHARDWARE_CONFIG", &buffer[0], required);
-        if (written > 0 && written < required) {
-            buffer.resize(written);
-            return PathHelper::WideToUtf8(buffer);
-        }
-    }
-
-    return PathHelper::Join(dllDir, "HZCYKJTHardWare.json");
-}
-
-} // namespace
-
 int ConfigManager::Load(const std::string& dllDir) {
     // 始终先填充默认值，后续由 JSON 文件中存在的字段覆盖
     ApplyDefaults();
 
-    std::string configPath = ResolveConfigPath(dllDir);
+    std::string configPath = PathHelper::Join(dllDir, "HZCYKJTHardWare.json");
 
     if (!PathHelper::FileExists(configPath)) {
         m_hasConfigFile = false;
-        LOG_WARN("ConfigManager", "未找到 HZCYKJTHardWare.json，使用默认配置：path=%s", configPath.c_str());
-        LOG_DEBUG("ConfigManager", "默认配置：terminal.preferred_subnet_prefix=%s",
+        LOG_WARN("配置管理", "未找到 HZCYKJTHardWare.json，使用默认配置：path=%s", configPath.c_str());
+        LOG_DEBUG("配置管理", "默认配置：terminal.preferred_subnet_prefix=%s",
                  m_preferredSubnetPrefix.empty() ? "(empty)" : m_preferredSubnetPrefix.c_str());
         return HZCYKJTHardWare_RET_OK; // 不存在但可使用默认配置
     }
@@ -43,7 +25,7 @@ int ConfigManager::Load(const std::string& dllDir) {
     std::wstring wConfigPath = PathHelper::Utf8ToWide(configPath);
     std::ifstream file(wConfigPath, std::ios::in | std::ios::binary);
     if (!file.is_open()) {
-        LOG_ERROR("ConfigManager", "打开 HZCYKJTHardWare.json 失败：path=%s", configPath.c_str());
+        LOG_ERROR("配置管理", "打开 HZCYKJTHardWare.json 失败：path=%s", configPath.c_str());
         return HZCYKJTHardWare_RET_CONFIG_INVALID;
     }
 
@@ -59,11 +41,11 @@ int ConfigManager::Load(const std::string& dllDir) {
         return ret;
     }
 
-    LOG_INFO("ConfigManager", "配置文件加载成功：path=%s", configPath.c_str());
-    LOG_DEBUG("ConfigManager", "配置：terminal.mode=%s",
+    LOG_INFO("配置管理", "配置文件加载成功：path=%s", configPath.c_str());
+    LOG_DEBUG("配置管理", "配置：terminal.mode=%s",
              m_mode == TerminalMode::AutoSubnet ? "auto_subnet" :
              (m_mode == TerminalMode::FixedUrl ? "fixed_url" : "manual"));
-    LOG_DEBUG("ConfigManager", "配置：callback_server.auto_bind_lan_ip=%s", m_autoBindLanIp ? "true" : "false");
+    LOG_DEBUG("配置管理", "配置：callback_server.auto_bind_lan_ip=%s", m_autoBindLanIp ? "true" : "false");
 
     return HZCYKJTHardWare_RET_OK;
 }

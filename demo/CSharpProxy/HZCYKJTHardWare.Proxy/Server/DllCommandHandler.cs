@@ -23,7 +23,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly PreviewManager _previewManager;
         private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
         private readonly ConcurrentDictionary<string, string> _requestCallbacks;
-        private readonly ConcurrentDictionary<string, long> _requestTimestamps;
+        private readonly ConcurrentDictionary<string, long> _requestTimestamps = new ConcurrentDictionary<string, long>();
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
         private readonly QueueManager _queueManager;
@@ -36,7 +36,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             PreviewManager previewManager,
             ConcurrentDictionary<string, string> requestSaveDirs,
             ConcurrentDictionary<string, string> requestCallbacks,
-            ConcurrentDictionary<string, long> requestTimestamps,
             Action<string> log,
             Func<string> getCallbackBaseUrl,
             QueueManager queueManager)
@@ -47,7 +46,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             _previewManager = previewManager;
             _requestSaveDirs = requestSaveDirs;
             _requestCallbacks = requestCallbacks;
-            _requestTimestamps = requestTimestamps;
             _log = log;
             _getCallbackBaseUrl = getCallbackBaseUrl;
             _queueManager = queueManager;
@@ -63,9 +61,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (_queueManager.SwitchingTerminal)
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
-            // Dictionary cleanup: completed requests are removed on callback; this is only a timeout fallback.
+            // Dictionary cleanup: remove entries older than 60 seconds
             if (++_requestCount % 500 == 0)
-                CleanupExpiredRequests(TimeSpan.FromMinutes(10));
+                CleanupExpiredRequests(TimeSpan.FromSeconds(60));
 
             // Parse request fields
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
@@ -273,10 +271,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId, string callbackUrl)
         {
             if (!string.IsNullOrEmpty(callbackUrl) && !string.IsNullOrEmpty(requestId))
-            {
                 _requestCallbacks[requestId] = callbackUrl;
-                _requestTimestamps[requestId] = DateTime.UtcNow.Ticks;
-            }
 
             var name = JsonHelper.ExtractString(bodyUtf8, "XM");
             var sex = JsonHelper.ExtractString(bodyUtf8, "XB");
@@ -299,19 +294,19 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"" +
                 "}";
 
-            _log("[授权] 转发至终端: request_id=" + requestId);
+            _log("[授权] 转发至终端");
 
             var (ok, response) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
             if (ok)
             {
-                _log("[授权] 已受理: request_id=" + requestId);
+                _log("[授权] 已受理");
                 return "{\"accepted\":true}";
             }
 
             var code = ResultParser.ExtractErrorCode(response);
             var message = ResultParser.ExtractErrorMessage(response);
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
-            _log("[授权] 下发失败: request_id=" + requestId + ", " + detail);
+            _log("[授权] 下发失败: " + detail);
 
             if (string.IsNullOrEmpty(code))
                 code = "terminal_request_failed";

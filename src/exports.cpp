@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "include/HZCYKJTHardWare.h"
 #include "hzsjkjt_context.h"
 #include "config_manager.h"
@@ -70,7 +70,7 @@ public:
         requestId_ = requestId;
         hwnd_ = hwnd;
         hasPending_ = true;
-        LOG_INFO("EXPORT", "虹膜预览恢复请求已进入固定后台队列：request_id=%s", requestId_.c_str());
+        LOG_INFO("接口", "虹膜预览恢复已进入后台队列");
         cv_.notify_one();
     }
 
@@ -109,7 +109,7 @@ private:
             }
 
             if (delphiServerUrl.empty() || requestId.empty() || hwnd == nullptr) {
-                LOG_WARN("EXPORT", "虹膜预览恢复请求参数无效，已跳过：request_id=%s", requestId.c_str());
+                LOG_WARN("接口", "虹膜预览恢复请求参数无效，已跳过：request_id=%s", requestId.c_str());
                 continue;
             }
 
@@ -120,20 +120,20 @@ private:
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
                     if (hasPending_ || stopping_) {
-                        LOG_WARN("EXPORT", "虹膜预览恢复请求被新的切换恢复请求替换：request_id=%s", requestId.c_str());
+                        LOG_WARN("接口", "虹膜预览恢复请求被新的切换恢复请求替换：request_id=%s", requestId.c_str());
                         break;
                     }
                 }
                 if (proxy.GetIrisPreviewUrl(requestId, rtspUrl) &&
                     HZCYKJTHardWare::PreviewManager::Instance().StartIrisPreviewFromUrl(hwnd, rtspUrl) == HZCYKJTHardWare_RET_OK) {
-                    LOG_INFO("EXPORT", "切换终端后虹膜预览已后台恢复：request_id=%s", requestId.c_str());
+                    LOG_INFO("接口", "切换终端后虹膜预览已恢复");
                     restored = true;
                     break;
                 }
                 Sleep(200);
             }
             if (!restored) {
-                LOG_ERROR("EXPORT", "切换终端后虹膜预览后台恢复失败或已被替换：request_id=%s", requestId.c_str());
+                LOG_ERROR("接口", "切换终端后虹膜预览后台恢复失败或已被替换：request_id=%s", requestId.c_str());
             }
         }
     }
@@ -278,7 +278,7 @@ static bool FindProcessIdsForExecutablePath(const std::string& executablePath,
     std::wstring expectedPath = GetFullWindowsPath(executablePath);
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        LOG_WARN("EXPORT", "检查Delphi程序进程失败：error=%lu", GetLastError());
+        LOG_WARN("接口", "检查硬件控制程序进程失败：error=%lu", GetLastError());
         return false;
     }
 
@@ -289,7 +289,7 @@ static bool FindProcessIdsForExecutablePath(const std::string& executablePath,
             if (_wcsicmp(entry.szExeFile, executableName.c_str()) == 0) {
                 HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
                 if (!process) {
-                    LOG_WARN("EXPORT", "检查同名Delphi进程路径失败：pid=%lu，error=%lu",
+                    LOG_WARN("接口", "检查同名进程路径失败：pid=%lu，error=%lu",
                              entry.th32ProcessID, GetLastError());
                     continue;
                 }
@@ -317,7 +317,7 @@ static bool TerminateDelphiServiceProcesses(const std::string& executablePath,
             if (error == ERROR_INVALID_PARAMETER) {
                 continue;
             }
-            LOG_ERROR("EXPORT", "重启Delphi程序失败：无法打开待终止进程，path=%s，pid=%lu，error=%lu",
+            LOG_ERROR("接口", "重启硬件控制程序失败：无法打开待终止进程，path=%s，pid=%lu，error=%lu",
                       executablePath.c_str(), processId, error);
             return false;
         }
@@ -325,7 +325,7 @@ static bool TerminateDelphiServiceProcesses(const std::string& executablePath,
         if (!TerminateProcess(process, 1)) {
             DWORD error = GetLastError();
             CloseHandle(process);
-            LOG_ERROR("EXPORT", "重启Delphi程序失败：终止进程失败，path=%s，pid=%lu，error=%lu",
+            LOG_ERROR("接口", "重启硬件控制程序失败：终止进程失败，path=%s，pid=%lu，error=%lu",
                       executablePath.c_str(), processId, error);
             return false;
         }
@@ -333,11 +333,11 @@ static bool TerminateDelphiServiceProcesses(const std::string& executablePath,
         DWORD waitResult = WaitForSingleObject(process, 5000);
         CloseHandle(process);
         if (waitResult != WAIT_OBJECT_0) {
-            LOG_ERROR("EXPORT", "重启Delphi程序失败：等待旧进程退出超时，path=%s，pid=%lu，result=%lu",
+            LOG_ERROR("接口", "重启硬件控制程序失败：等待旧进程退出超时，path=%s，pid=%lu，result=%lu",
                       executablePath.c_str(), processId, waitResult);
             return false;
         }
-        LOG_INFO("EXPORT", "通信服务不可用，已终止旧Delphi程序：path=%s，pid=%lu",
+        LOG_INFO("接口", "通信服务不可用，已终止旧硬件控制程序：path=%s，pid=%lu",
                  executablePath.c_str(), processId);
     }
     return true;
@@ -350,7 +350,7 @@ static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
 
     executablePath = ResolveDelphiExecutablePath(cfg, dllDir);
     if (!PathHelper::FileExists(executablePath)) {
-        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：可执行文件不存在，path=%s", executablePath.c_str());
+        LOG_ERROR("接口", "自动启动硬件控制程序失败：可执行文件不存在，path=%s", executablePath.c_str());
         return false;
     }
 
@@ -375,12 +375,12 @@ static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
                                   &startupInfo,
                                   &processInfo);
     if (!created) {
-        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：CreateProcessW失败，path=%s，error=%lu",
+        LOG_ERROR("接口", "自动启动硬件控制程序失败：CreateProcessW失败，path=%s，error=%lu",
                   executablePath.c_str(), GetLastError());
         return false;
     }
 
-    LOG_INFO("EXPORT", "已自动启动Delphi程序：path=%s，pid=%lu",
+    LOG_INFO("接口", "已自动启动硬件控制程序：path=%s，pid=%lu",
              executablePath.c_str(), processInfo.dwProcessId);
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
@@ -408,27 +408,27 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
         return true;
     }
     if (!cfg.GetDelphiAutoStart()) {
-        LOG_ERROR("EXPORT", "Delphi程序/ping失败且自动启动未启用：delphi_server=%s",
+        LOG_ERROR("接口", "硬件控制程序/ping失败且自动启动未启用：服务地址=%s",
                   delphiServerUrl.c_str());
         return false;
     }
 
     std::string executablePath = ResolveDelphiExecutablePath(cfg, dllDir);
     if (!HZCYKJTHardWare::PathHelper::FileExists(executablePath)) {
-        LOG_ERROR("EXPORT", "自动启动Delphi程序失败：可执行文件不存在，path=%s", executablePath.c_str());
+        LOG_ERROR("接口", "自动启动硬件控制程序失败：可执行文件不存在，path=%s", executablePath.c_str());
         return false;
     }
 
     int intervalMs = cfg.GetDelphiPingIntervalMs();
     std::vector<DWORD> existingProcessIds;
     if (!FindProcessIdsForExecutablePath(executablePath, existingProcessIds)) {
-        LOG_ERROR("EXPORT", "自动恢复Delphi程序失败：无法检查同路径进程，path=%s",
+        LOG_ERROR("接口", "自动恢复硬件控制程序失败：无法检查同路径进程，path=%s",
                   executablePath.c_str());
         return false;
     }
 
     if (!existingProcessIds.empty()) {
-        LOG_WARN("EXPORT", "Delphi程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，delphi_server=%s",
+        LOG_WARN("接口", "硬件控制程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，服务地址=%s",
                  executablePath.c_str(), existingProcessIds.front(), delphiServerUrl.c_str());
         if (!TerminateDelphiServiceProcesses(executablePath, existingProcessIds)) {
             return false;
@@ -441,12 +441,11 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
 
     int waitMs = cfg.GetDelphiStartWaitMs();
     if (WaitForDelphiService(proxy, waitMs, intervalMs)) {
-        LOG_INFO("EXPORT", "自动启动后的Delphi通信服务已就绪：delphi_server=%s，path=%s",
-                 delphiServerUrl.c_str(), executablePath.c_str());
+        LOG_INFO("接口", "硬件控制程序通信服务已就绪");
         return true;
     }
 
-    LOG_ERROR("EXPORT", "启动Delphi程序后等待/ping超时：delphi_server=%s，path=%s，wait_ms=%d",
+    LOG_ERROR("接口", "启动硬件控制程序后等待/ping超时：服务地址=%s，path=%s，wait_ms=%d",
               delphiServerUrl.c_str(), executablePath.c_str(), waitMs);
     return false;
 }
@@ -549,7 +548,7 @@ static int InitSdkBody() {
     std::string callbackUrl = "http://" + callbackHost + ":" +
         std::to_string(callbackPort) + cfg.GetCallbackBasePath();
 
-    LOG_DEBUG("EXPORT", "正在启动Delphi回调接收服务：listen=%s:%d，callback_url=%s",
+    LOG_DEBUG("接口", "正在启动硬件控制程序回调接收服务：listen=%s:%d，回调地址=%s",
              listenHost.c_str(), callbackPort, callbackUrl.c_str());
 
     {
@@ -561,7 +560,7 @@ static int InitSdkBody() {
 
     ret = CallbackServer::Instance().Start(listenHost, callbackPort);
     if (ret != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi回调接收服务启动失败，listen=%s:%d", listenHost.c_str(), callbackPort);
+        LOG_ERROR("接口", "初始化DLL失败：硬件控制程序回调接收服务启动失败，listen=%s:%d", listenHost.c_str(), callbackPort);
         Logger::Instance().Shutdown();
         return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
     }
@@ -572,11 +571,11 @@ static int InitSdkBody() {
 
     EventDispatcher::Instance().Start();
 
-    LOG_INFO("EXPORT", "初始化DLL：正在检查Delphi通信服务，delphi_server=%s，auto_start=%s",
+    LOG_INFO("接口", "初始化DLL：正在检查硬件控制程序通信服务，服务地址=%s，自动启动=%s",
              delphiServerUrl.c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
     DelphiProxy proxy(delphiServerUrl);
     if (!EnsureDelphiServiceAvailable(proxy, cfg, ctx.dll_dir, delphiServerUrl)) {
-        LOG_ERROR("EXPORT", "初始化DLL失败：Delphi程序/ping不可用，delphi_server=%s", delphiServerUrl.c_str());
+        LOG_ERROR("接口", "初始化DLL失败：硬件控制程序/ping不可用，服务地址=%s", delphiServerUrl.c_str());
         EventDispatcher::Instance().Stop();
         CallbackServer::Instance().Stop();
         {
@@ -594,15 +593,14 @@ static int InitSdkBody() {
         ctx.initialized = true;
     }
 
-    LOG_INFO("EXPORT", "初始化DLL成功：delphi_server=%s，callback_url=%s，dll_dir=%s",
-             delphiServerUrl.c_str(), callbackUrl.c_str(), ctx.dll_dir.c_str());
+    LOG_INFO("接口", "初始化DLL成功");
 
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int ReleaseSdkBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：ReleaseSdk()");
+    //LOG_INFO("接口", "释放SDK");
 
     auto& ctx = HzsjkjtContext::Instance();
 
@@ -636,7 +634,7 @@ static int SetTerminalBaseUrlBody(const char* baseUrl) {
     using namespace HZCYKJTHardWare;
     if (!baseUrl || !baseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("EXPORT", "代理模式不支持DLL直连终端URL：base_url=%s，实际终端由Delphi程序管理", baseUrl);
+    LOG_WARN("接口", "代理模式不支持DLL直连终端URL：地址=%s，实际终端由硬件控制程序管理", baseUrl);
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
@@ -691,7 +689,7 @@ static int SetSavePathBody(const char* savePath) {
 
 static int SwitchTerminalBody(int terminalIndex) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：SwitchTerminal(%d)", terminalIndex);
+    LOG_INFO("接口", "切换终端：%d", terminalIndex);
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (terminalIndex <= 0) return HZCYKJTHardWare_RET_TERMINAL_INDEX_INVALID;
@@ -700,14 +698,14 @@ static int SwitchTerminalBody(int terminalIndex) {
     {
         auto lock = ReadLock();
         if (ctx.current_terminal_index == terminalIndex) {
-            LOG_INFO("EXPORT", "终端切换请求跳过：当前已在终端%d", terminalIndex);
+            LOG_INFO("接口", "终端切换请求跳过：当前已在终端%d", terminalIndex);
             return HZCYKJTHardWare_RET_OK;
         }
     }
 
     SwitchPendingScope switchScope(ctx.switch_pending);
     if (!switchScope.acquired) {
-        LOG_WARN("EXPORT", "终端切换请求被拒绝：已有切换正在执行，terminal_index=%d", terminalIndex);
+        LOG_WARN("接口", "终端切换请求被拒绝：已有切换正在执行，terminal_index=%d", terminalIndex);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
@@ -727,7 +725,7 @@ static int SwitchTerminalBody(int terminalIndex) {
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.SwitchTerminal(terminalIndex)) {
-        LOG_ERROR("EXPORT", "终端切换失败：DLL转发Delphi程序失败，terminal_index=%d", terminalIndex);
+        LOG_ERROR("接口", "终端切换失败：DLL转发硬件控制程序失败，terminal_index=%d", terminalIndex);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -739,10 +737,10 @@ static int SwitchTerminalBody(int terminalIndex) {
     if (irisRunning) {
         PreviewManager::Instance().StopIrisPreviewRenderer(false);
         IrisPreviewRestoreWorker::Instance().Enqueue(delphiServerUrl, irisRequestId, irisHwnd);
-        LOG_INFO("EXPORT", "终端切换已受理，虹膜预览恢复转入后台固定队列：request_id=%s", irisRequestId.c_str());
+        LOG_INFO("接口", "终端切换已受理，虹膜预览恢复转入后台队列");
     }
 
-    LOG_INFO("EXPORT", "终端切换指令已受理：terminal_index=%d", terminalIndex);
+    LOG_INFO("接口", "终端切换已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -750,7 +748,7 @@ static int SwitchTerminalByUrlBody(const char* terminalBaseUrl) {
     using namespace HZCYKJTHardWare;
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!terminalBaseUrl || !terminalBaseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
-    LOG_WARN("EXPORT", "代理模式不支持DLL按URL切换终端：terminal_base_url=%s，实际终端由Delphi程序管理", terminalBaseUrl);
+    LOG_WARN("接口", "代理模式不支持DLL按URL切换终端：terminal_地址=%s，实际终端由硬件控制程序管理", terminalBaseUrl);
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
@@ -786,7 +784,7 @@ static int CheckTerminalStatusBody() {
 
 static int StartProcessBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StartProcess(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "开始流程");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -805,18 +803,18 @@ static int StartProcessBody(const char* saveDir) {
         "}}";
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "开始流程被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "开始流程被终端切换拦截：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "开始流程被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "开始流程被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
-        LOG_ERROR("EXPORT", "开始流程失败：DLL转发Delphi程序失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -825,13 +823,13 @@ static int StartProcessBody(const char* saveDir) {
         ctx.process_active = true;
     }
 
-    LOG_INFO("EXPORT", "Delphi程序已受理开始流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    LOG_INFO("接口", "开始流程已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int EndProcessBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：EndProcess()");
+    //LOG_INFO("接口", "结束流程");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -847,11 +845,11 @@ static int EndProcessBody() {
     }
 
     if (!ok) {
-        LOG_ERROR("EXPORT", "结束流程失败：DLL转发Delphi程序失败，delphi_server=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "Delphi程序已处理结束流程：delphi_server=%s", ctx.delphi_server_url.c_str());
+    LOG_INFO("接口", "结束流程已处理");
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -859,11 +857,11 @@ static int EndProcessBody() {
 
 static int StartCameraPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StartCameraPreview(hwnd=%p)", hwnd);
+    LOG_INFO("接口", "开始摄像头预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("EXPORT", "启动摄像头预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动摄像头预览失败：第三方HWND无效，hwnd=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
@@ -874,7 +872,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.camera_preview_running) {
-            LOG_WARN("EXPORT", "启动摄像头预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口", "启动摄像头预览失败：预览已运行，request_id=%s",
                      ctx.camera_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -886,7 +884,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "摄像头预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "摄像头预览启动被终端切换拦截：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -906,7 +904,7 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "摄像头预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "摄像头预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -917,7 +915,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动摄像头预览失败：向Delphi程序下发外部渲染请求失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "启动摄像头预览失败：向硬件控制程序下发外部渲染请求失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), delphiServerUrl.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
@@ -928,14 +926,13 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "摄像头预览已由Delphi外部渲染启动：request_id=%s，third_party_hwnd=%p",
-             requestId.c_str(), hwnd);
+    LOG_INFO("接口", "摄像头预览已启动");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StopCameraPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StopCameraPreview()");
+    LOG_INFO("接口", "停止摄像头预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -954,7 +951,7 @@ static int StopCameraPreviewBody() {
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopCameraPreview(requestId)) {
-        LOG_ERROR("EXPORT", "停止摄像头预览失败：向Delphi程序下发停止请求失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "停止摄像头预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), delphiServerUrl.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -968,17 +965,17 @@ static int StopCameraPreviewBody() {
         }
     }
 
-    LOG_INFO("EXPORT", "摄像头预览已停止：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "摄像头预览已停止");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StartFingerprintPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StartFingerprintPreview(hwnd=%p)", hwnd);
+    LOG_INFO("接口", "开始指纹预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("EXPORT", "启动指纹预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动指纹预览失败：第三方HWND无效，hwnd=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
@@ -989,7 +986,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_running) {
-            LOG_WARN("EXPORT", "启动指纹预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口", "启动指纹预览失败：预览已运行，request_id=%s",
                      ctx.fingerprint_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -1001,7 +998,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "指纹预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "指纹预览启动被终端切换拦截：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1021,7 +1018,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "指纹预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "指纹预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1032,7 +1029,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartFingerprintPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("EXPORT", "启动指纹预览失败：向Delphi程序下发外部渲染请求失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口", "启动指纹预览失败：向硬件控制程序下发外部渲染请求失败，request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1042,14 +1039,13 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("EXPORT", "指纹预览已由Delphi外部渲染启动：request_id=%s，third_party_hwnd=%p",
-             requestId.c_str(), hwnd);
+    LOG_INFO("接口", "指纹预览已启动");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StopFingerprintPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StopFingerprintPreview()");
+    LOG_INFO("接口", "停止指纹预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1068,7 +1064,7 @@ static int StopFingerprintPreviewBody() {
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopFingerprintPreview(requestId)) {
-        LOG_ERROR("EXPORT", "停止指纹预览失败：向Delphi程序下发停止请求失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "停止指纹预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), delphiServerUrl.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
@@ -1082,17 +1078,17 @@ static int StopFingerprintPreviewBody() {
         }
     }
 
-    LOG_INFO("EXPORT", "指纹预览已停止：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "指纹预览已停止");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StartIrisPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StartIrisPreview(hwnd=%p)", hwnd);
+    LOG_INFO("接口", "开始虹膜预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("EXPORT", "启动虹膜预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动虹膜预览失败：第三方HWND无效，hwnd=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
@@ -1103,7 +1099,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.iris_preview_running) {
-            LOG_WARN("EXPORT", "启动虹膜预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口", "启动虹膜预览失败：预览已运行，request_id=%s",
                      ctx.iris_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -1114,7 +1110,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "虹膜预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "虹膜预览启动被终端切换拦截：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1126,7 +1122,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "虹膜预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "虹膜预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1137,7 +1133,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.GetIrisPreviewUrl(requestId, rtspUrl)) {
-        LOG_ERROR("EXPORT", "启动虹膜预览失败：向Delphi程序获取预览地址失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口", "启动虹膜预览失败：向硬件控制程序获取预览地址失败，request_id=%s", requestId.c_str());
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1161,14 +1157,13 @@ static int StartIrisPreviewBody(void* hwnd) {
     PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE,
                      HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STARTED,
                      HZCYKJTHardWare_RET_OK, "", "预览已就绪");
-    LOG_INFO("EXPORT", "虹膜预览已在第三方进程启动：request_id=%s，third_party_hwnd=%p",
-             requestId.c_str(), hwnd);
+    LOG_INFO("接口", "虹膜预览已启动");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StopIrisPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StopIrisPreview()");
+    LOG_INFO("接口", "停止虹膜预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1192,23 +1187,23 @@ static int StopIrisPreviewBody() {
         }
     }
 
-    LOG_INFO("EXPORT", "虹膜预览已停止：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "虹膜预览已停止");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int StartPlatePreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StartPlatePreview(hwnd=%p)", hwnd);
+    LOG_INFO("接口", "开始车牌预览");
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("EXPORT", "代理模式暂不支持车牌预览：未定义Delphi HTTP端点，已拒绝调用");
+    LOG_WARN("接口", "代理模式暂不支持车牌预览：未定义HTTP端点，已拒绝调用");
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
 static int StopPlatePreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：StopPlatePreview()");
+    LOG_INFO("接口", "停止车牌预览");
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("EXPORT", "代理模式暂不支持停止车牌预览：未定义Delphi HTTP端点，已拒绝调用");
+    LOG_WARN("接口", "代理模式暂不支持停止车牌预览：未定义HTTP端点，已拒绝调用");
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
@@ -1216,7 +1211,7 @@ static int StopPlatePreviewBody() {
 
 static int CaptureCameraImageBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：CaptureCameraImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "人脸抓拍");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1225,35 +1220,35 @@ static int CaptureCameraImageBody(const char* saveDir) {
     std::string savePath;
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "人脸抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "人脸抓拍被终端切换拦截：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "人脸抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "人脸抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
-        LOG_ERROR("EXPORT", "人脸抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "人脸抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
     // 终端切换抢断：如果HTTP执行期间发生了切换，丢弃结果
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "人脸抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "人脸抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("EXPORT", "人脸抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
+    LOG_INFO("接口", "人脸抓拍成功");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int CaptureFingerprintImageBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：CaptureFingerprintImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "指纹抓拍");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1262,34 +1257,34 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
     std::string savePath;
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "指纹抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "指纹抓拍被终端切换拦截：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     BusyGuard guard;
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "指纹抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "指纹抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {
-        LOG_ERROR("EXPORT", "指纹抓拍失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "指纹抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "指纹抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "指纹抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("EXPORT", "指纹抓拍成功：request_id=%s，save_path=%s", requestId.c_str(), savePath.c_str());
+    LOG_INFO("接口", "指纹抓拍成功");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int CaptureIrisImageBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：CaptureIrisImage(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "虹膜抓拍");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1301,7 +1296,7 @@ static int CaptureIrisImageBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "虹膜抓拍被终端切换拦截：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -1311,13 +1306,13 @@ static int CaptureIrisImageBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "虹膜抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "虹膜抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("EXPORT", "虹膜抓拍提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "虹膜抓拍提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "虹膜抓拍请求发送失败",
@@ -1327,13 +1322,13 @@ static int CaptureIrisImageBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("EXPORT", "Delphi程序已受理虹膜抓拍请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    LOG_INFO("接口", "虹膜抓拍已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int RequestOCRBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：RequestOCR(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "OCR识别");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1344,7 +1339,7 @@ static int RequestOCRBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "OCR请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "OCR请求被终端切换拦截：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -1354,13 +1349,13 @@ static int RequestOCRBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "OCR请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "OCR请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("EXPORT", "OCR请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("接口", "OCR请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "OCR识别请求发送失败",
@@ -1370,13 +1365,13 @@ static int RequestOCRBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("EXPORT", "Delphi程序已受理OCR请求：request_id=%s，callback_url=%s", requestId.c_str(), callbackUrl.c_str());
+    LOG_INFO("接口", "OCR请求已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
 static int RequestNfcCardBody(const char* saveDir) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：RequestNfcCard(saveDir=%s)", saveDir ? saveDir : "NULL");
+    //LOG_INFO("接口", "IC卡识别");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1388,7 +1383,7 @@ static int RequestNfcCardBody(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "NFC请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "NFC请求被终端切换拦截：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -1398,13 +1393,13 @@ static int RequestNfcCardBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "NFC请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "NFC请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
-        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发Delphi程序失败，request_id=%s，delphi_server=%s",
+        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "", "IC卡识别请求发送失败",
@@ -1414,8 +1409,7 @@ static int RequestNfcCardBody(const char* saveDir) {
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("NFC", "Delphi程序已受理IC卡识别请求：request_id=%s，callback_url=%s",
-             requestId.c_str(), callbackUrl.c_str());
+    LOG_INFO("NFC", "IC卡识别已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1424,8 +1418,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
                                 const char* XB, const char* CSRQ,
                                 const char* KADM) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("EXPORT", "第三方调用：RequestAuthorize(ZJHM=%s, XM=%s, XB=%s)",
-             ZJHM ? ZJHM : "NULL", XM ? XM : "NULL", XB ? XB : "NULL");
+    //LOG_INFO("接口", "授权请求");
 
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
@@ -1437,7 +1430,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
 
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -1447,7 +1440,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("EXPORT", "授权请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口", "授权请求被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -1461,7 +1454,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
                                 CSRQ ? CSRQ : "",
                                 KADM ? KADM : "",
                                 callbackUrl)) {
-        LOG_ERROR("EXPORT", "授权请求提交失败：DLL转发Delphi程序失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
                          HZCYKJTHardWare_RET_HTTP_FAILED, "",
@@ -1472,7 +1465,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
     }
 
     RequestSessionManager::Instance().MarkAccepted(requestId);
-    LOG_INFO("EXPORT", "Delphi程序已受理授权请求：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "授权请求已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 

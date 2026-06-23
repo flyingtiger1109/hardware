@@ -128,25 +128,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 _stopRequested = true;
                 Logger.Warn($"提交VLC预览停止请求失败：{_description}，错误={ex.Message}");
+                return;
             }
 
-            if (!_stopRequested)
-            {
-                var completed = await Task.WhenAny(stopTcs.Task, Task.Delay(timeoutMs)).ConfigureAwait(false);
+            var completed = await Task.WhenAny(stopTcs.Task, Task.Delay(timeoutMs)).ConfigureAwait(false);
             if (completed != stopTcs.Task)
             {
                 Logger.Warn($"VLC预览停止超时：{_description}，timeout={timeoutMs}ms。后台线程将继续尝试释放资源。");
-            }
-        }
-
-            if (_thread.IsAlive)
-            {
-                var joinTimeout = Math.Min(500, Math.Max(100, timeoutMs));
-                var joined = await Task.Run(() => _thread.Join(joinTimeout)).ConfigureAwait(false);
-                if (!joined)
-                {
-                    Logger.Warn($"VLC预览线程等待退出超时：{_description}，timeout={joinTimeout}ms，已请求停止={_stopRequested}");
-                }
             }
         }
 

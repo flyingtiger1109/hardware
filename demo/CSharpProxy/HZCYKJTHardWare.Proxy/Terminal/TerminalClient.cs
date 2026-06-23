@@ -28,31 +28,18 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             _httpClient.DefaultRequestHeaders.ConnectionClose = false;  // Enable keep-alive
         }
 
-        public async Task<(bool ok, string response)> PostJsonAsync(string baseUrl, string path, string bodyUtf8,
-            int timeoutMs = 0, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<(bool ok, string response)> PostJsonAsync(string baseUrl, string path, string bodyUtf8, int timeoutMs = 0)
         {
             var url = baseUrl.TrimEnd('/') + path;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            CancellationTokenSource timeoutCts = null;
-            CancellationTokenSource linkedCts = null;
+            CancellationTokenSource cts = null;
             try
             {
                 if (timeoutMs > 0)
-                    timeoutCts = new CancellationTokenSource(timeoutMs);
-
-                var requestToken = cancellationToken;
-                if (timeoutCts != null && cancellationToken.CanBeCanceled)
-                {
-                    linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
-                    requestToken = linkedCts.Token;
-                }
-                else if (timeoutCts != null)
-                {
-                    requestToken = timeoutCts.Token;
-                }
+                    cts = new CancellationTokenSource(timeoutMs);
 
                 using (var content = new StringContent(bodyUtf8, Encoding.UTF8, "application/json"))
-                using (var response = await _httpClient.PostAsync(url, content, requestToken).ConfigureAwait(false))
+                using (var response = await _httpClient.PostAsync(url, content, cts?.Token ?? CancellationToken.None).ConfigureAwait(false))
                 {
                     var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     sw.Stop();
@@ -71,12 +58,6 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             catch (TaskCanceledException)
             {
                 sw.Stop();
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    Logger.Warn($"[终端请求] POST {path} 已取消，耗时={sw.ElapsedMilliseconds}ms");
-                    return (false, "{\"error\":true,\"code\":\"cancelled\"}");
-                }
-
                 var timeoutText = timeoutMs > 0 ? timeoutMs + "ms" : _httpClient.Timeout.TotalSeconds + "s";
                 Logger.Error($"[终端请求] POST {path} 超时: timeout={timeoutText}, 耗时={sw.ElapsedMilliseconds}ms");
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
@@ -95,8 +76,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             }
             finally
             {
-                linkedCts?.Dispose();
-                timeoutCts?.Dispose();
+                cts?.Dispose();
             }
         }
 

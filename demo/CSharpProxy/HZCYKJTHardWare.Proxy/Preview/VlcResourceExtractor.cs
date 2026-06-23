@@ -50,7 +50,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     if (resourceNames.Length == 0)
                     {
-                        Logger.Warn("未找到内置VLC资源，将尝试使用外部VLC运行库。");
+                        Logger.Warn("No embedded VLC resources found. Falling back to external VLC.");
                         return null;
                     }
 

@@ -114,13 +114,9 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
              st.wYear, st.wMonth, st.wDay,
              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 
-    char moduleFunction[256];
-    snprintf(moduleFunction, sizeof(moduleFunction), "%s/%s",
-             module ? module : "", ShortFunctionName(function));
-
     char lineBuf[4608];
     snprintf(lineBuf, sizeof(lineBuf), "[%s] [%s] [%s] %s\n",
-             timeBuf, LevelToString(level), moduleFunction, msgBuf);
+             timeBuf, LevelToString(level), module ? module : "", msgBuf);
 
     EnterCriticalSection(&m_cs);
     std::string desiredLogPath = GetLogFilePath();

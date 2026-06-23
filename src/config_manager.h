@@ -22,9 +22,9 @@ struct TerminalDeviceConfig {
 class ConfigManager {
 public:
     // 加载配置：
-    // 1. 优先读取环境变量 HZCYKJTHARDWARE_CONFIG 指定的 JSON 文件
-    // 2. 未设置时读取 dllDir 下的 HZCYKJTHardWare.json
-    // 3. 不存在则使用默认配置；JSON 格式错误返回 HZCYKJTHardWare_RET_CONFIG_INVALID
+    // 1. 优先读取 dllDir 下的 HZCYKJTHardWare.json
+    // 2. 不存在则使用默认配置
+    // 3. JSON 格式错误返回 HZCYKJTHardWare_RET_CONFIG_INVALID
     int Load(const std::string& dllDir);
 
     // 访问器

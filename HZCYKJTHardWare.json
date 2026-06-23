@@ -10,7 +10,7 @@
   "terminal_callback_server": {
     "listen_host": "0.0.0.0",
     "public_host": "",
-    "port": 8089,
+    "port": 8088,
     "path": "/terminal-callback"
   },
   "terminal": {

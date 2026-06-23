@@ -5,7 +5,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     public class TerminalManager
     {
         private readonly string[] _terminalUrls = new string[2];
-        private readonly string[] _terminalNames = new string[2];
+        private readonly string[] _terminalNames = { "左通道", "右通道" };
         private int _currentIndex = 1; // 1-based
         private readonly object _lock = new object();
 
@@ -19,8 +19,6 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var cfg = AppConfig.Instance;
             _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
             _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
-            _terminalNames[0] = cfg.Terminal1Name;
-            _terminalNames[1] = cfg.Terminal2Name;
         }
 
         public int CurrentIndex
@@ -57,7 +55,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         {
             if (index < 1 || index > 2) return false;
             lock (_lock) { _currentIndex = index; }
-            Logger.Info($"已切换到 {CurrentName} ({CurrentBaseUrl})");
+            Logger.Info($"已切换到终端: {CurrentName}");
             return true;
         }
 
@@ -66,8 +64,6 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var cfg = AppConfig.Instance;
             _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
             _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
-            _terminalNames[0] = cfg.Terminal1Name;
-            _terminalNames[1] = cfg.Terminal2Name;
         }
     }
 }
