@@ -35,6 +35,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ConcurrentDictionary<string, string> _requestCallbacks = new ConcurrentDictionary<string, string>();
 
         private readonly Action<string> _log;
+        private readonly Action<bool> _onProcessStateChanged;
         private string _lanIp;
 
         public string LanIp => _lanIp;
@@ -52,9 +53,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             return AppConfig.Instance.GetTerminalCallbackBaseUrl(_lanIp);
         }
 
-        public ProxyServer(Action<string> log)
+        public ProxyServer(Action<string> log, Action<bool> onProcessStateChanged = null)
         {
             _log = log;
+            _onProcessStateChanged = onProcessStateChanged;
             _terminalManager = new TerminalManager();
             _terminalClient = new TerminalClient();
             _dllCallback = new DllCallbackSender();
@@ -74,7 +76,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             _commandHandler = new DllCommandHandler(
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
                 _requestSaveDirs, _requestCallbacks, _log,
-                GetTerminalCallbackBaseUrl, _queueManager);
+                GetTerminalCallbackBaseUrl, _queueManager, _onProcessStateChanged);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _dllCallback,
@@ -389,6 +391,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (ok)
             {
                 _terminalManager.ProcessActive = true;
+                _onProcessStateChanged?.Invoke(true);
                 _log("[流程] 终端流程已开始，save_dir=" + _terminalManager.ProcessSaveDir);
                 return "OK";
             }
@@ -398,6 +401,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         public string EndProcess()
         {
             _terminalManager.ProcessActive = false;
+            _onProcessStateChanged?.Invoke(false);
             _terminalManager.ProcessSaveDir = "";
             _commandHandler.ClearAllMappings();
             _log("[流程] 流程已结束");
@@ -443,7 +447,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body, 4500)
+            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body, 2500)
                 .GetAwaiter().GetResult();
             if (!ok) return (false, "");
 
@@ -480,7 +484,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
-            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body, 4500)
+            var (ok, response) = _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body, 2500)
                 .GetAwaiter().GetResult();
             if (!ok) return (false, "");
 

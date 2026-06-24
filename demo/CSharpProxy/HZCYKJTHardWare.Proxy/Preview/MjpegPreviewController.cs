@@ -17,7 +17,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
     {
         private const int ReadBufferSize = 8192;
         private const int MaxBufferedBytes = 8 * 1024 * 1024;
-        private const int RenderIntervalMs = 15;
+        private const int RenderIntervalMs = 33;
+        private const int ReconnectMaxRetries = 5;
+        private const int ReconnectDelayMs = 3000;
 
         private readonly TaskCompletionSource<bool> _startTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -237,63 +239,78 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void ReadLoop()
         {
             var buffer = new List<byte>(ReadBufferSize * 4);
-            try
-            {
-                var request = CreateRequest();
-                lock (_requestLock)
-                    _request = request;
+            int retryCount = 0;
 
-                using (var response = (HttpWebResponse)request.GetResponse())
-                using (var stream = response.GetResponseStream())
+            while (!_stopRequested && !_cts.IsCancellationRequested)
+            {
+                try
                 {
-                    Logger.Debug($"HTTP MJPEG流已打开: {_description}");
-                    if (stream == null)
+                    var request = CreateRequest();
+                    lock (_requestLock)
+                        _request = request;
+
+                    using (var response = (HttpWebResponse)request.GetResponse())
+                    using (var stream = response.GetResponseStream())
                     {
+                        Logger.Debug($"HTTP MJPEG流已打开: {_description}");
+                        retryCount = 0; // 连接成功，重置重试计数
+
+                        if (stream == null)
+                        {
+                            _startTcs.TrySetResult(false);
+                            return;
+                        }
+
+                        var readBuffer = new byte[ReadBufferSize];
+                        while (!_stopRequested && !_cts.IsCancellationRequested)
+                        {
+                            var read = stream.Read(readBuffer, 0, readBuffer.Length);
+                            if (read <= 0)
+                                break;
+
+                            AppendBytes(buffer, readBuffer, read);
+                            ExtractFrames(buffer);
+                        }
+                    }
+
+                    if (!_stopRequested)
+                    {
+                        Logger.Warn($"HTTP MJPEG流结束: {_description}");
+                        _startTcs.TrySetResult(false);
+                    }
+                    return;
+                }
+                catch (WebException ex)
+                {
+                    if (_stopRequested) return;
+                    retryCount++;
+                    if (retryCount >= ReconnectMaxRetries)
+                    {
+                        Logger.Warn($"HTTP MJPEG重连失败({ReconnectMaxRetries}次): {_description}, error={ex.Message}");
                         _startTcs.TrySetResult(false);
                         return;
                     }
-
-                    var readBuffer = new byte[ReadBufferSize];
-                    while (!_stopRequested && !_cts.IsCancellationRequested)
+                    Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后重连({retryCount}/{ReconnectMaxRetries}): {_description}, error={ex.Message}");
+                    Thread.Sleep(ReconnectDelayMs);
+                }
+                catch (Exception ex)
+                {
+                    if (_stopRequested) return;
+                    retryCount++;
+                    if (retryCount >= ReconnectMaxRetries)
                     {
-                        var read = stream.Read(readBuffer, 0, readBuffer.Length);
-                        if (read <= 0)
-                            break;
-
-                        AppendBytes(buffer, readBuffer, read);
-                        ExtractFrames(buffer);
+                        Logger.Warn($"HTTP MJPEG重连失败({ReconnectMaxRetries}次): {_description}, error={ex.Message}");
+                        _startTcs.TrySetResult(false);
+                        return;
                     }
+                    Logger.Warn($"HTTP MJPEG异常，{ReconnectDelayMs / 1000}秒后重连({retryCount}/{ReconnectMaxRetries}): {_description}, error={ex.Message}");
+                    Thread.Sleep(ReconnectDelayMs);
                 }
-
-                if (!_stopRequested)
+                finally
                 {
-                    Logger.Warn($"HTTP MJPEG stream ended: {_description}, url={_url}");
-                    _startTcs.TrySetResult(false);
+                    lock (_requestLock)
+                        _request = null;
                 }
-            }
-            catch (WebException ex)
-            {
-                if (!_stopRequested)
-                {
-                    Logger.Warn($"HTTP MJPEG stream error: {_description}, status={ex.Status}, error={ex.Message}");
-                    _startTcs.TrySetResult(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                if (!_stopRequested)
-                {
-                    Logger.Warn($"HTTP MJPEG reader exception: {_description}, error={ex.Message}");
-                    _startTcs.TrySetResult(false);
-                }
-            }
-            finally
-            {
-                lock (_requestLock)
-                    _request = null;
-
-                if (!_stopRequested)
-                    _stopRequested = true;
             }
         }
 

@@ -27,6 +27,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
         private readonly QueueManager _queueManager;
+        private readonly Action<bool> _onProcessStateChanged;
         private int _requestCount;
 
         public DllCommandHandler(
@@ -38,7 +39,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             ConcurrentDictionary<string, string> requestCallbacks,
             Action<string> log,
             Func<string> getCallbackBaseUrl,
-            QueueManager queueManager)
+            QueueManager queueManager,
+            Action<bool> onProcessStateChanged = null)
         {
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
@@ -49,6 +51,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             _log = log;
             _getCallbackBaseUrl = getCallbackBaseUrl;
             _queueManager = queueManager;
+            _onProcessStateChanged = onProcessStateChanged;
         }
 
         public async Task<string> HandleAsync(string method, string path, string bodyUtf8)
@@ -230,6 +233,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (ok)
             {
                 _terminalManager.ProcessActive = true;
+                _onProcessStateChanged?.Invoke(true);
                 _log("[流程] 流程已开始, save_dir=" + _terminalManager.ProcessSaveDir);
                 return "{\"status\":\"ok\"}";
             }
@@ -239,6 +243,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private string HandleProcessEnd()
         {
             _terminalManager.ProcessActive = false;
+            _onProcessStateChanged?.Invoke(false);
             _terminalManager.ProcessSaveDir = "";
             _requestSaveDirs.Clear();
             _requestCallbacks.Clear();

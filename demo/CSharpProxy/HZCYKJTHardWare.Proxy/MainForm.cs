@@ -22,6 +22,7 @@ namespace HZCYKJTHardWare.Proxy
         private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
         private int _pendingUiLogCount;
         private bool _exitRequested;
+        private int _headerTerminalIndex = 1;
 
         private string _historyCurrentFile;
         private bool _isLoadingHistory;
@@ -36,6 +37,7 @@ namespace HZCYKJTHardWare.Proxy
 
         private void MainForm_Load(object sender, EventArgs e)
         {
+            UpdateHeaderStatus();
             Logger.Info("应用程序启动中...");
             memoLog.ScrolledToTop += OnLogScrolledToTop;
             // Auto-start server on launch
@@ -231,14 +233,16 @@ namespace HZCYKJTHardWare.Proxy
             if (_server != null) return;
             try
             {
-                _server = new ProxyServer(AppendLog);
+                _server = new ProxyServer(AppendLog, OnProcessStateChanged);
                 _server.Start();
-                btnStartServer.Enabled = false;
+                btnStartServer.Enabled = true;
                 btnStopServer.Enabled = true;
+                UpdateHeaderStatus();
                 AppendLog("服务已启动");
             }
             catch (Exception ex)
             {
+                UpdateHeaderStatus();
                 AppendLog("启动服务失败: " + ex.Message);
             }
         }
@@ -257,12 +261,95 @@ namespace HZCYKJTHardWare.Proxy
                 _server = null;
                 btnStartServer.Enabled = true;
                 btnStopServer.Enabled = false;
+                UpdateHeaderStatus();
+                ResetPreviewButtonStates();
+                SetPersistentButtonStyle(btnStartProcess, false);
                 AppendLog("服务已停止");
             }
             catch (Exception ex)
             {
+                UpdateHeaderStatus();
                 AppendLog("停止服务失败: " + ex.Message);
             }
+        }
+
+        private void UpdateHeaderStatus()
+        {
+            var isRunning = btnStopServer != null && btnStopServer.Enabled;
+            lblServiceStatus.Text = isRunning ? "● 运行中" : "● 已停止";
+            lblServiceStatus.ForeColor = isRunning
+                ? Color.FromArgb(22, 163, 74)
+                : Color.FromArgb(100, 116, 139);
+            SetPersistentButtonStyle(btnStartServer, isRunning);
+            SetPersistentButtonStyle(btnSwitchTerminal1, _headerTerminalIndex == 1);
+            SetPersistentButtonStyle(btnSwitchTerminal2, _headerTerminalIndex == 2);
+
+            try
+            {
+                var config = AppConfig.Instance;
+                lblDllListenValue.Text = string.Format("{0}:{1}", config.DllServerHost, config.DllServerPort);
+                lblCallbackListenValue.Text = string.Format("{0}:{1}", config.CallbackListenHost, config.CallbackListenPort);
+
+                var terminalName = _headerTerminalIndex == 1 ? "终端 1 / 左通道" : "终端 2 / 右通道";
+                var hostSuffix = _headerTerminalIndex == 1
+                    ? config.Terminal1HostSuffix
+                    : config.Terminal2HostSuffix;
+                var terminalUrl = string.Format(
+                    "{0}://{1}.{2}:{3}",
+                    config.TerminalScheme,
+                    config.SubnetPrefix,
+                    hostSuffix,
+                    config.TerminalPort);
+                lblTerminalValue.Text = string.Format("{0} ({1})", terminalName, terminalUrl);
+            }
+            catch (Exception ex)
+            {
+                lblDllListenValue.Text = "配置读取失败";
+                lblCallbackListenValue.Text = "配置读取失败";
+                lblTerminalValue.Text = "配置读取失败";
+                Logger.Warn("Header 配置状态更新失败: " + ex.Message);
+            }
+        }
+
+        private void OnProcessStateChanged(bool active)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<bool>(OnProcessStateChanged), active);
+                return;
+            }
+            SetPersistentButtonStyle(btnStartProcess, active);
+        }
+
+        private void SetPersistentButtonStyle(Button button, bool active)
+        {
+            button.FlatStyle = FlatStyle.Flat;
+            button.UseVisualStyleBackColor = false;
+            button.BackColor = active
+                ? Color.FromArgb(13, 110, 253)
+                : Color.White;
+            button.ForeColor = active
+                ? Color.White
+                : Color.FromArgb(13, 110, 253);
+            button.FlatAppearance.BorderColor = active
+                ? Color.FromArgb(13, 110, 253)
+                : Color.FromArgb(191, 219, 254);
+            button.FlatAppearance.MouseOverBackColor = active
+                ? Color.FromArgb(11, 94, 215)
+                : Color.FromArgb(239, 246, 255);
+        }
+
+        private void SetPreviewButtonState(Button startButton, Button stopButton, bool isPreviewing)
+        {
+            SetPersistentButtonStyle(startButton, isPreviewing);
+            SetPersistentButtonStyle(stopButton, false);
+        }
+
+        private void ResetPreviewButtonStates()
+        {
+            SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
+            SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
+            SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
         }
 
         // --- Terminal operations ---
@@ -271,6 +358,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.StartProcess(AppConfig.Instance.DefaultSaveDir));
+            SetPersistentButtonStyle(btnStartProcess, string.Equals(result, "OK", StringComparison.OrdinalIgnoreCase));
             AppendLog("开始流程: " + result);
         }
 
@@ -278,6 +366,8 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.EndProcess());
+            if (string.Equals(result, "OK", StringComparison.OrdinalIgnoreCase))
+                SetPersistentButtonStyle(btnStartProcess, false);
             AppendLog("结束流程: " + result);
         }
 
@@ -285,6 +375,8 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(1));
+            _headerTerminalIndex = 1;
+            UpdateHeaderStatus();
             AppendLog("切换到左通道: " + result);
         }
 
@@ -292,6 +384,8 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(2));
+            _headerTerminalIndex = 2;
+            UpdateHeaderStatus();
             AppendLog("切换到右通道: " + result);
         }
 
@@ -336,6 +430,7 @@ namespace HZCYKJTHardWare.Proxy
             btnStartCameraPreview.Enabled = false;
             var ok = await _server.StartLocalPreviewAsync("camera", panelCamera);
             btnStartCameraPreview.Enabled = true;
+            SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, ok);
             AppendLog(ok ? "摄像头预览已启动" : "摄像头预览启动失败");
         }
 
@@ -343,6 +438,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             _server.StopLocalPreview("camera");
+            SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
             AppendLog("摄像头预览已停止");
         }
 
@@ -352,6 +448,7 @@ namespace HZCYKJTHardWare.Proxy
             btnStartFingerprintPreview.Enabled = false;
             var ok = await _server.StartLocalPreviewAsync("fingerprint", panelFingerprint);
             btnStartFingerprintPreview.Enabled = true;
+            SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, ok);
             AppendLog(ok ? "指纹预览已启动" : "指纹预览启动失败");
         }
 
@@ -359,6 +456,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             _server.StopLocalPreview("fingerprint");
+            SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
             AppendLog("指纹预览已停止");
         }
 
@@ -368,6 +466,7 @@ namespace HZCYKJTHardWare.Proxy
             btnStartIrisPreview.Enabled = false;
             var ok = await _server.StartLocalPreviewAsync("iris", panelIris);
             btnStartIrisPreview.Enabled = true;
+            SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, ok);
             AppendLog(ok ? "虹膜预览已启动" : "虹膜预览启动失败");
         }
 
@@ -375,6 +474,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             _server.StopLocalPreview("iris");
+            SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
             AppendLog("虹膜预览已停止");
         }
 
@@ -628,6 +728,11 @@ namespace HZCYKJTHardWare.Proxy
                 return files.Length > 0 ? files[0] : null;
             }
             catch { return null; }
+        }
+
+        private void lblPageTitle_Click(object sender, EventArgs e)
+        {
+
         }
     }
 }
