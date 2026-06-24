@@ -4,7 +4,7 @@ using System.Windows.Forms;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
-    public class LogTextBox : TextBox
+    public class LogTextBox : RichTextBox
     {
         private const int WM_VSCROLL = 0x0115;
         private const int WM_MOUSEWHEEL = 0x020A;

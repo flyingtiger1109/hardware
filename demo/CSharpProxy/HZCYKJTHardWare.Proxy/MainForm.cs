@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -24,6 +25,11 @@ namespace HZCYKJTHardWare.Proxy
         private bool _exitRequested;
         private int _headerTerminalIndex = 1;
 
+        private System.Windows.Forms.Timer _monitorTimer;
+        private DateTime _processStartTime = DateTime.Now;
+        private TimeSpan _lastCpuTime;
+        private DateTime _lastCpuSample;
+
         private string _historyCurrentFile;
         private bool _isLoadingHistory;
         private int _historyLoadedLineCount;
@@ -31,8 +37,154 @@ namespace HZCYKJTHardWare.Proxy
         public MainForm()
         {
             InitializeComponent();
+
+            // 1. 设置工具栏安全高度 (稍微加大到 60，给高 DPI 留足垂直空间)
+            panelLogToolbar.Height = 60;
+
+            // 2. 恢复原生勾选状态，并开启 AutoSize 测量真实文字宽高
+            chkAutoScroll.Appearance = Appearance.Normal;
+            chkErrorOnly.Appearance = Appearance.Normal;
+            chkAutoScroll.AutoSize = true;
+            chkErrorOnly.AutoSize = true;
+
+            // 动态计算需要的宽度和高度！(核心修复：不再写死 32 高度)
+            int targetHeight = Math.Max(32, chkAutoScroll.PreferredSize.Height + 12);
+            int autoWidth = chkAutoScroll.PreferredSize.Width + 16;
+            int errWidth = chkErrorOnly.PreferredSize.Width + 16;
+
+            // 3. 动态创建带边框的 Panel 作为包裹外壳
+            Panel pnlAuto = new Panel
+            {
+                Size = new Size(autoWidth, targetHeight), // 宽度和高度全部动态分配
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.White,
+                Padding = new Padding(8, 0, 0, 0)
+            };
+            chkAutoScroll.AutoSize = false;
+            chkAutoScroll.Parent = pnlAuto;
+            chkAutoScroll.Dock = DockStyle.Fill;
+            pnlAuto.Parent = panelLogToolbar;
+
+            Panel pnlError = new Panel
+            {
+                Size = new Size(errWidth, targetHeight),
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.White,
+                Padding = new Padding(8, 0, 0, 0)
+            };
+            chkErrorOnly.AutoSize = false;
+            chkErrorOnly.Parent = pnlError;
+            chkErrorOnly.Dock = DockStyle.Fill;
+            pnlError.Parent = panelLogToolbar;
+
+            // 4. 动态设置右侧按钮的宽度，高度与前面的复选框外壳保持一致
+            btnClearLog.AutoSize = true;
+            btnExportLog.AutoSize = true;
+            int clearWidth = btnClearLog.PreferredSize.Width + 24;
+            int exportWidth = btnExportLog.PreferredSize.Width + 24;
+
+            btnClearLog.AutoSize = false;
+            btnExportLog.AutoSize = false;
+            btnClearLog.Size = new Size(clearWidth, targetHeight);
+            btnExportLog.Size = new Size(exportWidth, targetHeight);
+
+            // 统一按钮的扁平化边框风格
+            Button[] buttons = { btnClearLog, btnExportLog };
+            foreach (var btn in buttons)
+            {
+                btn.FlatStyle = FlatStyle.Flat;
+                btn.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+                btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+                btn.BackColor = Color.White;
+            }
+
+            // 5. 绝对对齐与锚定 (排队逻辑)
+            pnlAuto.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            pnlError.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            btnClearLog.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            btnExportLog.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+
+            int gap = 20;
+            // 核心修复：根据实际算出的高度，动态计算 Y 坐标，确保完美垂直居中，绝不触底！
+            int alignY = (panelLogToolbar.Height - targetHeight) / 2;
+
+            pnlAuto.Location = new Point(16, alignY);
+            pnlError.Location = new Point(pnlAuto.Right + gap, alignY);
+            btnClearLog.Location = new Point(pnlError.Right + gap, alignY);
+            btnExportLog.Location = new Point(btnClearLog.Right + gap, alignY);
+
+            InitCardLayouts();
+            ApplyUIPolish();
             InitializeTrayIcon();
             InitializeUiLogTimer();
+            InitializeMonitorTimer();
+            UpdateMonitorInfo();
+        }
+
+        private void InitCardLayouts()
+        {
+            SetupGrid2x3(tlpService);
+            AddToGrid(tlpService, 0, 0, btnStartServer, "启动服务", btnStartServer_Click);
+            AddToGrid(tlpService, 1, 0, btnStopServer, "停止服务", btnStopServer_Click);
+            AddToGrid(tlpService, 0, 1, btnStartProcess, "开始流程", btnStartProcess_Click);
+            AddToGrid(tlpService, 1, 1, btnEndProcess, "结束流程", btnEndProcess_Click);
+            AddToGrid(tlpService, 0, 2, btnSwitchTerminal1, "左通道", btnSwitchTerminal1_Click);
+            AddToGrid(tlpService, 1, 2, btnSwitchTerminal2, "右通道", btnSwitchTerminal2_Click);
+
+            SetupGrid2x3(tlpOperation);
+            AddToGrid(tlpOperation, 0, 0, btnFaceCapture, "人脸抓拍", btnFaceCapture_Click);
+            AddToGrid(tlpOperation, 1, 0, btnFingerprintCapture, "指纹抓拍", btnFingerprintCapture_Click);
+            AddToGrid(tlpOperation, 0, 1, btnOCR, "OCR 阅读", btnOCR_Click);
+            AddToGrid(tlpOperation, 1, 1, btnNfcCard, "IC 卡识别", btnNfcCard_Click);
+            AddToGrid(tlpOperation, 0, 2, btnIrisCapture, "虹膜抓拍", btnIrisCapture_Click);
+            AddToGrid(tlpOperation, 1, 2, btnAuthorize, "授权测试", btnAuthorize_Click);
+
+            SetupGrid2x4(tlpPreviewControl);
+            AddToGrid(tlpPreviewControl, 0, 0, btnStartCameraPreview, "开始摄像头预览", btnStartCameraPreview_Click);
+            AddToGrid(tlpPreviewControl, 1, 0, btnStopCameraPreview, "停止摄像头预览", btnStopCameraPreview_Click);
+            AddToGrid(tlpPreviewControl, 0, 1, btnStartFingerprintPreview, "开始指纹预览", btnStartFingerprintPreview_Click);
+            AddToGrid(tlpPreviewControl, 1, 1, btnStopFingerprintPreview, "停止指纹预览", btnStopFingerprintPreview_Click);
+            AddToGrid(tlpPreviewControl, 0, 2, btnStartIrisPreview, "开始虹膜预览", btnStartIrisPreview_Click);
+            AddToGrid(tlpPreviewControl, 1, 2, btnStopIrisPreview, "停止虹膜预览", btnStopIrisPreview_Click);
+            AddToGrid(tlpPreviewControl, 0, 3, btnStartPlatePreview, "开始车牌预览", btnStartPlatePreview_Click);
+            AddToGrid(tlpPreviewControl, 1, 3, btnStopPlatePreview, "停止车牌预览", btnStopPlatePreview_Click);
+        }
+
+        private void ApplyUIPolish()
+        {
+            // 1. Card title separators
+            AddSeparator(cardService);
+            AddSeparator(cardOperation);
+            AddSeparator(cardPreviewControl);
+
+            // 2. Force 50/50 columns + percent row heights
+            ResetGridStyles(tlpService, 3);
+            ResetGridStyles(tlpOperation, 3);
+            ResetGridStyles(tlpPreviewControl, 4);
+
+            // 3. Video container
+            panelPreview.BackColor = Color.FromArgb(249, 250, 251);
+            panelPreview.Padding = new Padding(12, 8, 12, 12);
+        }
+
+        private static void AddSeparator(Control parent)
+        {
+            var sep = new Panel { Height = 1, Dock = DockStyle.Top, BackColor = Color.FromArgb(229, 231, 235) };
+            parent.Controls.Add(sep);
+            parent.Controls.SetChildIndex(sep, 1);
+        }
+
+        private static void ResetGridStyles(TableLayoutPanel tlp, int rowCount)
+        {
+            tlp.ColumnStyles.Clear();
+            tlp.ColumnCount = 2;
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+
+            tlp.RowStyles.Clear();
+            float pct = 100f / rowCount;
+            for (int i = 0; i < rowCount; i++)
+                tlp.RowStyles.Add(new RowStyle(SizeType.Percent, pct));
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -40,8 +192,14 @@ namespace HZCYKJTHardWare.Proxy
             UpdateHeaderStatus();
             Logger.Info("应用程序启动中...");
             memoLog.ScrolledToTop += OnLogScrolledToTop;
-            // Auto-start server on launch
-            BeginInvoke(new Action(() => btnStartServer_Click(null, null)));
+            chkAutoScroll.CheckedChanged += (s, ev) => memoLog.AutoScroll = chkAutoScroll.Checked;
+            btnClearLog.Click += (s, ev) => ClearLog();
+            btnExportLog.Click += (s, ev) => ExportLog();
+            // Auto-start server on launch (direct call for immediate listener startup)
+            btnStartServer_Click(null, null);
+
+            // Minimize early to avoid stealing focus from third-party caller
+            try { WindowState = FormWindowState.Minimized; } catch { }
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
@@ -174,6 +332,49 @@ namespace HZCYKJTHardWare.Proxy
             return selectedAction;
         }
 
+        private void SetupGrid2x3(TableLayoutPanel tlp)
+        {
+            tlp.ColumnCount = 2;
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            tlp.RowCount = 3;
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333F));
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333F));
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 33.334F));
+            tlp.Dock = DockStyle.Fill;
+        }
+
+        private void SetupGrid2x4(TableLayoutPanel tlp)
+        {
+            tlp.ColumnCount = 2;
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            tlp.RowCount = 4;
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            tlp.Dock = DockStyle.Fill;
+        }
+
+        private void AddToGrid(TableLayoutPanel tlp, int col, int row, Button btn, string text, EventHandler handler)
+        {
+            btn.BackColor = Color.White;
+            btn.FlatStyle = FlatStyle.Flat;
+            btn.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            btn.FlatAppearance.BorderSize = 1;
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(219, 229, 254);
+            btn.Font = new Font("Microsoft YaHei", 9F);
+            btn.ForeColor = Color.FromArgb(13, 110, 253);
+            btn.Text = text;
+            btn.UseVisualStyleBackColor = false;
+            btn.Dock = DockStyle.Fill;
+            btn.Margin = new Padding(4);
+            btn.Click += handler;
+            tlp.Controls.Add(btn, col, row);
+        }
+
         private void RequestApplicationExit()
         {
             _exitRequested = true;
@@ -192,10 +393,25 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
+        private bool _suppressTrayHide;
+
+        internal void SetMinimizeToTaskbar()
+        {
+            _suppressTrayHide = true;
+            WindowState = FormWindowState.Minimized;
+            _suppressTrayHide = false;
+        }
+
         private void HideToTray()
         {
             try
             {
+                if (_suppressTrayHide)
+                {
+                    ShowInTaskbar = true;
+                    _trayIcon.Visible = true;
+                    return;
+                }
                 ShowInTaskbar = false;
                 Hide();
                 _trayIcon.Visible = true;
@@ -226,6 +442,15 @@ namespace HZCYKJTHardWare.Proxy
             _uiLogTimer = new System.Windows.Forms.Timer { Interval = 250 };
             _uiLogTimer.Tick += (s, e) => FlushPendingUiLogs();
             _uiLogTimer.Start();
+        }
+
+        private void InitializeMonitorTimer()
+        {
+            _lastCpuSample = DateTime.Now;
+            _lastCpuTime = Process.GetCurrentProcess().TotalProcessorTime;
+            _monitorTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _monitorTimer.Tick += (s, e) => UpdateMonitorInfo();
+            _monitorTimer.Start();
         }
 
         private void btnStartServer_Click(object sender, EventArgs e)
@@ -283,6 +508,7 @@ namespace HZCYKJTHardWare.Proxy
             SetPersistentButtonStyle(btnStartServer, isRunning);
             SetPersistentButtonStyle(btnSwitchTerminal1, _headerTerminalIndex == 1);
             SetPersistentButtonStyle(btnSwitchTerminal2, _headerTerminalIndex == 2);
+            SetBusinessButtonsEnabled(isRunning);
 
             try
             {
@@ -350,6 +576,92 @@ namespace HZCYKJTHardWare.Proxy
             SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
             SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
             SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
+        }
+
+        private void SetBusinessButtonsEnabled(bool enabled)
+        {
+            btnStartProcess.Enabled = enabled;
+            btnEndProcess.Enabled = enabled;
+            btnSwitchTerminal1.Enabled = enabled;
+            btnSwitchTerminal2.Enabled = enabled;
+            btnFaceCapture.Enabled = enabled;
+            btnFingerprintCapture.Enabled = enabled;
+            btnOCR.Enabled = enabled;
+            btnNfcCard.Enabled = enabled;
+            btnIrisCapture.Enabled = enabled;
+            btnAuthorize.Enabled = enabled;
+            btnStartCameraPreview.Enabled = enabled;
+            btnStopCameraPreview.Enabled = enabled;
+            btnStartFingerprintPreview.Enabled = enabled;
+            btnStopFingerprintPreview.Enabled = enabled;
+            btnStartIrisPreview.Enabled = enabled;
+            btnStopIrisPreview.Enabled = enabled;
+            btnStartPlatePreview.Enabled = enabled;
+            btnStopPlatePreview.Enabled = enabled;
+        }
+
+        private void UpdateMonitorInfo()
+        {
+            try
+            {
+                var proc = Process.GetCurrentProcess();
+                var now = DateTime.Now;
+                var cpuTime = proc.TotalProcessorTime;
+
+                var elapsed = (now - _lastCpuSample).TotalMilliseconds;
+                int cpu = 0;
+                if (elapsed > 0)
+                {
+                    var cpuUsed = (cpuTime - _lastCpuTime).TotalMilliseconds;
+                    cpu = (int)(cpuUsed / (Environment.ProcessorCount * elapsed) * 100);
+                }
+                _lastCpuTime = cpuTime;
+                _lastCpuSample = now;
+
+                long memMb = 0;
+                try { memMb = proc.PrivateMemorySize64 / 1024 / 1024; } catch { }
+
+                var uptime = now - _processStartTime;
+                var uptimeStr = uptime.TotalDays >= 1
+                    ? $"{(int)uptime.TotalDays}d {(int)uptime.Hours:D2}:{uptime.Minutes:D2}:{uptime.Seconds:D2}"
+                    : $"{(int)uptime.TotalHours:D2}:{uptime.Minutes:D2}:{uptime.Seconds:D2}";
+
+                var queueText = "";
+                try
+                {
+                    if (_server?.QueueManager != null)
+                    {
+                        var stats = _server.QueueManager.GetAllStats();
+                        if (!string.IsNullOrEmpty(stats))
+                        {
+                            var lines = stats.Split('\n');
+                            int queued = 0;
+                            foreach (var line in lines)
+                            {
+                                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                                for (int i = 0; i < parts.Length; i++)
+                                {
+                                    if (parts[i].StartsWith("当前="))
+                                    {
+                                        var val = parts[i].Substring(3).Split('/')[0];
+                                        int.TryParse(val, out var q);
+                                        queued += q;
+                                    }
+                                }
+                            }
+                            if (queued > 0)
+                                queueText = $" | 队列: {queued}";
+                        }
+                    }
+                }
+                catch { }
+
+                lblMonitorValue.Text = $"CPU: {cpu}% \r\n内存: {memMb}MB\r\n运行时间: {uptimeStr}{queueText}";
+            }
+            catch
+            {
+                lblMonitorValue.Text = "CPU: -- | 内存: --\r\n运行时间: --";
+            }
         }
 
         // --- Terminal operations ---
@@ -431,6 +743,7 @@ namespace HZCYKJTHardWare.Proxy
             var ok = await _server.StartLocalPreviewAsync("camera", panelCamera);
             btnStartCameraPreview.Enabled = true;
             SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, ok);
+            lblCameraPlaceholder.Visible = !ok;
             AppendLog(ok ? "摄像头预览已启动" : "摄像头预览启动失败");
         }
 
@@ -439,6 +752,7 @@ namespace HZCYKJTHardWare.Proxy
             if (_server == null) return;
             _server.StopLocalPreview("camera");
             SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
+            lblCameraPlaceholder.Visible = true;
             AppendLog("摄像头预览已停止");
         }
 
@@ -449,6 +763,7 @@ namespace HZCYKJTHardWare.Proxy
             var ok = await _server.StartLocalPreviewAsync("fingerprint", panelFingerprint);
             btnStartFingerprintPreview.Enabled = true;
             SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, ok);
+            lblFingerprintPlaceholder.Visible = !ok;
             AppendLog(ok ? "指纹预览已启动" : "指纹预览启动失败");
         }
 
@@ -457,6 +772,7 @@ namespace HZCYKJTHardWare.Proxy
             if (_server == null) return;
             _server.StopLocalPreview("fingerprint");
             SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
+            lblFingerprintPlaceholder.Visible = true;
             AppendLog("指纹预览已停止");
         }
 
@@ -467,6 +783,7 @@ namespace HZCYKJTHardWare.Proxy
             var ok = await _server.StartLocalPreviewAsync("iris", panelIris);
             btnStartIrisPreview.Enabled = true;
             SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, ok);
+            lblIrisPlaceholder.Visible = !ok;
             AppendLog(ok ? "虹膜预览已启动" : "虹膜预览启动失败");
         }
 
@@ -475,6 +792,7 @@ namespace HZCYKJTHardWare.Proxy
             if (_server == null) return;
             _server.StopLocalPreview("iris");
             SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
+            lblIrisPlaceholder.Visible = true;
             AppendLog("虹膜预览已停止");
         }
 
@@ -555,10 +873,23 @@ namespace HZCYKJTHardWare.Proxy
         {
             try
             {
-                memoLog.AppendText(text);
+                if (chkErrorOnly.Checked)
+                {
+                    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    var filtered = new StringBuilder();
+                    foreach (var line in lines)
+                    {
+                        if (line.Contains("[错误]") || line.Contains("[警告]"))
+                            filtered.AppendLine(line);
+                    }
+                    if (filtered.Length == 0) return;
+                    text = filtered.ToString();
+                }
+
+                SafeAppendLog(text);
                 _uiLogLineCount += lineCount;
 
-                // Trim in batches. Reading memoLog.Lines on every log is expensive during high-frequency requests.
+                // Trim in batches
                 if (_uiLogLineCount > MaxLogLines + TrimLogLinesBatch)
                 {
                     var lines = memoLog.Lines;
@@ -587,6 +918,33 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
+        private void SafeAppendLog(string text)
+        {
+            try
+            {
+                memoLog.SuspendLayout();
+                var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var line in lines)
+                {
+                    Color foreColor = memoLog.ForeColor;
+                    if (line.Contains("[错误]") || line.Contains("失败"))
+                        foreColor = Color.FromArgb(239, 68, 68);
+                    else if (line.Contains("[警告]"))
+                        foreColor = Color.FromArgb(234, 179, 8);
+
+                    memoLog.SelectionStart = memoLog.TextLength;
+                    memoLog.SelectionColor = foreColor;
+                    memoLog.AppendText(line + Environment.NewLine);
+                }
+                memoLog.SelectionColor = memoLog.ForeColor;
+                memoLog.ResumeLayout();
+            }
+            catch
+            {
+                try { memoLog.ResumeLayout(); } catch { }
+            }
+        }
+
         private void DisposeTrayResources()
         {
             if (_trayIcon != null)
@@ -608,6 +966,12 @@ namespace HZCYKJTHardWare.Proxy
                 _uiLogTimer.Stop();
                 _uiLogTimer.Dispose();
                 _uiLogTimer = null;
+            }
+            if (_monitorTimer != null)
+            {
+                _monitorTimer.Stop();
+                _monitorTimer.Dispose();
+                _monitorTimer = null;
             }
         }
 
@@ -730,9 +1094,34 @@ namespace HZCYKJTHardWare.Proxy
             catch { return null; }
         }
 
-        private void lblPageTitle_Click(object sender, EventArgs e)
+        private void ClearLog()
         {
+            try
+            {
+                memoLog.Clear();
+                _uiLogLineCount = 0;
+                while (_pendingUiLogs.TryDequeue(out _)) { }
+                _pendingUiLogCount = 0;
+            }
+            catch { }
+        }
 
+        private void ExportLog()
+        {
+            try
+            {
+                using (var dlg = new SaveFileDialog())
+                {
+                    dlg.Filter = "日志文件|*.log|文本文件|*.txt";
+                    dlg.FileName = $"日志导出_{DateTime.Now:yyyyMMdd_HHmmss}.log";
+                    if (dlg.ShowDialog() == DialogResult.OK)
+                    {
+                        File.WriteAllText(dlg.FileName, memoLog.Text, Encoding.UTF8);
+                        AppendLog("日志已导出: " + dlg.FileName);
+                    }
+                }
+            }
+            catch { }
         }
     }
 }

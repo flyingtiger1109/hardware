@@ -422,17 +422,14 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             try
             {
-                var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] : null;
+                var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] as MainForm : null;
                 if (form != null && form.InvokeRequired)
                 {
-                    form.BeginInvoke(new Action(() =>
-                    {
-                        form.WindowState = FormWindowState.Minimized;
-                    }));
+                    form.BeginInvoke(new Action(() => form.SetMinimizeToTaskbar()));
                 }
                 else if (form != null)
                 {
-                    form.WindowState = FormWindowState.Minimized;
+                    form.SetMinimizeToTaskbar();
                 }
             }
             catch { /* Best-effort, must not crash */ }
