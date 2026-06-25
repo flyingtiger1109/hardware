@@ -197,9 +197,6 @@ namespace HZCYKJTHardWare.Proxy
             btnExportLog.Click += (s, ev) => ExportLog();
             // Auto-start server on launch (direct call for immediate listener startup)
             btnStartServer_Click(null, null);
-
-            // Minimize early to avoid stealing focus from third-party caller
-            try { WindowState = FormWindowState.Minimized; } catch { }
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
@@ -933,6 +930,7 @@ namespace HZCYKJTHardWare.Proxy
                         foreColor = Color.FromArgb(234, 179, 8);
 
                     memoLog.SelectionStart = memoLog.TextLength;
+                    memoLog.SelectionFont = memoLog.Font;
                     memoLog.SelectionColor = foreColor;
                     memoLog.AppendText(line + Environment.NewLine);
                 }
