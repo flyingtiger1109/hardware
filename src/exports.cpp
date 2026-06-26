@@ -16,6 +16,8 @@
 #include "result_parser.h"
 #include "image_saver.h"
 #include <tlhelp32.h>
+#include <functional>
+#include <future>
 
 // Export function implementations use small body helpers so SEH wrappers do not
 // span C++ object lifetimes.
@@ -53,6 +55,248 @@ struct SwitchPendingScope {
 // 检查终端切换是否进行中；切换期间拒绝新操作，保证切换优先
 static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
+}
+
+struct BlockingBusyGuard {
+    bool acquired;
+
+    explicit BlockingBusyGuard(int waitMs) : acquired(false) {
+        auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+        const ULONGLONG startTick = GetTickCount64();
+        const int sleepMs = 10;
+
+        while (!IsSwitchPending()) {
+            bool expected = false;
+            if (ctx.http_busy.compare_exchange_strong(expected, true)) {
+                acquired = true;
+                return;
+            }
+
+            if (waitMs <= 0 ||
+                static_cast<int>(GetTickCount64() - startTick) >= waitMs) {
+                return;
+            }
+
+            Sleep(sleepMs);
+        }
+    }
+
+    ~BlockingBusyGuard() {
+        if (acquired) {
+            HZCYKJTHardWare::HzsjkjtContext::Instance().http_busy = false;
+        }
+    }
+};
+
+class DllTaskQueue {
+public:
+    explicit DllTaskQueue(const char* name) : name_(name ? name : "task") {
+        worker_ = std::thread([this]() { Run(); });
+    }
+
+    ~DllTaskQueue() {
+        Stop();
+    }
+
+    int Execute(std::function<int()> work, int waitTimeoutMs) {
+        auto task = std::make_shared<Task>();
+        task->work = std::move(work);
+        auto future = task->promise.get_future();
+
+        std::shared_ptr<Task> replaced;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stopping_) {
+                return HZCYKJTHardWare_RET_DEVICE_BUSY;
+            }
+            if (pending_) {
+                replaced = pending_;
+                LOG_WARN("DLL队列", "%s queue pending task replaced by latest request", name_.c_str());
+            }
+            pending_ = task;
+        }
+
+        CompleteTask(replaced, HZCYKJTHardWare_RET_DEVICE_BUSY);
+        cv_.notify_one();
+
+        if (waitTimeoutMs <= 0) {
+            waitTimeoutMs = GetDefaultQueueWaitTimeoutMs();
+        }
+
+        if (future.wait_for(std::chrono::milliseconds(waitTimeoutMs)) == std::future_status::ready) {
+            return future.get();
+        }
+
+        bool removed = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (pending_ == task) {
+                pending_.reset();
+                removed = true;
+            }
+        }
+
+        CompleteTask(task, HZCYKJTHardWare_RET_TIMEOUT);
+        LOG_WARN("DLL队列", "%s queue request timeout%s", name_.c_str(), removed ? " before execution" : " while executing");
+        return HZCYKJTHardWare_RET_TIMEOUT;
+    }
+
+    void ClearPending(int result) {
+        std::shared_ptr<Task> pending;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending = pending_;
+            pending_.reset();
+        }
+
+        if (pending) {
+            LOG_WARN("DLL队列", "%s queue pending task cleared", name_.c_str());
+        }
+        CompleteTask(pending, result);
+    }
+
+private:
+    struct Task {
+        std::function<int()> work;
+        std::promise<int> promise;
+        std::atomic<bool> completed{false};
+    };
+
+    static int GetDefaultQueueWaitTimeoutMs() {
+        auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+        int waitMs = ctx.http_connect_timeout_ms + ctx.http_request_timeout_ms + 5000;
+        return waitMs > 0 ? waitMs : 10000;
+    }
+
+    static void CompleteTask(const std::shared_ptr<Task>& task, int result) {
+        if (!task) {
+            return;
+        }
+        if (!task->completed.exchange(true)) {
+            try {
+                task->promise.set_value(result);
+            } catch (...) {
+                // Promise may already be abandoned during process teardown.
+            }
+        }
+    }
+
+    void Stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stopping_) {
+                return;
+            }
+            stopping_ = true;
+        }
+        ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    void Run() {
+        for (;;) {
+            std::shared_ptr<Task> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [this]() { return stopping_ || pending_; });
+                if (stopping_) {
+                    return;
+                }
+                task = pending_;
+                pending_.reset();
+            }
+
+            if (!task || task->completed.load()) {
+                continue;
+            }
+
+            int result = HZCYKJTHardWare_RET_FAILED;
+            try {
+                result = task->work ? task->work() : HZCYKJTHardWare_RET_FAILED;
+            } catch (...) {
+                result = HZCYKJTHardWare_RET_FAILED;
+            }
+            CompleteTask(task, result);
+        }
+    }
+
+    std::string name_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::thread worker_;
+    bool stopping_ = false;
+    std::shared_ptr<Task> pending_;
+};
+
+static int GetProxySubmitWaitTimeoutMs() {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    int waitMs = ctx.http_connect_timeout_ms + ctx.http_request_timeout_ms + 5000;
+    return waitMs > 0 ? waitMs : 10000;
+}
+
+static int GetQueueResultWaitTimeoutMs() {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    int httpWindowMs = ctx.http_connect_timeout_ms + ctx.http_request_timeout_ms;
+    if (httpWindowMs <= 0) {
+        httpWindowMs = 8000;
+    }
+    int waitMs = httpWindowMs * 2 + 10000;
+    return waitMs < 20000 ? 20000 : waitMs;
+}
+
+static std::atomic<DllTaskQueue*> g_faceCaptureQueue{nullptr};
+static std::atomic<DllTaskQueue*> g_fingerprintCaptureQueue{nullptr};
+static std::atomic<DllTaskQueue*> g_irisCaptureQueue{nullptr};
+static std::atomic<DllTaskQueue*> g_ocrQueue{nullptr};
+static std::atomic<DllTaskQueue*> g_nfcQueue{nullptr};
+static std::atomic<DllTaskQueue*> g_authorizeQueue{nullptr};
+
+static DllTaskQueue& FaceCaptureQueue() {
+    static DllTaskQueue queue("face_capture");
+    g_faceCaptureQueue.store(&queue);
+    return queue;
+}
+
+static DllTaskQueue& FingerprintCaptureQueue() {
+    static DllTaskQueue queue("fingerprint_capture");
+    g_fingerprintCaptureQueue.store(&queue);
+    return queue;
+}
+
+static DllTaskQueue& IrisCaptureQueue() {
+    static DllTaskQueue queue("iris_capture");
+    g_irisCaptureQueue.store(&queue);
+    return queue;
+}
+
+static DllTaskQueue& OcrQueue() {
+    static DllTaskQueue queue("ocr");
+    g_ocrQueue.store(&queue);
+    return queue;
+}
+
+static DllTaskQueue& NfcQueue() {
+    static DllTaskQueue queue("nfc");
+    g_nfcQueue.store(&queue);
+    return queue;
+}
+
+static DllTaskQueue& AuthorizeQueue() {
+    static DllTaskQueue queue("authorize");
+    g_authorizeQueue.store(&queue);
+    return queue;
+}
+
+static void ClearBusinessQueuesForSwitch() {
+    if (auto* q = g_faceCaptureQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+    if (auto* q = g_fingerprintCaptureQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+    if (auto* q = g_irisCaptureQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+    if (auto* q = g_ocrQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+    if (auto* q = g_nfcQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
+    if (auto* q = g_authorizeQueue.load()) q->ClearPending(HZCYKJTHardWare_RET_DEVICE_BUSY);
 }
 
 class IrisPreviewRestoreWorker {
@@ -611,8 +855,10 @@ static int ReleaseSdkBody() {
         }
     }
 
+    ctx.switch_pending.store(true);
     PreviewManager::Instance().StopAllRenderers();
 
+    ClearBusinessQueuesForSwitch();
     RequestSessionManager::Instance().CancelAll();
 
     CallbackServer::Instance().Stop();
@@ -709,6 +955,7 @@ static int SwitchTerminalBody(int terminalIndex) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
+    ClearBusinessQueuesForSwitch();
     RequestSessionManager::Instance().ExpireAllForTerminalSwitch();
 
     bool irisRunning = false;
@@ -1209,7 +1456,7 @@ static int StopPlatePreviewBody() {
 
 // ---- 鎶撴媿 ----
 
-static int CaptureCameraImageBody(const char* saveDir) {
+static int CaptureCameraImageDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "人脸抓拍");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1223,7 +1470,7 @@ static int CaptureCameraImageBody(const char* saveDir) {
         LOG_WARN("接口", "人脸抓拍被终端切换拦截：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
         LOG_WARN("接口", "人脸抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
@@ -1246,7 +1493,20 @@ static int CaptureCameraImageBody(const char* saveDir) {
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int CaptureFingerprintImageBody(const char* saveDir) {
+static int CaptureCameraImageBody(const char* saveDir) {
+    std::string saveDirCopy = saveDir ? saveDir : "";
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "人脸抓拍入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return FaceCaptureQueue().Execute(
+        [saveDirCopy]() {
+            return CaptureCameraImageDirect(saveDirCopy.empty() ? nullptr : saveDirCopy.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
+}
+
+static int CaptureFingerprintImageDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "指纹抓拍");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1260,7 +1520,7 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
         LOG_WARN("接口", "指纹抓拍被终端切换拦截：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) return HZCYKJTHardWare_RET_DEVICE_BUSY;
     if (IsSwitchPending()) {
         LOG_WARN("接口", "指纹抓拍被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
@@ -1282,7 +1542,20 @@ static int CaptureFingerprintImageBody(const char* saveDir) {
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int CaptureIrisImageBody(const char* saveDir) {
+static int CaptureFingerprintImageBody(const char* saveDir) {
+    std::string saveDirCopy = saveDir ? saveDir : "";
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "指纹抓拍入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return FingerprintCaptureQueue().Execute(
+        [saveDirCopy]() {
+            return CaptureFingerprintImageDirect(saveDirCopy.empty() ? nullptr : saveDirCopy.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
+}
+
+static int CaptureIrisImageDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "虹膜抓拍");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1300,7 +1573,7 @@ static int CaptureIrisImageBody(const char* saveDir) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
@@ -1321,12 +1594,33 @@ static int CaptureIrisImageBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    RequestSessionManager::Instance().MarkAccepted(requestId);
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "虹膜抓拍受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
+        LOG_WARN("接口", "虹膜抓拍受理结果已过期：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     LOG_INFO("接口", "虹膜抓拍已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int RequestOCRBody(const char* saveDir) {
+static int CaptureIrisImageBody(const char* saveDir) {
+    std::string saveDirCopy = saveDir ? saveDir : "";
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "虹膜抓拍入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return IrisCaptureQueue().Execute(
+        [saveDirCopy]() {
+            return CaptureIrisImageDirect(saveDirCopy.empty() ? nullptr : saveDirCopy.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
+}
+
+static int RequestOCRDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "OCR识别");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1343,7 +1637,7 @@ static int RequestOCRBody(const char* saveDir) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
@@ -1364,12 +1658,33 @@ static int RequestOCRBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    RequestSessionManager::Instance().MarkAccepted(requestId);
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "OCR请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
+        LOG_WARN("接口", "OCR请求受理结果已过期：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     LOG_INFO("接口", "OCR请求已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int RequestNfcCardBody(const char* saveDir) {
+static int RequestOCRBody(const char* saveDir) {
+    std::string saveDirCopy = saveDir ? saveDir : "";
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "OCR请求入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return OcrQueue().Execute(
+        [saveDirCopy]() {
+            return RequestOCRDirect(saveDirCopy.empty() ? nullptr : saveDirCopy.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
+}
+
+static int RequestNfcCardDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "IC卡识别");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1387,7 +1702,7 @@ static int RequestNfcCardBody(const char* saveDir) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
@@ -1408,15 +1723,36 @@ static int RequestNfcCardBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    RequestSessionManager::Instance().MarkAccepted(requestId);
+    if (IsSwitchPending()) {
+        LOG_WARN("NFC", "NFC请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
+        LOG_WARN("NFC", "NFC请求受理结果已过期：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     LOG_INFO("NFC", "IC卡识别已受理");
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
-                                const char* GJDQDM, const char* XM,
-                                const char* XB, const char* CSRQ,
-                                const char* KADM) {
+static int RequestNfcCardBody(const char* saveDir) {
+    std::string saveDirCopy = saveDir ? saveDir : "";
+    if (IsSwitchPending()) {
+        LOG_WARN("NFC", "NFC请求入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return NfcQueue().Execute(
+        [saveDirCopy]() {
+            return RequestNfcCardDirect(saveDirCopy.empty() ? nullptr : saveDirCopy.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
+}
+
+static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
+                                  const char* GJDQDM, const char* XM,
+                                  const char* XB, const char* CSRQ,
+                                  const char* KADM) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "授权请求");
 
@@ -1434,7 +1770,7 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    BusyGuard guard;
+    BlockingBusyGuard guard(GetProxySubmitWaitTimeoutMs());
     if (!guard.acquired) {
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
@@ -1464,9 +1800,42 @@ static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    RequestSessionManager::Instance().MarkAccepted(requestId);
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "授权请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        RequestSessionManager::Instance().MarkCompleted(requestId);
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
+        LOG_WARN("接口", "授权请求受理结果已过期：request_id=%s", requestId.c_str());
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
     LOG_INFO("接口", "授权请求已受理");
     return HZCYKJTHardWare_RET_OK;
+}
+
+static int RequestAuthorizeBody(const char* ZJHM, const char* ZJLB,
+                                const char* GJDQDM, const char* XM,
+                                const char* XB, const char* CSRQ,
+                                const char* KADM) {
+    std::string zjhm = ZJHM ? ZJHM : "";
+    std::string zjlb = ZJLB ? ZJLB : "";
+    std::string gjdqdm = GJDQDM ? GJDQDM : "";
+    std::string xm = XM ? XM : "";
+    std::string xb = XB ? XB : "";
+    std::string csrq = CSRQ ? CSRQ : "";
+    std::string kadm = KADM ? KADM : "";
+
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "授权请求入队前被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+
+    return AuthorizeQueue().Execute(
+        [zjhm, zjlb, gjdqdm, xm, xb, csrq, kadm]() {
+            return RequestAuthorizeDirect(zjhm.c_str(), zjlb.c_str(), gjdqdm.c_str(),
+                                          xm.c_str(), xb.c_str(), csrq.c_str(), kadm.c_str());
+        },
+        GetQueueResultWaitTimeoutMs());
 }
 
 static int RegisterEventCallbackBody(THZCYKJTHardWareEventCallback callback) {
