@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -7,6 +6,8 @@ using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Parsing;
 using HZCYKJTHardWare.Proxy.Preview;
+using HZCYKJTHardWare.Proxy.Server.Runtime;
+using HZCYKJTHardWare.Proxy.Server.Coordinator;
 using HZCYKJTHardWare.Proxy.Storage;
 using HZCYKJTHardWare.Proxy.Terminal;
 
@@ -21,36 +22,37 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly TerminalClient _terminalClient;
         private readonly DllCallbackSender _dllCallback;
         private readonly PreviewManager _previewManager;
-        private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
-        private readonly ConcurrentDictionary<string, string> _requestCallbacks;
-        private readonly ConcurrentDictionary<string, long> _requestTimestamps = new ConcurrentDictionary<string, long>();
+        private readonly RequestRegistry _requestRegistry;
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
         private readonly QueueManager _queueManager;
+        private readonly ActiveTasksTracker _taskTracker;
+        private readonly SwitchCoordinator _switchCoordinator;
         private readonly Action<bool> _onProcessStateChanged;
-        private int _requestCount;
 
-        public DllCommandHandler(
+        internal DllCommandHandler(
             TerminalManager terminalManager,
             TerminalClient terminalClient,
             DllCallbackSender dllCallback,
             PreviewManager previewManager,
-            ConcurrentDictionary<string, string> requestSaveDirs,
-            ConcurrentDictionary<string, string> requestCallbacks,
+            RequestRegistry requestRegistry,
             Action<string> log,
             Func<string> getCallbackBaseUrl,
             QueueManager queueManager,
+            ActiveTasksTracker taskTracker,
+            SwitchCoordinator switchCoordinator,
             Action<bool> onProcessStateChanged = null)
         {
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
             _dllCallback = dllCallback;
             _previewManager = previewManager;
-            _requestSaveDirs = requestSaveDirs;
-            _requestCallbacks = requestCallbacks;
+            _requestRegistry = requestRegistry;
             _log = log;
             _getCallbackBaseUrl = getCallbackBaseUrl;
             _queueManager = queueManager;
+            _taskTracker = taskTracker;
+            _switchCoordinator = switchCoordinator;
             _onProcessStateChanged = onProcessStateChanged;
         }
 
@@ -64,10 +66,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (_queueManager.SwitchingTerminal)
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
-            // Dictionary cleanup: remove entries older than 60 seconds
-            if (++_requestCount % 500 == 0)
-                CleanupExpiredRequests(TimeSpan.FromSeconds(60));
-
             // Parse request fields
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
             var saveDir = JsonHelper.ExtractString(bodyUtf8, "save_dir");
@@ -75,20 +73,13 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
-            if (!string.IsNullOrEmpty(callbackUrl) && !string.IsNullOrEmpty(requestId))
-            {
-                _requestSaveDirs[requestId] = PathHelper.SafeResolveSaveDir(saveDir);
-                _requestCallbacks[requestId] = callbackUrl;
-                _requestTimestamps[requestId] = DateTime.UtcNow.Ticks;
-            }
-
             var gen = _queueManager.TerminalGeneration;
 
             switch (path)
             {
                 // === Terminal Switch (highest priority, immediate response) ===
                 case "/terminal/switch":
-                    return HandleSwitch(bodyUtf8, gen);
+                    return HandleSwitch(bodyUtf8);
 
                 // === Sync captures (wait for result, pass saveDir from third-party) ===
                 case "/capture/face":
@@ -99,13 +90,15 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // === Async operations (return "accepted" immediately after terminal forwards) ===
                 case "/ocr":
-                    return await EnqueueWithResult(_queueManager.OcrQueue, gen, path, 10000);
+                    return await EnqueueAsyncResource(_queueManager.OcrQueue, gen, path, 12000,
+                        requestId, saveDir, callbackUrl, ProxyResourceTypes.OcrDocument);
 
                 case "/nfc":
-                    return await EnqueueWithResult(_queueManager.NfcQueue, gen, path, 10000);
+                    return await EnqueueAsyncResource(_queueManager.NfcQueue, gen, path, 12000,
+                        requestId, saveDir, callbackUrl, ProxyResourceTypes.NfcCard);
 
                 case "/capture/iris":
-                    return await EnqueueWithResult(_queueManager.MiscQueue, gen, path, 10000);
+                    return await EnqueueIris(gen, requestId, saveDir, callbackUrl);
 
                 // === Previews (replace mode, immediate "accepted") ===
                 case "/preview/camera/start":
@@ -132,13 +125,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                 case "/preview/iris/url":
                     return await HandlePreviewUrl(PreviewResourceType.Iris);
 
-                // === Misc (process, authorize) ===
+                // === Process and authorization ===
                 case "/process/start":
                     return await HandleProcessStart(bodyUtf8, gen);
                 case "/process/end":
                     return HandleProcessEnd();
                 case "/authorize":
-                    return await HandleAuthorizeDirect(bodyUtf8, requestId, callbackUrl);
+                    return await EnqueueAuthorize(gen, bodyUtf8, requestId, callbackUrl);
 
                 default:
                     return "{\"error\":true,\"code\":\"not_found\"}";
@@ -166,14 +159,125 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Enqueue a task to a worker queue and wait for the result.
+        /// Queue an asynchronous iris capture while preserving the DLL request_id.
+        /// The terminal posts the final iris_image result to the proxy callback server.
         /// </summary>
-        private async Task<string> EnqueueWithResult(WorkerQueue<object> queue, int generation, string path, int timeoutMs)
+        private async Task<string> EnqueueIris(int generation, string requestId,
+            string saveDir, string callbackUrl)
         {
+            if (string.IsNullOrEmpty(requestId))
+                requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
+
+            var resolvedSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!queue.Enqueue(tcs, generation))
+            var data = new IrisTaskData
             {
-                // Queue full — immediate busy response
+                Tcs = tcs,
+                RequestId = requestId,
+                SaveDir = resolvedSaveDir,
+                DllCallbackUrl = callbackUrl
+            };
+
+            var context = _requestRegistry.Register(requestId, ProxyResourceTypes.IrisImage,
+                resolvedSaveDir, callbackUrl, generation);
+            if (context == null)
+                return "{\"error\":true,\"code\":\"registry_full\"}";
+            context.TryMarkQueued();
+
+            if (!_queueManager.IrisQueue.Enqueue(data, generation))
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
+                Logger.Warn("[虹膜抓拍] 虹膜任务队列已满");
+                return "{\"error\":true,\"code\":\"busy\"}";
+            }
+
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(10000));
+            if (completed == tcs.Task && tcs.Task.IsCompleted)
+            {
+                var result = await tcs.Task;
+                CleanupRegistryForQueueFailure(requestId, ProxyResourceTypes.IrisImage, result);
+                return result;
+            }
+
+            Logger.Error("[虹膜抓拍] 受理请求超时(10000ms)");
+            _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage, timedOut: true);
+            return "{\"error\":true,\"code\":\"timeout\"}";
+        }
+
+        private async Task<string> EnqueueAuthorize(int generation, string bodyUtf8,
+            string requestId, string callbackUrl)
+        {
+            if (string.IsNullOrEmpty(requestId))
+                requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
+
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var data = new AuthorizeTaskData
+            {
+                Tcs = tcs,
+                BodyUtf8 = bodyUtf8,
+                RequestId = requestId,
+                CallbackUrl = callbackUrl
+            };
+
+            var resolvedSaveDir = PathHelper.SafeResolveSaveDir(
+                string.IsNullOrEmpty(_terminalManager.ProcessSaveDir)
+                    ? AppConfig.Instance.DefaultSaveDir
+                    : _terminalManager.ProcessSaveDir);
+            var context = _requestRegistry.Register(requestId, ProxyResourceTypes.Protocol,
+                resolvedSaveDir, callbackUrl, generation);
+            if (context == null)
+                return "{\"error\":true,\"code\":\"registry_full\"}";
+            context.TryMarkQueued();
+
+            if (!_queueManager.AuthorizeQueue.Enqueue(data, generation))
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
+                Logger.Warn("[授权] 授权任务队列已满");
+                return "{\"error\":true,\"code\":\"busy\"}";
+            }
+
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(12000));
+            if (completed == tcs.Task && tcs.Task.IsCompleted)
+            {
+                var result = await tcs.Task;
+                CleanupRegistryForQueueFailure(requestId, ProxyResourceTypes.Protocol, result);
+                return result;
+            }
+
+            Logger.Error("[授权] 受理请求超时(12000ms)");
+            _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol, timedOut: true);
+            return "{\"error\":true,\"code\":\"timeout\"}";
+        }
+
+        /// <summary>
+        /// Enqueue an asynchronous terminal resource request while preserving the
+        /// request_id generated by the DLL.
+        /// </summary>
+        private async Task<string> EnqueueAsyncResource(WorkerQueue<object> queue,
+            int generation, string path, int timeoutMs, string requestId, string saveDir,
+            string callbackUrl, string resourceType)
+        {
+            if (string.IsNullOrEmpty(requestId))
+                requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
+
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var data = new AsyncResourceTaskData
+            {
+                Tcs = tcs,
+                RequestId = requestId,
+                ResourceType = resourceType,
+                SaveDir = PathHelper.SafeResolveSaveDir(saveDir),
+                DllCallbackUrl = callbackUrl
+            };
+            var context = _requestRegistry.Register(requestId, resourceType, data.SaveDir,
+                callbackUrl, generation);
+            if (context == null)
+                return "{\"error\":true,\"code\":\"registry_full\"}";
+            context.TryMarkQueued();
+
+            if (!queue.Enqueue(data, generation))
+            {
+                _requestRegistry.Fail(requestId, resourceType);
                 Logger.Warn($"[队列] {queue.Name} 队列满, 拒绝请求: {path}");
                 return "{\"error\":true,\"code\":\"busy\"}";
             }
@@ -182,17 +286,20 @@ namespace HZCYKJTHardWare.Proxy.Server
             var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
             if (completed == tcs.Task && tcs.Task.IsCompleted)
             {
-                return await tcs.Task;
+                var result = await tcs.Task;
+                CleanupRegistryForQueueFailure(requestId, resourceType, result);
+                return result;
             }
 
             // Timeout
             Logger.Error($"[队列] {queue.Name} 请求超时({timeoutMs}ms): {path}");
+            _requestRegistry.Fail(requestId, resourceType, timedOut: true);
             return "{\"error\":true,\"code\":\"timeout\"}";
         }
 
         // ====== Switch (immediate response, async execution) ======
 
-        private string HandleSwitch(string bodyUtf8, int gen)
+        private string HandleSwitch(string bodyUtf8)
         {
             var terminalIndex = (int)JsonHelper.ExtractInt(bodyUtf8, "terminal_index");
             if (terminalIndex < 1 || terminalIndex > 2)
@@ -204,12 +311,13 @@ namespace HZCYKJTHardWare.Proxy.Server
             _log("[终端切换] 下发切换请求: " + _terminalManager.CurrentIndex + " -> " + terminalIndex);
 
             // Enqueue to switch worker (immediate return, don't wait)
-            _queueManager.RequestSwitch(terminalIndex, gen);
+            if (!_switchCoordinator.RequestSwitch(terminalIndex))
+                return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
             return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + "}";
         }
 
-        // ====== Process / Authorize (direct execution, no queue needed — they're quick) ======
+        // ====== Process control ======
 
         private async Task<string> HandleProcessStart(string bodyUtf8, int gen)
         {
@@ -220,24 +328,72 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalManager.ProcessSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
 
             var callbackBase = _getCallbackBaseUrl();
-            var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            var irisCallback = BuildIrisCallbackUrl(callbackBase);
+            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+            if (string.IsNullOrEmpty(requestId))
+                requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+
+            var dllCallbacks = JsonHelper.ExtractObject(bodyUtf8, "callbacks");
+            var ocrDllCallback = JsonHelper.ExtractString(dllCallbacks, "ocr");
+            var nfcDllCallback = JsonHelper.ExtractString(dllCallbacks, "nfc");
+            var irisDllCallback = JsonHelper.ExtractString(dllCallbacks, "iris");
+            if (string.IsNullOrEmpty(ocrDllCallback))
+                ocrDllCallback = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
+            if (string.IsNullOrEmpty(nfcDllCallback))
+                nfcDllCallback = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
+            if (string.IsNullOrEmpty(irisDllCallback))
+                irisDllCallback = AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris";
+
+            if (!RegisterProcessResource(requestId, ProxyResourceTypes.OcrDocument,
+                    ocrDllCallback, gen) ||
+                !RegisterProcessResource(requestId, ProxyResourceTypes.NfcCard,
+                    nfcDllCallback, gen) ||
+                !RegisterProcessResource(requestId, ProxyResourceTypes.IrisImage,
+                    irisDllCallback, gen))
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.OcrDocument);
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.NfcCard);
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
+                return "{\"error\":true,\"code\":\"registry_full\"}";
+            }
             var body = $"{{\"request_id\":\"{requestId}\"," +
                 $"\"callbacks\":{{" +
                 $"\"ocr_document\":\"{callbackBase}\"," +
                 $"\"ocr_event_status\":\"{callbackBase}\"," +
-                $"\"nfc_card\":\"{callbackBase}\"}}}}";
+                $"\"nfc_card\":\"{callbackBase}\"," +
+                $"\"iris_image\":\"{irisCallback}\"}}}}";
 
             _log("[流程] 开始流程: url=" + _terminalManager.CurrentBaseUrl + "/process/start, save_dir=" + _terminalManager.ProcessSaveDir);
 
             var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/process/start", body, 5000).ConfigureAwait(false);
             if (ok)
             {
+                var accepted =
+                    _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.OcrDocument) &
+                    _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.NfcCard) &
+                    _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.IrisImage);
+                if (!accepted)
+                    return "{\"error\":true,\"code\":\"terminal_switching\"}";
                 _terminalManager.ProcessActive = true;
                 _onProcessStateChanged?.Invoke(true);
                 _log("[流程] 流程已开始, save_dir=" + _terminalManager.ProcessSaveDir);
                 return "{\"status\":\"ok\"}";
             }
+            _requestRegistry.Fail(requestId, ProxyResourceTypes.OcrDocument);
+            _requestRegistry.Fail(requestId, ProxyResourceTypes.NfcCard);
+            _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
             return "{\"error\":true,\"code\":\"terminal_request_failed\"}";
+        }
+
+        private bool RegisterProcessResource(string requestId, string resourceType,
+            string dllCallbackUrl, int generation)
+        {
+            var context = _requestRegistry.Register(requestId, resourceType,
+                _terminalManager.ProcessSaveDir, dllCallbackUrl, generation, processFlow: true);
+            if (context == null)
+                return false;
+            context.TryMarkSubmitting();
+            return true;
         }
 
         private string HandleProcessEnd()
@@ -245,77 +401,25 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalManager.ProcessActive = false;
             _onProcessStateChanged?.Invoke(false);
             _terminalManager.ProcessSaveDir = "";
-            _requestSaveDirs.Clear();
-            _requestCallbacks.Clear();
-            _requestTimestamps.Clear();
+            _requestRegistry.CancelAll();
             _log("[流程] 流程已结束");
             return "{\"status\":\"ok\"}";
         }
 
-        private void CleanupExpiredRequests(TimeSpan maxAge)
-        {
-            var cutoff = DateTime.UtcNow.Ticks - maxAge.Ticks;
-            foreach (var kv in _requestTimestamps)
-            {
-                if (kv.Value < cutoff)
-                {
-                    _requestTimestamps.TryRemove(kv.Key, out _);
-                    _requestSaveDirs.TryRemove(kv.Key, out _);
-                    _requestCallbacks.TryRemove(kv.Key, out _);
-                }
-            }
-        }
-
         public void ClearAllMappings()
         {
-            _requestSaveDirs.Clear();
-            _requestCallbacks.Clear();
-            _requestTimestamps.Clear();
+            _requestRegistry.CancelAll();
         }
 
-        private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId, string callbackUrl)
+        private void CleanupRegistryForQueueFailure(string requestId, string resourceType,
+            string result)
         {
-            if (!string.IsNullOrEmpty(callbackUrl) && !string.IsNullOrEmpty(requestId))
-                _requestCallbacks[requestId] = callbackUrl;
-
-            var name = JsonHelper.ExtractString(bodyUtf8, "XM");
-            var sex = JsonHelper.ExtractString(bodyUtf8, "XB");
-            var idNo = JsonHelper.ExtractString(bodyUtf8, "ZJHM");
-            var docType = JsonHelper.ExtractString(bodyUtf8, "ZJLB");
-            var birthday = JsonHelper.ExtractString(bodyUtf8, "CSRQ");
-            var nationality = JsonHelper.ExtractString(bodyUtf8, "GJDQDM");
-            var portCode = JsonHelper.ExtractString(bodyUtf8, "KADM");
-
-            var callbackBase = _getCallbackBaseUrl();
-            var terminalBody = "{" +
-                "\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\"," +
-                "\"name\":\"" + JsonHelper.EscapeString(name) + "\"," +
-                "\"sex\":\"" + JsonHelper.EscapeString(sex) + "\"," +
-                "\"id_no\":\"" + JsonHelper.EscapeString(idNo) + "\"," +
-                "\"doc_type\":\"" + JsonHelper.EscapeString(docType) + "\"," +
-                "\"birthday\":\"" + JsonHelper.EscapeString(birthday) + "\"," +
-                "\"nationality\":\"" + JsonHelper.EscapeString(nationality) + "\"," +
-                "\"port_code\":\"" + JsonHelper.EscapeString(portCode) + "\"," +
-                "\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"" +
-                "}";
-
-            _log("[授权] 转发至终端");
-
-            var (ok, response) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl, "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
-            if (ok)
+            var code = JsonHelper.ExtractString(result, "code");
+            if (code == "queue_replaced" || code == "service_stopping" ||
+                code == "terminal_switching")
             {
-                _log("[授权] 已受理");
-                return "{\"accepted\":true}";
+                _requestRegistry.Fail(requestId, resourceType);
             }
-
-            var code = ResultParser.ExtractErrorCode(response);
-            var message = ResultParser.ExtractErrorMessage(response);
-            var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
-            _log("[授权] 下发失败: " + detail);
-
-            if (string.IsNullOrEmpty(code))
-                code = "terminal_request_failed";
-            return "{\"error\":true,\"code\":\"" + JsonHelper.EscapeString(code) + "\",\"message\":\"" + JsonHelper.EscapeString(message) + "\"}";
         }
 
         // ====== Preview Start (replace mode, immediate "accepted") ======
@@ -345,7 +449,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
 
             // Execute preview start asynchronously (don't block HTTP response)
-            _ = Task.Run(async () =>
+            var taskAccepted = _taskTracker.TryRun(async () =>
             {
                 try
                 {
@@ -367,12 +471,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                             return;
                         }
 
+                        await MinimizeMainFormAsync().ConfigureAwait(false);
+
+                        if (!shouldContinue())
+                        {
+                            _previewManager.StopPreview(resType, PreviewSessionType.External);
+                            _log($"[预览管理] 外部预览最小化窗口后发现终端已切换，等待切换流程接管: {resType}, hwnd={hwnd}");
+                            return;
+                        }
+
                         if (!string.IsNullOrEmpty(callbackUrl))
                             await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero).ConfigureAwait(false);
                         _log($"[预览管理] 外部预览已启动: {resType}, hwnd={hwnd}");
-
-                        // DLL-triggered preview success → minimize proxy window to taskbar
-                        MinimizeMainForm();
                     }
                     else
                     {
@@ -394,7 +504,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 {
                     _log($"[预览管理] 外部预览启动异常: {ex.Message}");
                 }
-            });
+            }, "preview_start_external");
+
+            if (!taskAccepted)
+                return "{\"error\":true,\"code\":\"service_busy\"}";
 
             return "{\"accepted\":true}";
         }
@@ -415,24 +528,61 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Minimize the main window after DLL-triggered preview starts successfully.
-        /// MainForm handles minimized state by hiding itself to the system tray.
+        /// Minimize the main window before notifying the third-party UI that preview is ready.
+        /// Waiting for this UI action keeps the external preview callback in the expected window state.
         /// </summary>
-        private static void MinimizeMainForm()
+        private static async Task<bool> MinimizeMainFormAsync()
         {
             try
             {
                 var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] as MainForm : null;
-                if (form != null && form.InvokeRequired)
-                {
-                    form.BeginInvoke(new Action(() => form.SetMinimizeToTaskbar()));
-                }
-                else if (form != null)
+                if (form == null || form.IsDisposed || !form.IsHandleCreated)
+                    return false;
+
+                if (!form.InvokeRequired)
                 {
                     form.SetMinimizeToTaskbar();
+                    return true;
                 }
+
+                var tcs = new TaskCompletionSource<bool>();
+                form.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (!form.IsDisposed)
+                            form.SetMinimizeToTaskbar();
+                        tcs.TrySetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                }));
+
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(2000)).ConfigureAwait(false);
+                if (completed != tcs.Task)
+                    return false;
+
+                await tcs.Task.ConfigureAwait(false);
+                return true;
             }
-            catch { /* Best-effort, must not crash */ }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string BuildIrisCallbackUrl(string callbackBase)
+        {
+            var origin = (callbackBase ?? "").TrimEnd('/');
+            var configuredPath = (AppConfig.Instance.CallbackPath ?? "").TrimEnd('/');
+            if (!string.IsNullOrEmpty(configuredPath) &&
+                origin.EndsWith(configuredPath, StringComparison.OrdinalIgnoreCase))
+            {
+                origin = origin.Substring(0, origin.Length - configuredPath.Length).TrimEnd('/');
+            }
+            return origin + "/iris-image";
         }
     }
 
@@ -443,6 +593,55 @@ namespace HZCYKJTHardWare.Proxy.Server
     {
         public TaskCompletionSource<string> Tcs { get; set; }
         public string SaveDir { get; set; }
+
+        public void TrySetQueueResult(string result)
+        {
+            Tcs?.TrySetResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Data required to submit one asynchronous iris capture to the terminal.
+    /// </summary>
+    public class IrisTaskData : IQueueResultSink
+    {
+        public TaskCompletionSource<string> Tcs { get; set; }
+        public string RequestId { get; set; }
+        public string SaveDir { get; set; }
+        public string DllCallbackUrl { get; set; }
+
+        public void TrySetQueueResult(string result)
+        {
+            Tcs?.TrySetResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Data required to submit an OCR or NFC request without regenerating request_id.
+    /// </summary>
+    public class AsyncResourceTaskData : IQueueResultSink
+    {
+        public TaskCompletionSource<string> Tcs { get; set; }
+        public string RequestId { get; set; }
+        public string ResourceType { get; set; }
+        public string SaveDir { get; set; }
+        public string DllCallbackUrl { get; set; }
+
+        public void TrySetQueueResult(string result)
+        {
+            Tcs?.TrySetResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Data required to submit one asynchronous authorization request.
+    /// </summary>
+    public class AuthorizeTaskData : IQueueResultSink
+    {
+        public TaskCompletionSource<string> Tcs { get; set; }
+        public string BodyUtf8 { get; set; }
+        public string RequestId { get; set; }
+        public string CallbackUrl { get; set; }
 
         public void TrySetQueueResult(string result)
         {

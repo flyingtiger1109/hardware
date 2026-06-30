@@ -1,6 +1,6 @@
 using System;
-using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Parsing;
 using HZCYKJTHardWare.Proxy.Storage;
@@ -11,29 +11,22 @@ namespace HZCYKJTHardWare.Proxy.Server
     public class TerminalCallbackHandler
     {
         private readonly TerminalClient _terminalClient;
+        private readonly TerminalManager _terminalManager;
         private readonly DllCallbackSender _dllCallback;
-        private readonly ConcurrentDictionary<string, string> _requestSaveDirs;
-        private readonly ConcurrentDictionary<string, string> _requestCallbacks;
-        private readonly ConcurrentDictionary<string, long> _processedCallbacks;  // Dedup: {requestId}_{resourceType}
+        private readonly RequestRegistry _requestRegistry;
         private readonly Action<string> _log;
 
-        // Callback types that should only be forwarded once per request_id (not event streams like ocr_event_status)
-        private static readonly string[] DedupResourceTypes = {
-            "ocr_document", "nfc_card", "iris_image", "face_image", "fingerprint_image", "protocol"
-        };
-
-        public TerminalCallbackHandler(
+        internal TerminalCallbackHandler(
             TerminalClient terminalClient,
+            TerminalManager terminalManager,
             DllCallbackSender dllCallback,
-            ConcurrentDictionary<string, string> requestSaveDirs,
-            ConcurrentDictionary<string, string> requestCallbacks,
+            RequestRegistry requestRegistry,
             Action<string> log)
         {
             _terminalClient = terminalClient;
+            _terminalManager = terminalManager;
             _dllCallback = dllCallback;
-            _requestSaveDirs = requestSaveDirs;
-            _requestCallbacks = requestCallbacks;
-            _processedCallbacks = new ConcurrentDictionary<string, long>();
+            _requestRegistry = requestRegistry;
             _log = log;
         }
 
@@ -162,8 +155,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var result = CallbackParser.ParseOcrDocument(bodyUtf8);
             if (!result.Valid) { _log("[OCR回调] 数据无效"); return; }
+            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.OcrDocument, "OCR"))
+                return;
 
-            var saveDir = GetSaveDir(result.RequestId);
+            var saveDir = GetSaveDir(result.RequestId, ProxyResourceTypes.OcrDocument);
             _log($"[OCR回调] MRZ={result.Mrz}");
 
             // Save OCR result JSON
@@ -175,64 +170,79 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Save MRZ information (MRZ.json with MRZ lines + person_info)
             SaveMrzJson(bodyUtf8, saveDir, result.RequestId);
 
-            // Forward to DLL callback — fallback to default URL if request_id not found (same as Delphi)
-            var callbackUrl = GetCallback(result.RequestId);
-            if (string.IsNullOrEmpty(callbackUrl))
-                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr";
-            if (!TryMarkProcessed(result.RequestId, "ocr_document"))
-            {
-                Logger.Debug("[OCR回调] 重复OCR结果，已去重: " + result.RequestId);
-                return;
-            }
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             _ = _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath);
-            CleanupProcessedIfNeeded();
+            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.OcrDocument);
         }
 
         private void HandleNfcCard(string bodyUtf8)
         {
             var result = CallbackParser.ParseNfcCard(bodyUtf8);
             if (!result.Valid) { _log("[IC卡回调] 数据无效"); return; }
+            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.NfcCard, "NFC"))
+                return;
 
             _log($"[IC卡回调] card_text={result.CardText}");
 
-            var callbackUrl = GetCallback(result.RequestId);
-            if (string.IsNullOrEmpty(callbackUrl))
-                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card";
-            if (!TryMarkProcessed(result.RequestId, "nfc_card"))
-            {
-                Logger.Debug("[IC卡回调] 重复回调，已去重: " + result.RequestId);
-                return;
-            }
             _ = _dllCallback.SendNfcResult(result.RequestId, result.CardText);
-            CleanupProcessedIfNeeded();
+            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.NfcCard);
         }
 
         private void HandleIrisImage(string bodyUtf8)
         {
-            var result = CallbackParser.ParseImageCapture(bodyUtf8, "iris_image");
+            var result = CallbackParser.ParseIrisCapture(bodyUtf8);
             if (!result.Valid) { _log("[虹膜回调] 数据无效"); return; }
 
-            var saveDir = GetSaveDir(result.RequestId);
-            _log($"[虹膜回调] request_id={result.RequestId}");
+            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.IrisImage, "虹膜"))
+                return;
 
-            string savePath = "";
-            if (!string.IsNullOrEmpty(result.ImageBase64))
+            if (!string.IsNullOrEmpty(result.ErrorCode))
             {
-                savePath = FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
-                    saveDir, result.RequestId, "iris");
-            }
-
-            var callbackUrl = GetCallback(result.RequestId);
-            if (string.IsNullOrEmpty(callbackUrl))
-                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris";
-            if (!TryMarkProcessed(result.RequestId, "iris_image"))
-            {
-                Logger.Debug("[虹膜回调] 重复回调，已去重: " + result.RequestId);
+                ForwardIrisFailure(result.RequestId, result.ErrorCode, result.Message);
+                _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
                 return;
             }
+
+            var saveDir = GetSaveDir(result.RequestId, ProxyResourceTypes.IrisImage);
+            var savedCount = 0;
+            var leftPath = "";
+            var rightPath = "";
+
+            if (!string.IsNullOrEmpty(result.LeftImageBase64))
+            {
+                leftPath = FileSaver.SaveBase64Image(result.LeftImageBase64, result.ImageMimeType,
+                    saveDir, result.RequestId, "iris_left");
+                if (!string.IsNullOrEmpty(leftPath)) savedCount++;
+            }
+            if (!string.IsNullOrEmpty(result.RightImageBase64))
+            {
+                rightPath = FileSaver.SaveBase64Image(result.RightImageBase64, result.ImageMimeType,
+                    saveDir, result.RequestId, "iris_right");
+                if (!string.IsNullOrEmpty(rightPath)) savedCount++;
+            }
+
+            if (savedCount == 0)
+            {
+                ForwardIrisFailure(result.RequestId, "save_file_failed", "虹膜图片保存失败");
+                _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
+                return;
+            }
+
+            var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
+            _log($"[虹膜回调] 保存完成: request_id={result.RequestId}, eyes={savedCount}, path={savePath}");
             _ = _dllCallback.SendIrisResult(result.RequestId, savePath);
-            CleanupProcessedIfNeeded();
+            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
+        }
+
+        private void ForwardIrisFailure(string requestId, string errorCode, string message)
+        {
+            if (string.IsNullOrEmpty(errorCode)) errorCode = "collect_failed";
+            var payload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                "\",\"resource_type\":\"iris_image\",\"error\":true,\"code\":\"" +
+                JsonHelper.EscapeString(errorCode) + "\",\"message\":\"" +
+                JsonHelper.EscapeString(message) + "\"}";
+            _ = _dllCallback.PostCallbackRaw("/iris", payload);
+            _log($"[虹膜回调] 采集失败: request_id={requestId}, code={errorCode}, message={message}");
         }
 
         private void HandleFaceImage(string bodyUtf8)
@@ -274,19 +284,12 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var result = CallbackParser.ParseAuthorize(bodyUtf8);
             if (!result.Valid) { _log("[授权回调] 数据无效"); return; }
+            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.Protocol, "授权"))
+                return;
 
             // 2.22 status field: "yes" (agreed) or "no" (rejected)
             var status = JsonHelper.ExtractString(bodyUtf8, "status");
             _log($"[授权回调] request_id={result.RequestId}, status={status}");
-
-            var callbackUrl = GetCallback(result.RequestId);
-            if (string.IsNullOrEmpty(callbackUrl))
-                callbackUrl = AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize";
-            if (!TryMarkProcessed(result.RequestId, "protocol"))
-            {
-                Logger.Debug("[授权回调] 重复回调，已去重: " + result.RequestId);
-                return;
-            }
 
             // Map 2.22 terminal fields back to DLL Chinese field names
             // Terminal: name,sex,id_no,doc_type,birthday,nationality,port_code → DLL: XM,XB,ZJHM,ZJLB,CSRQ,GJDQDM,KADM
@@ -319,7 +322,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log($"[授权回调] 转发至DLL: request_id={result.RequestId}, auth_result={authResult}");
             _ = _dllCallback.PostCallbackRaw("/authorize", payload);
-            CleanupProcessedIfNeeded();
+            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.Protocol);
         }
 
         /// <summary>
@@ -460,54 +463,28 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        private string GetSaveDir(string requestId)
+        private string GetSaveDir(string requestId, string resourceType)
         {
-            _requestSaveDirs.TryGetValue(requestId, out var dir);
+            var dir = "";
+            if (_requestRegistry.TryGet(requestId, resourceType, out var context))
+                dir = context.SaveDir;
+            if (string.IsNullOrEmpty(dir))
+                dir = _terminalManager?.ProcessSaveDir;
             return PathHelper.SafeResolveSaveDir(dir);
         }
 
-        /// <summary>
-        /// Get DLL callback URL for a request. Returns null if request_id is not found
-        /// (indicating the request was cancelled, process ended, or terminal switched).
-        /// Does NOT fall back to default URL — prevents forwarding stale data to DLL.
-        /// </summary>
-        private string GetCallback(string requestId)
+        private string GetSaveDir(string requestId)
         {
-            if (string.IsNullOrEmpty(requestId)) return null;
-            _requestCallbacks.TryGetValue(requestId, out var url);
-            return url;  // null if not found → callback will be skipped
+            return PathHelper.SafeResolveSaveDir(_terminalManager?.ProcessSaveDir);
         }
 
-        /// <summary>
-        /// Try to mark a callback as processed. Returns true if this is the first time
-        /// (should forward), false if already processed (duplicate, skip).
-        /// </summary>
-        private bool TryMarkProcessed(string requestId, string resourceType)
+        private bool TryClaimRequest(string requestId, string resourceType, string operation)
         {
-            var key = requestId + "_" + resourceType;
-            return _processedCallbacks.TryAdd(key, DateTime.UtcNow.Ticks);
-        }
+            if (_requestRegistry.TryClaimCallback(requestId, resourceType, out _))
+                return true;
 
-        /// <summary>
-        /// Periodic cleanup of processed callback dedup set (called every ~500 callbacks).
-        /// </summary>
-        private void CleanupProcessedIfNeeded()
-        {
-            if (_processedCallbacks.Count > 5000)
-            {
-                var cutoff = DateTime.UtcNow.AddMinutes(-10).Ticks;
-                var removed = 0;
-                foreach (var kv in _processedCallbacks)
-                {
-                    if (kv.Value < cutoff)
-                    {
-                        _processedCallbacks.TryRemove(kv.Key, out _);
-                        removed++;
-                    }
-                }
-                if (removed > 0)
-                    _log($"[回调去重] 已清理 {removed} 条过期去重记录");
-            }
+            Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过: request_id={requestId}");
+            return false;
         }
     }
 }

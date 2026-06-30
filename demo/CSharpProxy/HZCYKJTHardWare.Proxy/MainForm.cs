@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -31,12 +32,23 @@ namespace HZCYKJTHardWare.Proxy
         private DateTime _lastCpuSample;
 
         private string _historyCurrentFile;
-        private bool _isLoadingHistory;
-        private int _historyLoadedLineCount;
+        private int _historyLoading;
+        private readonly Font _logFont = new Font("Consolas", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        private readonly LinkedList<LogLine> _historyLines = new LinkedList<LogLine>();
+        private readonly LinkedList<LogLine> _activeLines = new LinkedList<LogLine>();
+        private bool _historyMode;
+
+        private sealed class LogLine
+        {
+            public DateTime Timestamp;
+            public string Text;
+            public Color ForeColor;
+        }
 
         public MainForm()
         {
             InitializeComponent();
+            memoLog.Font = _logFont;
 
             // 1. 设置工具栏安全高度 (稍微加大到 60，给高 DPI 留足垂直空间)
             panelLogToolbar.Height = 60;
@@ -192,7 +204,13 @@ namespace HZCYKJTHardWare.Proxy
             UpdateHeaderStatus();
             Logger.Info("应用程序启动中...");
             memoLog.ScrolledToTop += OnLogScrolledToTop;
-            chkAutoScroll.CheckedChanged += (s, ev) => memoLog.AutoScroll = chkAutoScroll.Checked;
+            memoLog.ScrolledToBottom += OnLogScrolledToBottom;
+            chkAutoScroll.CheckedChanged += (s, ev) =>
+            {
+                memoLog.AutoScroll = chkAutoScroll.Checked;
+                if (chkAutoScroll.Checked)
+                    EnterLiveMode();
+            };
             btnClearLog.Click += (s, ev) => ClearLog();
             btnExportLog.Click += (s, ev) => ExportLog();
             // Auto-start server on launch (direct call for immediate listener startup)
@@ -394,9 +412,28 @@ namespace HZCYKJTHardWare.Proxy
 
         internal void SetMinimizeToTaskbar()
         {
-            _suppressTrayHide = true;
-            WindowState = FormWindowState.Minimized;
-            _suppressTrayHide = false;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(SetMinimizeToTaskbar));
+                return;
+            }
+
+            try
+            {
+                _suppressTrayHide = true;
+                ShowInTaskbar = true;
+                if (!Visible)
+                    Show();
+                if (WindowState == FormWindowState.Minimized)
+                    WindowState = FormWindowState.Normal;
+                WindowState = FormWindowState.Minimized;
+                if (_trayIcon != null)
+                    _trayIcon.Visible = true;
+            }
+            finally
+            {
+                _suppressTrayHide = false;
+            }
         }
 
         private void HideToTray()
@@ -464,6 +501,8 @@ namespace HZCYKJTHardWare.Proxy
             }
             catch (Exception ex)
             {
+                try { _server?.Dispose(); } catch { }
+                _server = null;
                 UpdateHeaderStatus();
                 AppendLog("启动服务失败: " + ex.Message);
             }
@@ -479,8 +518,9 @@ namespace HZCYKJTHardWare.Proxy
             if (_server == null) return;
             try
             {
-                _server.Stop();
+                var server = _server;
                 _server = null;
+                server.Dispose();
                 btnStartServer.Enabled = true;
                 btnStopServer.Enabled = false;
                 UpdateHeaderStatus();
@@ -859,55 +899,50 @@ namespace HZCYKJTHardWare.Proxy
             }
 
             if (count > 0)
-                AppendLogToMemo(sb.ToString(), count);
+                AppendLogToMemo(sb.ToString());
         }
 
-        private const int MaxLogLines = 3000;  // Prevent UI crash from unbounded log growth
-        private const int TrimLogLinesBatch = 300;
-        private int _uiLogLineCount;
+        private const int MaxActiveLogLines = 3000;  // Realtime window size.
+        private const int MaxHistoryLogLines = 5000; // Prevent unbounded history prepend memory growth.
 
-        private void AppendLogToMemo(string text, int lineCount)
+        private void AppendLogToMemo(string text)
         {
             try
             {
+                var lines = SplitLogLines(text);
                 if (chkErrorOnly.Checked)
                 {
-                    var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    var filtered = new StringBuilder();
+                    var filtered = new List<string>();
                     foreach (var line in lines)
                     {
                         if (line.Contains("[错误]") || line.Contains("[警告]"))
-                            filtered.AppendLine(line);
+                            filtered.Add(line);
                     }
-                    if (filtered.Length == 0) return;
-                    text = filtered.ToString();
+                    lines = filtered;
                 }
 
-                SafeAppendLog(text);
-                _uiLogLineCount += lineCount;
+                if (lines.Count == 0)
+                    return;
 
-                // Trim in batches
-                if (_uiLogLineCount > MaxLogLines + TrimLogLinesBatch)
+                var entries = CreateLogLines(lines);
+                memoLog.RefreshScrollState();
+                bool shouldScrollToBottom = memoLog.AutoScroll;
+
+                BeginLogUpdate();
+                try
                 {
-                    var lines = memoLog.Lines;
-                    if (lines.Length > MaxLogLines)
-                    {
-                        var keep = new string[MaxLogLines];
-                        Array.Copy(lines, lines.Length - MaxLogLines, keep, 0, MaxLogLines);
-                        memoLog.Lines = keep;
-                        _uiLogLineCount = keep.Length;
-                    }
-                    else
-                    {
-                        _uiLogLineCount = lines.Length;
-                    }
+                    AppendActiveLines(entries);
+                    TrimExcessActiveLines();
+                }
+                finally
+                {
+                    EndLogUpdate();
                 }
 
-                if (memoLog.AutoScroll)
-                {
-                    memoLog.SelectionStart = memoLog.TextLength;
-                    memoLog.ScrollToCaret();
-                }
+                if (shouldScrollToBottom)
+                    memoLog.ScrollToBottomProgrammatically();
+                else
+                    memoLog.RefreshScrollState();
             }
             catch
             {
@@ -915,31 +950,134 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
-        private void SafeAppendLog(string text)
+        private List<string> SplitLogLines(string text)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrEmpty(text))
+                return result;
+
+            var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            result.AddRange(lines);
+            return result;
+        }
+
+        private List<LogLine> CreateLogLines(IList<string> lines)
+        {
+            var result = new List<LogLine>(lines.Count);
+            foreach (var line in lines)
+                result.Add(CreateLogLine(line));
+            return result;
+        }
+
+        private LogLine CreateLogLine(string line)
+        {
+            if (!TryParseLogTimestamp(line, out var timestamp))
+                timestamp = DateTime.Now;
+
+            return new LogLine
+            {
+                Timestamp = timestamp,
+                Text = line,
+                ForeColor = ResolveLogColor(line)
+            };
+        }
+
+        private void AppendActiveLines(IList<LogLine> lines)
+        {
+            foreach (var line in lines)
+            {
+                _activeLines.AddLast(line);
+                InsertFormattedLine(memoLog.TextLength, line);
+            }
+
+            ResetLogSelectionStyle();
+        }
+
+        private int InsertFormattedLine(int index, LogLine line)
+        {
+            var text = line.Text + Environment.NewLine;
+            memoLog.Select(index, 0);
+            ApplyLogSelectionStyle(line.ForeColor);
+            memoLog.SelectedText = text;
+            ResetLogSelectionStyle();
+            return text.Length;
+        }
+
+        private void ApplyLogSelectionStyle(Color foreColor)
+        {
+            memoLog.SelectionFont = _logFont;
+            memoLog.SelectionColor = foreColor;
+            memoLog.SelectionBackColor = memoLog.BackColor;
+            memoLog.SelectionCharOffset = 0;
+        }
+
+        private void ResetLogSelectionStyle()
+        {
+            memoLog.SelectionFont = _logFont;
+            memoLog.SelectionColor = memoLog.ForeColor;
+            memoLog.SelectionBackColor = memoLog.BackColor;
+            memoLog.SelectionCharOffset = 0;
+        }
+
+        private Color ResolveLogColor(string line)
+        {
+            if (line.Contains("[错误]") || line.Contains("失败"))
+                return Color.FromArgb(239, 68, 68);
+            if (line.Contains("[警告]"))
+                return Color.FromArgb(234, 179, 8);
+            return memoLog.ForeColor;
+        }
+
+        private void TrimExcessActiveLines()
+        {
+            int excess = _activeLines.Count - MaxActiveLogLines;
+            if (excess <= 0)
+                return;
+
+            if (!RemoveLineRangeFromUi(_historyLines.Count, excess))
+                return;
+
+            for (int i = 0; i < excess && _activeLines.Count > 0; i++)
+                _activeLines.RemoveFirst();
+        }
+
+        private bool RemoveLineRangeFromUi(int startLine, int lineCount)
+        {
+            if (lineCount <= 0)
+                return true;
+
+            int start = memoLog.GetFirstCharIndexFromLine(startLine);
+            if (start < 0)
+                return false;
+
+            int endLine = startLine + lineCount;
+            int end = memoLog.GetFirstCharIndexFromLine(endLine);
+            if (end < start)
+                end = memoLog.TextLength;
+
+            memoLog.Select(start, end - start);
+            memoLog.SelectedText = string.Empty;
+            ResetLogSelectionStyle();
+            return true;
+        }
+
+        private void BeginLogUpdate()
+        {
+            memoLog.SuppressScrollDetection = true;
+            SendMessage(memoLog.Handle, WM_SETREDRAW, false, 0);
+        }
+
+        private void EndLogUpdate()
         {
             try
             {
-                memoLog.SuspendLayout();
-                var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (var line in lines)
-                {
-                    Color foreColor = memoLog.ForeColor;
-                    if (line.Contains("[错误]") || line.Contains("失败"))
-                        foreColor = Color.FromArgb(239, 68, 68);
-                    else if (line.Contains("[警告]"))
-                        foreColor = Color.FromArgb(234, 179, 8);
-
-                    memoLog.SelectionStart = memoLog.TextLength;
-                    memoLog.SelectionFont = memoLog.Font;
-                    memoLog.SelectionColor = foreColor;
-                    memoLog.AppendText(line + Environment.NewLine);
-                }
-                memoLog.SelectionColor = memoLog.ForeColor;
-                memoLog.ResumeLayout();
+                SendMessage(memoLog.Handle, WM_SETREDRAW, true, 0);
+                memoLog.Invalidate();
             }
-            catch
+            finally
             {
-                try { memoLog.ResumeLayout(); } catch { }
+                memoLog.SuppressScrollDetection = false;
+                memoLog.RefreshScrollState();
             }
         }
 
@@ -983,39 +1121,71 @@ namespace HZCYKJTHardWare.Proxy
 
         private void OnLogScrolledToTop(object sender, EventArgs e)
         {
-            if (_isLoadingHistory) return;
-            _isLoadingHistory = true;
+            if (memoLog.VerticalScrollPos > 1)
+                return;
 
-            Task.Run(() => LoadHistoryFromLog()).ContinueWith(t =>
+            int remainingHistoryCapacity = MaxHistoryLogLines - _historyLines.Count;
+            if (remainingHistoryCapacity <= 0)
+                return;
+
+            if (Interlocked.Exchange(ref _historyLoading, 1) == 1)
+                return;
+
+            var beforeTimestamp = GetFirstDisplayedLogTimestamp();
+            var pageSize = Math.Min(HistoryLoadBatch, remainingHistoryCapacity);
+            Task.Run(() => LoadHistoryFromLog(beforeTimestamp, pageSize)).ContinueWith(t =>
             {
-                _isLoadingHistory = false;
+                try
+                {
+                    if (IsDisposed || !IsHandleCreated)
+                        return;
+
+                    if (t.Status == TaskStatus.RanToCompletion && t.Result.Count > 0)
+                        PrependHistoryLines(t.Result);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _historyLoading, 0);
+                }
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
-        private void LoadHistoryFromLog()
+        private void OnLogScrolledToBottom(object sender, EventArgs e)
+        {
+            if (memoLog.AutoScroll)
+                EnterLiveMode();
+        }
+
+        private List<string> LoadHistoryFromLog(DateTime beforeTimestamp, int pageSize)
         {
             try
             {
                 var logDir = Logger.LogDirectory;
-                if (string.IsNullOrEmpty(logDir) || !Directory.Exists(logDir)) return;
+                if (string.IsNullOrEmpty(logDir) || !Directory.Exists(logDir)) return new List<string>();
 
                 if (string.IsNullOrEmpty(_historyCurrentFile))
                 {
                     _historyCurrentFile = GetCurrentLogFile(logDir);
-                    if (string.IsNullOrEmpty(_historyCurrentFile)) return;
+                    if (string.IsNullOrEmpty(_historyCurrentFile)) return new List<string>();
                 }
 
-                var lines = ReadLinesFromFile(_historyCurrentFile, HistoryLoadBatch, _historyLoadedLineCount);
-                if (lines.Count == 0) return;
-
-                _historyLoadedLineCount += lines.Count;
-
-                BeginInvoke(new Action(() => PrependHistoryLines(lines)));
+                return ReadLinesFromFile(_historyCurrentFile, pageSize, beforeTimestamp);
             }
-            catch { }
+            catch { return new List<string>(); }
         }
 
-        private List<string> ReadLinesFromFile(string filePath, int maxLines, int alreadyLoaded)
+        private DateTime GetFirstDisplayedLogTimestamp()
+        {
+            foreach (var line in memoLog.Lines)
+            {
+                if (TryParseLogTimestamp(line, out var timestamp))
+                    return timestamp;
+            }
+
+            return DateTime.MaxValue;
+        }
+
+        private List<string> ReadLinesFromFile(string filePath, int maxLines, DateTime beforeTimestamp)
         {
             var result = new List<string>();
             try
@@ -1028,64 +1198,146 @@ namespace HZCYKJTHardWare.Proxy
                 }
 
                 var allLines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var line in allLines)
+                {
+                    if (!TryParseLogTimestamp(line, out var timestamp))
+                        continue;
 
-                // Take lines before the already-loaded tail
-                int available = allLines.Length - alreadyLoaded;
-                if (available <= 0) return result;
+                    if (timestamp.Date != _processStartTime.Date ||
+                        timestamp < _processStartTime ||
+                        timestamp >= beforeTimestamp)
+                        continue;
 
-                int take = Math.Min(maxLines, available);
-                int start = available - take;
-                for (int i = start; i < available; i++)
-                    result.Add(allLines[i]);
+                    result.Add(line);
+                    if (result.Count > maxLines)
+                        result.RemoveAt(0);
+                }
 
                 return result;
             }
             catch { return result; }
         }
 
+        private static bool TryParseLogTimestamp(string line, out DateTime timestamp)
+        {
+            timestamp = DateTime.MinValue;
+            if (string.IsNullOrEmpty(line) || line.Length < 25 || line[0] != '[')
+                return false;
+
+            int end = line.IndexOf(']');
+            if (end <= 1)
+                return false;
+
+            var value = line.Substring(1, end - 1);
+            return DateTime.TryParseExact(
+                value,
+                "yyyy-MM-dd HH:mm:ss.fff",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out timestamp);
+        }
+
         private void PrependHistoryLines(List<string> lines)
         {
             if (lines.Count == 0) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => PrependHistoryLines(lines)));
+                return;
+            }
+
             try
             {
-                memoLog._suppressScrollDetection = true;
-                SendMessage(memoLog.Handle, WM_SETREDRAW, false, 0);
+                int oldFirstVisibleChar = memoLog.GetCharIndexFromPosition(new Point(1, 1));
+                int insertedLength = 0;
+                var entries = CreateLogLines(lines);
 
-                int oldSelStart = memoLog.SelectionStart;
-                int oldTextLen = memoLog.TextLength;
+                BeginLogUpdate();
+                try
+                {
+                    int insertPos = 0;
+                    for (int i = entries.Count - 1; i >= 0; i--)
+                        _historyLines.AddFirst(entries[i]);
 
-                var sb = new StringBuilder();
-                foreach (var line in lines)
-                    sb.AppendLine(line);
-                string historyText = sb.ToString();
+                    foreach (var line in entries)
+                    {
+                        var length = InsertFormattedLine(insertPos, line);
+                        insertedLength += length;
+                        insertPos += length;
+                    }
 
-                memoLog.Text = historyText + memoLog.Text;
-                _uiLogLineCount += lines.Count;
-
-                int offset = historyText.Length;
-                memoLog.SelectionStart = oldSelStart + offset;
-                memoLog.ScrollToCaret();
-
-                SendMessage(memoLog.Handle, WM_SETREDRAW, true, 0);
-                memoLog.Invalidate();
-                memoLog._suppressScrollDetection = false;
+                    _historyMode = true;
+                    memoLog.Select(Math.Min(oldFirstVisibleChar + insertedLength, memoLog.TextLength), 0);
+                    memoLog.ScrollToCaret();
+                    ResetLogSelectionStyle();
+                }
+                finally
+                {
+                    EndLogUpdate();
+                }
             }
             catch
             {
                 try
                 {
-                    SendMessage(memoLog.Handle, WM_SETREDRAW, true, 0);
-                    memoLog._suppressScrollDetection = false;
+                    if (memoLog.SuppressScrollDetection)
+                        EndLogUpdate();
                 }
                 catch { }
             }
+        }
+
+        private void EnterLiveMode()
+        {
+            if (!_historyMode && _historyLines.Count == 0)
+            {
+                TrimExcessActiveLines();
+                memoLog.ScrollToBottomProgrammatically();
+                return;
+            }
+
+            BeginLogUpdate();
+            try
+            {
+                RemoveHistoryFromUi();
+                _historyLines.Clear();
+                _historyMode = false;
+                TrimExcessActiveLines();
+            }
+            finally
+            {
+                EndLogUpdate();
+            }
+
+            memoLog.ScrollToBottomProgrammatically();
+        }
+
+        private void RemoveHistoryFromUi()
+        {
+            int historyCount = _historyLines.Count;
+            if (historyCount <= 0)
+                return;
+
+            if (_activeLines.Count == 0)
+            {
+                memoLog.Clear();
+                return;
+            }
+
+            int activeStart = memoLog.GetFirstCharIndexFromLine(historyCount);
+            if (activeStart <= 0)
+                return;
+
+            memoLog.Select(0, activeStart);
+            memoLog.SelectedText = string.Empty;
+            ResetLogSelectionStyle();
         }
 
         private string GetCurrentLogFile(string logDir)
         {
             try
             {
-                var pattern = $"*_{DateTime.Now:yyyyMMdd}.log";
+                var pattern = $"*_{_processStartTime:yyyyMMdd}.log";
                 var files = Directory.GetFiles(logDir, pattern);
                 return files.Length > 0 ? files[0] : null;
             }
@@ -1097,7 +1349,9 @@ namespace HZCYKJTHardWare.Proxy
             try
             {
                 memoLog.Clear();
-                _uiLogLineCount = 0;
+                _activeLines.Clear();
+                _historyLines.Clear();
+                _historyMode = false;
                 while (_pendingUiLogs.TryDequeue(out _)) { }
                 _pendingUiLogCount = 0;
             }

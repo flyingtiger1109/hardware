@@ -180,6 +180,7 @@
     <ClInclude Include="include\HZCYKJTHardWare.h" />
     <ClInclude Include="include\HZCYKJTHardWare_types.h" />
     <ClInclude Include="src\hzsjkjt_context.h" />
+    <ClInclude Include="src\sdk_runtime.h" />
     <ClInclude Include="src\logger.h" />
     <ClInclude Include="src\config_manager.h" />
     <ClInclude Include="src\delphi_proxy.h" />
@@ -211,6 +212,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\hzsjkjt_context.cpp" />
+    <ClCompile Include="src\sdk_runtime.cpp" />
     <ClCompile Include="src\logger.cpp" />
     <ClCompile Include="src\config_manager.cpp" />
     <ClCompile Include="src\delphi_proxy.cpp" />

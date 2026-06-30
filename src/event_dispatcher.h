@@ -17,7 +17,7 @@ public:
     void Start();
 
     // 停止 worker 线程
-    void Stop();
+    bool Stop(int timeoutMs = 1500);
 
     // 投递事件（线程安全，可在 HTTP 回调线程调用）
     void PostEvent(const HZCYKJTHardWare_EVENT& event);

@@ -22,7 +22,7 @@ public:
     int Start(const std::string& host, int port);
 
     // 停止服务器
-    void Stop();
+    bool Stop(int timeoutMs = 1500);
 
     // 是否运行中
     bool IsRunning() const;
@@ -45,7 +45,8 @@ private:
     std::atomic<int> m_port{0};
     std::string m_host;
     std::unique_ptr<std::thread> m_thread;
-    SOCKET m_listenSocket = INVALID_SOCKET;
+    std::atomic<SOCKET> m_listenSocket{INVALID_SOCKET};
+    std::atomic<SOCKET> m_clientSocket{INVALID_SOCKET};
 };
 
 } // namespace HZCYKJTHardWare

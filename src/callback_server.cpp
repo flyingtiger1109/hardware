@@ -83,22 +83,39 @@ int CallbackServer::Start(const std::string& host, int port) {
     return HZCYKJTHardWare_RET_OK;
 }
 
-void CallbackServer::Stop() {
+bool CallbackServer::Stop(int timeoutMs) {
     m_running = false;
 
-    // 关闭监听 socket 以唤醒 accept
-    if (m_listenSocket != INVALID_SOCKET) {
-        closesocket(m_listenSocket);
-        m_listenSocket = INVALID_SOCKET;
+    // Close both listening and active sockets so accept/recv are interrupted.
+    SOCKET listenSocket = m_listenSocket.exchange(INVALID_SOCKET);
+    if (listenSocket != INVALID_SOCKET) {
+        closesocket(listenSocket);
+    }
+    SOCKET clientSocket = m_clientSocket.exchange(INVALID_SOCKET);
+    if (clientSocket != INVALID_SOCKET) {
+        shutdown(clientSocket, SD_BOTH);
+        closesocket(clientSocket);
     }
 
     if (m_thread && m_thread->joinable()) {
+        if (m_thread->get_id() == std::this_thread::get_id()) {
+            LOG_ERROR("回调服务", "禁止在回调接收线程内停止回调服务");
+            return false;
+        }
+        DWORD waitResult = WaitForSingleObject(
+            static_cast<HANDLE>(m_thread->native_handle()),
+            static_cast<DWORD>(timeoutMs > 0 ? timeoutMs : 1));
+        if (waitResult != WAIT_OBJECT_0) {
+            LOG_ERROR("回调服务", "回调接收线程停止超时：timeout_ms=%d", timeoutMs);
+            return false;
+        }
         m_thread->join();
     }
     m_thread.reset();
 
     WSACleanup();
     LOG_INFO("回调服务", "硬件控制程序回调接收服务已停止");
+    return true;
 }
 
 bool CallbackServer::IsRunning() const {
@@ -151,6 +168,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
             continue;
         }
 
+        m_clientSocket.store(clientSocket);
+
         // 设置接收超时
         int timeout = 5000;
         setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
@@ -195,7 +214,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
                             "Content-Length: 0\r\n"
                             "Connection: close\r\n\r\n";
                         send(clientSocket, tooLarge, (int)strlen(tooLarge), 0);
-                        closesocket(clientSocket);
+                        SOCKET ownedClient = m_clientSocket.exchange(INVALID_SOCKET);
+                        if (ownedClient != INVALID_SOCKET) closesocket(ownedClient);
                         continue;
                     }
 
@@ -248,7 +268,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
             send(clientSocket, response, (int)strlen(response), 0);
         }
 
-        closesocket(clientSocket);
+        SOCKET ownedClient = m_clientSocket.exchange(INVALID_SOCKET);
+        if (ownedClient != INVALID_SOCKET) closesocket(ownedClient);
     }
 
 LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已退出");

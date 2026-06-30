@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -22,9 +23,9 @@ namespace HZCYKJTHardWare.Proxy.Core
 
     /// <summary>
     /// Fixed-size worker queue with one dedicated thread.
-    /// - Worker blocks on Take() when idle (no CPU spin)
-    /// - Queue full → immediately returns (no waiting)
-    /// - Preview queues use "replace" mode (new request replaces pending old one)
+    /// - maxLength is the total outstanding limit, including the executing task
+    /// - Replace mode keeps the executing/next task and replaces only a pending task
+    /// - With maxLength=2, the model is one executing plus one latest pending task
     /// - Terminal switch batch tracking for filtering old requests
     /// - Statistics: enqueued, dropped, completed, timed out
     /// </summary>
@@ -38,12 +39,14 @@ namespace HZCYKJTHardWare.Proxy.Core
         private Thread _worker;
         private readonly object _lock = new object();
         private volatile bool _disposed;
+        private int _stopLogged;
 
         // Queue using Monitor.Wait/Pulse for blocking consumer (no CPU spin)
         private QueueTask<T>[] _buffer;
         private int _head;
         private int _tail;
         private int _count;
+        private bool _executing;
 
         // Statistics
         private long _enqueued;
@@ -53,7 +56,9 @@ namespace HZCYKJTHardWare.Proxy.Core
         private long _replaced;
 
         public string Name => _name;
-        public int Count { get { lock (_lock) return _count; } }
+        public int Count { get { lock (_lock) return _count + (_executing ? 1 : 0); } }
+        public int PendingCount { get { lock (_lock) return _count; } }
+        public bool IsExecuting { get { lock (_lock) return _executing; } }
         public long Enqueued => Interlocked.Read(ref _enqueued);
         public long Dropped => Interlocked.Read(ref _dropped);
         public long Completed => Interlocked.Read(ref _completed);
@@ -63,12 +68,15 @@ namespace HZCYKJTHardWare.Proxy.Core
         public WorkerQueue(string name, int maxLength, Action<QueueTask<T>> handler,
             bool replaceOld = false, int timeoutMs = 15000)
         {
+            if (maxLength < 1) throw new ArgumentOutOfRangeException(nameof(maxLength));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+
             _name = name;
             _maxLength = maxLength;
             _replaceOld = replaceOld;
             _handler = handler;
             _timeoutMs = timeoutMs;
-            _buffer = new QueueTask<T>[maxLength + 1]; // +1 for sentinel
+            _buffer = new QueueTask<T>[maxLength];
             _head = 0;
             _tail = 0;
             _count = 0;
@@ -83,11 +91,15 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Enqueue a task. Returns false if queue is full (task dropped).
-        /// In replace mode, if queue is full, replaces the oldest pending task.
+        /// Enqueue a task. Returns false if all outstanding slots are occupied and
+        /// there is no pending task that may be replaced. In replace mode, a new
+        /// request replaces the pending task but never interrupts the executing task.
         /// </summary>
         public bool Enqueue(T data, int generation)
         {
+            QueueTask<T> replacedTask = null;
+            long replacedCount = 0;
+
             lock (_lock)
             {
                 if (_disposed) return false;
@@ -101,21 +113,19 @@ namespace HZCYKJTHardWare.Proxy.Core
 
                 Interlocked.Increment(ref _enqueued);
 
-                if (_count >= _maxLength)
+                var outstanding = _count + (_executing ? 1 : 0);
+                if (outstanding >= _maxLength)
                 {
-                    if (_replaceOld)
+                    if (_replaceOld && _count > 0)
                     {
-                        // Replace mode: discard oldest pending, immediately fail its waiter
-                        var oldTask = _buffer[_head];
-                        _buffer[_head] = task;
-                        _head = (_head + 1) % _buffer.Length;
-                        Interlocked.Increment(ref _replaced);
-
-                        // Immediately complete the replaced task's TCS so its HTTP handler returns fast
-                        // (otherwise it would wait full timeout, holding DLL's socket)
-                        TryCompleteDroppedTask(oldTask);
-
-                        Logger.Info($"[队列] {_name} 队列满, 新请求替换旧排队任务 (已替换={_replaced})");
+                        // If no task is executing yet, the head item is the protected
+                        // next-to-run task. Replace the first item behind it instead.
+                        var replaceIndex = _executing || _count == 1
+                            ? _head
+                            : (_head + 1) % _buffer.Length;
+                        replacedTask = _buffer[replaceIndex];
+                        _buffer[replaceIndex] = task;
+                        replacedCount = Interlocked.Increment(ref _replaced);
                     }
                     else
                     {
@@ -132,8 +142,15 @@ namespace HZCYKJTHardWare.Proxy.Core
                 }
 
                 Monitor.Pulse(_lock);  // Wake up worker
-                return true;
             }
+
+            // Complete outside the queue lock so a custom result sink cannot re-enter it.
+            if (replacedTask != null)
+            {
+                TryCompleteTask(replacedTask, "queue_replaced");
+                Logger.Info($"[队列] {_name} 新请求替换等待任务 (已替换={replacedCount})");
+            }
+            return true;
         }
 
         /// <summary>
@@ -141,7 +158,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         private void Run()
         {
-            while (!_disposed)
+            while (true)
             {
                 QueueTask<T> task = null;
                 lock (_lock)
@@ -157,11 +174,26 @@ namespace HZCYKJTHardWare.Proxy.Core
                         _buffer[_head] = null;
                         _head = (_head + 1) % _buffer.Length;
                         _count--;
+                        _executing = true;
                     }
                 }
 
-                if (task != null)
-                    ExecuteWithTiming(task);
+                try
+                {
+                    if (task != null)
+                        ExecuteWithTiming(task);
+                }
+                finally
+                {
+                    if (task != null)
+                    {
+                        lock (_lock)
+                        {
+                            _executing = false;
+                            Monitor.PulseAll(_lock);
+                        }
+                    }
+                }
             }
         }
 
@@ -175,7 +207,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 {
                     Interlocked.Increment(ref _timedOut);
                     Logger.Warn($"[队列] {_name} 任务排队已超时({_timeoutMs}ms), 已丢弃, 排队耗时={queueWaitMs:F0}ms");
-                    TryCompleteDroppedTask(task);
+                    TryCompleteTask(task, "timeout");
                     return;
                 }
 
@@ -192,20 +224,22 @@ namespace HZCYKJTHardWare.Proxy.Core
             {
                 sw.Stop();
                 Logger.Error($"[队列] {_name} 任务异常: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                TryCompleteTask(task, "failed");
                 Interlocked.Increment(ref _completed);  // Count as completed (handled exception)
             }
         }
 
-        private static void TryCompleteDroppedTask(QueueTask<T> task)
+        internal static void TryCompleteTask(QueueTask<T> task, string code)
         {
             if (task == null)
                 return;
 
+            var result = "{\"error\":true,\"code\":\"" + code + "\"}";
             var data = task.Data;
             if (data is TaskCompletionSource<string> tcs)
-                tcs.TrySetResult("{\"error\":true,\"code\":\"timeout\"}");
+                tcs.TrySetResult(result);
             else if (data is IQueueResultSink sink)
-                sink.TrySetQueueResult("{\"error\":true,\"code\":\"timeout\"}");
+                sink.TrySetQueueResult(result);
         }
 
         public string GetStats()
@@ -213,22 +247,53 @@ namespace HZCYKJTHardWare.Proxy.Core
             return $"{_name}: 当前={Count}/{_maxLength} 入队={Enqueued} 完成={Completed} 丢弃={Dropped} 替换={Replaced} 超时={TimedOut}";
         }
 
-        public void Dispose()
+        internal void RequestStop()
         {
-            _disposed = true;
+            List<QueueTask<T>> pendingTasks = null;
             lock (_lock)
             {
+                if (_disposed) return;
+                _disposed = true;
+                pendingTasks = new List<QueueTask<T>>(_count);
+                while (_count > 0)
+                {
+                    var task = _buffer[_head];
+                    _buffer[_head] = null;
+                    _head = (_head + 1) % _buffer.Length;
+                    _count--;
+                    if (task != null) pendingTasks.Add(task);
+                }
+                _tail = _head;
                 Monitor.PulseAll(_lock);
             }
-            if (_worker != null && _worker.IsAlive)
+
+            foreach (var task in pendingTasks)
+                TryCompleteTask(task, "service_stopping");
+        }
+
+        internal bool WaitForStop(int timeoutMs)
+        {
+            var worker = _worker;
+            if (worker != null && worker.IsAlive)
             {
-                _worker.Join(3000);
-                if (_worker.IsAlive)
+                worker.Join(Math.Max(0, timeoutMs));
+                if (worker.IsAlive)
+                {
                     Logger.Warn($"[队列] {_name} worker 线程未能及时退出");
+                    return false;
+                }
             }
             _worker = null;
             _buffer = null;
-            Logger.Info($"[队列] {_name} 已停止 " + GetStats());
+            if (Interlocked.Exchange(ref _stopLogged, 1) == 0)
+                Logger.Info($"[队列] {_name} 已停止 " + GetStats());
+            return true;
+        }
+
+        public void Dispose()
+        {
+            RequestStop();
+            WaitForStop(3000);
         }
     }
 }

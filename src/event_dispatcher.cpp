@@ -113,20 +113,36 @@ void EventDispatcher::Start() {
     LOG_DEBUG("事件分发", "事件分发线程已启动");
 }
 
-void EventDispatcher::Stop() {
+bool EventDispatcher::Stop(int timeoutMs) {
     m_running = false;
     WakeAllConditionVariable(&m_cv);
     if (m_thread && m_thread->joinable()) {
+        if (m_thread->get_id() == std::this_thread::get_id()) {
+            m_running = true;
+            LOG_ERROR("事件分发", "禁止在第三方事件回调线程内调用ReleaseSdk");
+            return false;
+        }
+        DWORD waitResult = WaitForSingleObject(
+            static_cast<HANDLE>(m_thread->native_handle()),
+            static_cast<DWORD>(timeoutMs > 0 ? timeoutMs : 1));
+        if (waitResult != WAIT_OBJECT_0) {
+            // Keep the runtime usable. The caller may retry ReleaseSdk after the
+            // third-party callback returns.
+            m_running = true;
+            LOG_ERROR("事件分发", "第三方事件回调线程停止超时：timeout_ms=%d", timeoutMs);
+            return false;
+        }
         m_thread->join();
     }
     m_thread.reset();
     LOG_DEBUG("事件分发", "事件分发线程已停止");
+    return true;
 }
 
 void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
     bool callbackChanged = false;
     EnterCriticalSection(&m_cs);
-    callbackChanged = (callback != nullptr && m_callback != callback);
+    callbackChanged = (m_callback != callback);
     m_callback = callback;
     if (callbackChanged) {
         std::queue<HZCYKJTHardWare_EVENT> emptyEvents;
@@ -140,7 +156,7 @@ void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
     if (callbackChanged) {
         RequestSessionManager::Instance().CancelAllForCallbackReset();
     }
-    LOG_INFO("事件分发", "第三方事件回调已注册");
+    LOG_INFO("事件分发", callback ? "第三方事件回调已注册" : "第三方事件回调已清除");
 }
 
 void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {

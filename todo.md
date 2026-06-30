@@ -614,3 +614,190 @@
 - [x] C# 第三方 Demo `Release|x86` 编译通过：0 warning，0 error。
 - [x] Demo 输出目录已包含最新 `HZCYKJTHardWare.dll` 和带 `authorize_ms=60000` 的 `HZCYKJTHardWare.json`。
 - [ ] 真实终端授权“同意/不同意/不操作等待 60 秒超时”现场验证。
+
+## 虹膜异步采集协议适配（2026-06-29）
+
+### 已完成事项
+
+- [x] DLL 现有 `/capture/iris` 请求在 C# Proxy 中改为实际转发终端 `POST /resources/iris/request`。
+- [x] 逐笔异步虹膜请求全链路保留 DLL 传入的 `request_id`，避免回调会话无法匹配。
+- [x] `POST /process/start` 的 `callbacks` 增加 `iris_image` 完整回调地址，支持流程内自动虹膜推送。
+- [x] 逐笔请求和流程登记的虹膜回调地址使用协议路径 `/iris-image`，不影响 OCR/NFC 公共回调路径。
+- [x] `/iris-image` 回调支持双眼、仅左眼、仅右眼及兼容 `data.image_base64` 报文。
+- [x] `/iris-image` 合法推送返回 HTTP 202、`status=accepted` 和原 `request_id`；非法虹膜回调返回 HTTP 400。
+- [x] 按 `image_mime_type` 分别保存 `iris_left`、`iris_right` 图像，并向 DLL 返回请求保存目录。
+- [x] 终端采集失败、无有效图像或文件保存失败时，使用现有 DLL 虹膜失败事件链路返回错误。
+- [x] 虹膜请求在终端切换后过期时完成等待任务，避免无结果等待完整超时。
+- [x] 最终虹膜回调处理后清理该笔保存路径和回调地址映射。
+
+### 修改文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Core/QueueManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Parsing/CallbackParser.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`
+
+### 兼容性说明
+
+- DLL 导出函数、`__stdcall` 调用约定、参数、事件编号和第三方回调 JSON 既有字段未改变。
+- `HZCYKJTHardWare_CaptureIrisImage` 继续保持异步受理语义。
+- 终端同步端点 `/resources/iris/sync-request` 本次未新增 DLL 导出入口，避免扩大第三方接口范围。
+
+### 验证状态
+
+- [x] C# Proxy `Compile|Release|x86` 通过。
+- [x] 双眼虹膜回调解析验证通过。
+- [x] 单右眼虹膜回调解析验证通过。
+- [x] 兼容 `data.image_base64` 回调解析验证通过。
+- [x] `error_code` 失败回调解析验证通过。
+- [ ] 真实终端逐笔异步请求、HTTP 202 受理及 `/iris-image` 回调联调。
+- [ ] 流程开始登记 `callbacks.iris_image` 后的自动采集回调联调。
+- [ ] 图片落盘失败、终端 HTTP 400/503、超时和终端切换场景验证。
+
+### 回退方式
+
+- 恢复上述 5 个 C# Proxy 文件至本次修改前版本，并删除本节进度记录。
+
+## C# Proxy 最新等待任务队列模型（2026-06-29）
+
+### 当前阶段
+
+- [x] 完成 `Single Runner + Latest Pending` 队列模型实现。
+- [x] 虹膜和授权迁移到独立业务队列。
+- [ ] 真实终端并发请求和拥塞场景联调。
+
+### 本次修改内容
+
+1. 队列容量改为包含正在执行任务的总在途容量；业务队列容量为 2，即 1 个执行、1 个等待。
+2. 新请求到达且已有等待任务时，只替换等待任务，不中断正在执行或即将执行的首个任务。
+3. 被替换任务立即完成为内部错误 `queue_replaced`，避免继续等待到超时。
+4. 队列停止时，所有尚未执行的任务立即完成为 `service_stopping`。
+5. 虹膜从 `MiscQueue` 迁移到独立 `IrisQueue`；授权从直接执行迁移到独立 `AuthorizeQueue`。
+6. 终端切换导致任务 generation 过期时，统一完成为 `terminal_switching`。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Core/WorkerQueue.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Core/QueueManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`
+
+### 兼容性说明
+
+- DLL 导出函数、调用约定、参数、第三方回调 JSON 和终端 HTTP 协议未改变。
+- 正常请求处理逻辑未改变；仅拥塞时由最新请求替换唯一等待任务。
+- `queue_replaced`、`service_stopping` 为 DLL 与 Proxy 之间的内部错误，不新增第三方 DLL 错误码。
+- C# Proxy 继续保持 `net46`、`x86`，未新增依赖。
+
+### 风险与注意事项
+
+1. 正在执行的旧请求仍正常返回；队列模型只保证等待执行的任务始终为最新请求。
+2. 虹膜、授权改为独立队列后不再互相占用 `MiscQueue`。
+3. 真实终端响应接近内部等待超时时，仍需联调确认超时边界。
+
+### 验证状态
+
+- [x] C# Proxy `Compile|Release|x86`：通过。
+- [x] 队列顺序：A 执行时 B 等待，C 替换 B，D 替换 C，最终仅执行 A、D。
+- [x] 被替换任务：B、C 均立即返回 `queue_replaced`。
+- [x] 队列状态：验证执行中 `Count=2`、`PendingCount=1`。
+- [ ] 真实终端虹膜、OCR、NFC、授权并发联调。
+- [ ] Proxy 停止时正在执行任务的 3～5 秒释放验证。
+
+### 下一步计划
+
+- [ ] 使用终端或 Mock 连续提交同类请求，核对 request_id、受理结果及回调归属。
+- [ ] 单独实施 Proxy 生命周期和 `ReleaseSdk` 释放优化。
+
+### 回退方式
+
+- 恢复上述 4 个 C# Proxy 文件中本节相关修改，并删除本节进度记录；不涉及 DLL 文件回退。
+
+## C# Proxy 统一请求注册表与状态机（阶段 2，2026-06-29）
+
+### 当前阶段
+
+- [x] 完成阶段 2：统一请求上下文、状态迁移和回调去重。
+- [x] OCR/NFC 全链路透传 DLL 原始 `request_id`。
+- [ ] 真实终端异步受理与回调时序联调。
+
+### 本次修改内容
+
+1. 新增以 `(request_id, resource_type)` 为键的 `RequestRegistry`，统一保存路径、DLL 回调地址、terminal generation、TTL 和请求状态。
+2. 请求状态统一为 `Created → Queued → Submitting → Accepted → CallbackReceived → Completed`，并支持 `Failed/Cancelled/TimedOut`。
+3. OCR、NFC 队列任务携带 DLL 原始 `request_id`，Proxy worker 不再重新生成 GUID。
+4. 流程开始保留 DLL 传入的流程 `request_id`，并为 OCR、NFC、虹膜分别登记上下文，允许同一个流程 ID 对应三种资源回调。
+5. 虹膜、授权、Proxy UI 直调和流程内自动回调统一接入注册表。
+6. 回调通过原子状态迁移认领；重复、迟到、终端切换后或未登记回调不再重复转发 DLL。
+7. 终端切换按 generation 取消旧请求；服务停止和流程结束统一取消活动请求。
+8. 回调早于受理响应时允许先完成，后到的受理响应不会覆盖完成状态；取消后的迟到受理不会重新激活请求。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Core/RequestRegistry.cs`：新增统一请求上下文、状态机、TTL 和完成记录。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`：透传 request_id、登记请求、处理队列失败和流程资源上下文。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`：worker 提交、UI 直调、终端切换和停止接入注册表。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`：移除分散字典和独立去重表，统一认领并完成回调。
+
+### 兼容性说明
+
+- DLL 导出函数、`__stdcall`、参数、第三方回调 JSON、终端路径和报文字段未改变。
+- C# Proxy 继续保持 `net46`、`x86`，未新增第三方依赖。
+- DLL 与 Proxy 现有内部 HTTP 路由和成功响应结构保持不变。
+- 行为修正仅涉及错误链路：重复、过期和终端切换后的旧回调不再转发。
+
+### 风险与注意事项
+
+1. Proxy 重启后内存注册表不会恢复，重启前终端遗留回调会按未登记请求跳过。
+2. 逐笔请求默认保留 10 分钟，流程资源上下文保留 8 小时；流程结束会提前取消。
+3. `DllCallbackUrl` 已纳入请求上下文，但当前 `DllCallbackSender` 仍按统一配置地址发送，保持现有行为。
+
+### 验证状态
+
+- [x] C# Proxy `Compile|Release|x86`：通过。
+- [x] 同一流程 request_id 的 OCR/NFC/虹膜三资源上下文并存测试：通过。
+- [x] 首次回调认领、重复回调拒绝、完成后迟到回调拒绝：通过。
+- [x] 回调早于受理响应的状态竞争测试：通过。
+- [x] terminal generation 取消和取消后迟到受理测试：通过。
+- [x] `authorization` 与 `protocol` 资源类型归一化测试：通过。
+- [x] `git diff --check`：通过，仅存在工作区既有 LF/CRLF 提示。
+- [ ] 真实终端 OCR/NFC 原 request_id 受理和回调联调。
+- [ ] 流程内 OCR/NFC/虹膜自动回调联调。
+- [ ] Proxy 重启、终端迟到回调和 8 小时流程 TTL 场景验证。
+
+### 下一步计划
+
+- [ ] 阶段 3：实现 `ProxyRuntime` 生命周期、活动任务跟踪和可等待停止。
+- [ ] 验证 Proxy 停止时端口、线程、HTTP 请求和队列在 3～5 秒内释放。
+
+### 回退方式
+
+- 删除 `Core/RequestRegistry.cs`，恢复上述 3 个 Server 文件使用原保存目录、回调地址和去重字典；不涉及 DLL 文件回退。
+
+## 方案 C 内部结构重构收口（2026-06-29）
+
+- [x] Proxy 后台任务改为真正有界启动，容量满时不创建未追踪任务。
+- [x] Proxy 停止、活动连接、队列线程和 IDisposable 资源统一收口。
+- [x] UI 与 DLL 终端切换统一进入 `SwitchCoordinator`。
+- [x] DLL 新增 `SdkRuntime` 和导出调用租约，保护 Init/Release 并发。
+- [x] `ReleaseSdk` 增加在途调用等待、回调线程限时停止和失败重试语义。
+- [x] 删除 DLL 重复业务队列实现，C# Proxy 为唯一业务队列所有者。
+- [x] C# Proxy `Release|x86` 编译通过，24/24 核心单元测试通过。
+- [x] DLL `Release|Win32` 编译通过，导出表 20/20 与基线一致。
+- [x] x86 生命周期验证连续 3 次 Init/Release 成功，Release 最大 1ms。
+- [ ] 正式 Windows 环境执行 7 项 Proxy 集成测试。
+- [ ] 真实终端执行并发、切换、异常断开、2 小时及 24 小时长稳验证。
+
+详细修改、兼容性、风险和回退方式见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## 第三方预览方案 B（2026-06-29）
+
+- [x] HTTP MJPEG 断流由播放器上报 `PreviewManager`，不再永久重试失效旧 URL。
+- [x] 串行释放旧播放器、刷新 URL，并在原 HWND 自动重建预览。
+- [x] 增加会话代次、单恢复任务约束及 1/2/5/10 秒有界退避。
+- [x] 禁止 HTTP MJPEG 临时 URL 的 60 秒后台主动刷新，保留 RTSP 校验。
+- [x] C# Proxy/Test `Release|x86` 编译通过，非集成单元测试 26/26 通过。
+- [ ] 真实终端验证断流恢复、HTTP 服务恢复、主动停止和终端切换竞争。
+- [ ] 记录恢复黑屏时长并执行 2 小时/24 小时长稳测试。

@@ -18,8 +18,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const int ReadBufferSize = 8192;
         private const int MaxBufferedBytes = 8 * 1024 * 1024;
         private const int RenderIntervalMs = 33;
-        private const int ReconnectMaxRetries = 5;
-        private const int ReconnectDelayMs = 3000;
+        private const int SameUrlMaxFailures = 2;
+        private const int ReconnectDelayMs = 1000;
+        private const int ConnectTimeoutMs = 5000;
+        private const int StreamReadTimeoutMs = 5000;
 
         private readonly TaskCompletionSource<bool> _startTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -33,10 +35,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly bool _visible;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly object _requestLock = new object();
+        private readonly object _faultLock = new object();
 
         private volatile bool _disposed;
         private volatile bool _running;
         private volatile bool _stopRequested;
+        private int _streamFaulted;
+        private bool _faultCallbackIssued;
+        private string _streamFaultReason;
+        private Action<MjpegPreviewController, string> _streamFaultHandler;
         private HttpWebRequest _request;
         private Thread _readerThread;
         private IntPtr _videoHwnd = IntPtr.Zero;
@@ -68,7 +75,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public bool IsRunning
         {
-            get { return _running && _videoHwnd != IntPtr.Zero && IsWindow(_videoHwnd); }
+            get
+            {
+                return _running && Volatile.Read(ref _streamFaulted) == 0 &&
+                       _videoHwnd != IntPtr.Zero && IsWindow(_videoHwnd);
+            }
+        }
+
+        internal void SetStreamFaultHandler(Action<MjpegPreviewController, string> handler)
+        {
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
+            lock (_faultLock)
+                _streamFaultHandler = handler;
+
+            // The stream can fail immediately after the first frame and before PreviewManager
+            // stores the session. Dispatching here closes that registration race.
+            TryDispatchStreamFault();
         }
 
         public static async Task<MjpegPreviewController> StartAsync(string description, string url,
@@ -239,10 +263,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void ReadLoop()
         {
             var buffer = new List<byte>(ReadBufferSize * 4);
-            int retryCount = 0;
+            int failureCount = 0;
 
             while (!_stopRequested && !_cts.IsCancellationRequested)
             {
+                string failureReason = null;
                 try
                 {
                     var request = CreateRequest();
@@ -253,13 +278,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     using (var stream = response.GetResponseStream())
                     {
                         Logger.Debug($"HTTP MJPEG流已打开: {_description}");
-                        retryCount = 0; // 连接成功，重置重试计数
 
                         if (stream == null)
-                        {
-                            _startTcs.TrySetResult(false);
-                            return;
-                        }
+                            throw new IOException("MJPEG response stream is null");
 
                         var readBuffer = new byte[ReadBufferSize];
                         while (!_stopRequested && !_cts.IsCancellationRequested)
@@ -274,43 +295,80 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     }
 
                     if (!_stopRequested)
-                    {
-                        Logger.Warn($"HTTP MJPEG流结束: {_description}");
-                        _startTcs.TrySetResult(false);
-                    }
-                    return;
+                        failureReason = "MJPEG stream ended";
                 }
                 catch (WebException ex)
                 {
-                    if (_stopRequested) return;
-                    retryCount++;
-                    if (retryCount >= ReconnectMaxRetries)
-                    {
-                        Logger.Warn($"HTTP MJPEG重连失败({ReconnectMaxRetries}次): {_description}, error={ex.Message}");
-                        _startTcs.TrySetResult(false);
+                    if (_stopRequested || _cts.IsCancellationRequested)
                         return;
-                    }
-                    Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后重连({retryCount}/{ReconnectMaxRetries}): {_description}, error={ex.Message}");
-                    Thread.Sleep(ReconnectDelayMs);
+                    failureReason = ex.Message;
                 }
                 catch (Exception ex)
                 {
-                    if (_stopRequested) return;
-                    retryCount++;
-                    if (retryCount >= ReconnectMaxRetries)
-                    {
-                        Logger.Warn($"HTTP MJPEG重连失败({ReconnectMaxRetries}次): {_description}, error={ex.Message}");
-                        _startTcs.TrySetResult(false);
+                    if (_stopRequested || _cts.IsCancellationRequested)
                         return;
-                    }
-                    Logger.Warn($"HTTP MJPEG异常，{ReconnectDelayMs / 1000}秒后重连({retryCount}/{ReconnectMaxRetries}): {_description}, error={ex.Message}");
-                    Thread.Sleep(ReconnectDelayMs);
+                    failureReason = ex.Message;
                 }
                 finally
                 {
                     lock (_requestLock)
                         _request = null;
                 }
+
+                if (_stopRequested || _cts.IsCancellationRequested)
+                    return;
+
+                failureCount++;
+                buffer.Clear();
+                if (failureCount >= SameUrlMaxFailures)
+                {
+                    Logger.Warn($"HTTP MJPEG同URL恢复失败({SameUrlMaxFailures}次): {_description}, error={failureReason}");
+                    SignalStreamFault(failureReason);
+                    return;
+                }
+
+                Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同URL重连" +
+                            $"({failureCount}/{SameUrlMaxFailures}): {_description}, error={failureReason}");
+                if (_cts.Token.WaitHandle.WaitOne(ReconnectDelayMs))
+                    return;
+            }
+        }
+
+        private void SignalStreamFault(string reason)
+        {
+            if (_disposed || _stopRequested || Interlocked.Exchange(ref _streamFaulted, 1) != 0)
+                return;
+
+            lock (_faultLock)
+                _streamFaultReason = string.IsNullOrWhiteSpace(reason) ? "MJPEG stream unavailable" : reason;
+
+            _running = false;
+            _startTcs.TrySetResult(false);
+            _stopRequested = true;
+            TryDispatchStreamFault();
+        }
+
+        private void TryDispatchStreamFault()
+        {
+            Action<MjpegPreviewController, string> handler;
+            string reason;
+            lock (_faultLock)
+            {
+                if (_faultCallbackIssued || _streamFaultHandler == null || string.IsNullOrEmpty(_streamFaultReason))
+                    return;
+
+                _faultCallbackIssued = true;
+                handler = _streamFaultHandler;
+                reason = _streamFaultReason;
+            }
+
+            try
+            {
+                handler(this, reason);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"HTTP MJPEG stream fault callback failed: {_description}, error={ex.Message}", ex);
             }
         }
 
@@ -322,8 +380,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             request.UserAgent = "HZCYKJTHardWare.Proxy MJPEG Preview";
             request.KeepAlive = false;
             request.Proxy = null;
-            request.Timeout = 5000;
-            request.ReadWriteTimeout = 5000;
+            request.Timeout = ConnectTimeoutMs;
+            request.ReadWriteTimeout = StreamReadTimeoutMs;
             request.AllowReadStreamBuffering = false;
             request.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore);
             request.Headers[HttpRequestHeader.Pragma] = "no-cache";

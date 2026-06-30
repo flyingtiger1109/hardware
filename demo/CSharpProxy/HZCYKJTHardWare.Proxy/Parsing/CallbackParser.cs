@@ -29,6 +29,23 @@ namespace HZCYKJTHardWare.Proxy.Parsing
         public bool Valid { get; set; }
     }
 
+    public class IrisCallbackResult
+    {
+        public string RequestId { get; set; }
+        public string LeftImageBase64 { get; set; }
+        public int LeftWidth { get; set; }
+        public int LeftHeight { get; set; }
+        public int LeftScore { get; set; }
+        public string RightImageBase64 { get; set; }
+        public int RightWidth { get; set; }
+        public int RightHeight { get; set; }
+        public int RightScore { get; set; }
+        public string ImageMimeType { get; set; }
+        public string ErrorCode { get; set; }
+        public string Message { get; set; }
+        public bool Valid { get; set; }
+    }
+
     public class AuthorizeCallbackResult
     {
         public string RequestId { get; set; }
@@ -212,6 +229,47 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             return result;
         }
 
+        public static IrisCallbackResult ParseIrisCapture(string bodyUtf8)
+        {
+            var result = new IrisCallbackResult();
+            try
+            {
+                var obj = JObject.Parse(bodyUtf8);
+                var data = obj["data"] as JObject;
+
+                result.RequestId = obj["request_id"]?.ToString() ?? "";
+                result.LeftImageBase64 = GetStringField(data, "leftIris_capture")
+                    ?? GetStringField(data, "left_eye_image_base64")
+                    ?? GetStringField(data, "image_base64")
+                    ?? "";
+                result.RightImageBase64 = GetStringField(data, "rightIris_capture")
+                    ?? GetStringField(data, "right_eye_image_base64")
+                    ?? "";
+                result.LeftWidth = GetIntField(data, "leftIris_width", "left_eye_width");
+                result.LeftHeight = GetIntField(data, "leftIris_height", "left_eye_height");
+                result.LeftScore = GetIntField(data, "leftIris_score", "left_eye_quality");
+                result.RightWidth = GetIntField(data, "rightIris_width", "right_eye_width");
+                result.RightHeight = GetIntField(data, "rightIris_height", "right_eye_height");
+                result.RightScore = GetIntField(data, "rightIris_score", "right_eye_quality");
+                result.ImageMimeType = GetStringField(data, "image_mime_type")
+                    ?? GetStringField(obj, "image_mime_type")
+                    ?? "image/bmp";
+                result.ErrorCode = obj["error_code"]?.ToString()
+                    ?? obj["code"]?.ToString()
+                    ?? "";
+                result.Message = obj["message"]?.ToString() ?? "";
+                result.Valid = !string.IsNullOrEmpty(result.RequestId) &&
+                    (!string.IsNullOrEmpty(result.ErrorCode) ||
+                     !string.IsNullOrEmpty(result.LeftImageBase64) ||
+                     !string.IsNullOrEmpty(result.RightImageBase64));
+            }
+            catch
+            {
+                result.Valid = false;
+            }
+            return result;
+        }
+
         private static string GetStringField(JObject obj, string key)
         {
             if (obj == null) return null;
@@ -219,6 +277,19 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             if (token == null) return null;
             if (token.Type == JTokenType.String) return token.ToString();
             return null;
+        }
+
+        private static int GetIntField(JObject obj, params string[] keys)
+        {
+            if (obj == null || keys == null) return 0;
+            foreach (var key in keys)
+            {
+                var token = obj[key];
+                if (token == null) continue;
+                if (token.Type == JTokenType.Integer) return token.Value<int>();
+                if (int.TryParse(token.ToString(), out var value)) return value;
+            }
+            return 0;
         }
 
         public static AuthorizeCallbackResult ParseAuthorize(string bodyUtf8)
