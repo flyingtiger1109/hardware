@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,6 +29,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly Coordinator.SwitchCoordinator _coordinator;
         private readonly Scheduler.WorkerExecutionEngine _engine;
         private readonly Core.RequestRegistry _requestRegistry;
+        private readonly TerminalProcessRegistry _processRegistry;
+        private readonly ControlOperationGate _controlGate;
 
         // === Supporting modules ===
         private readonly TerminalManager _terminalManager;
@@ -43,7 +46,9 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ProxyRuntime _runtime;
         private readonly Action<string> _log;
         private readonly Action<bool> _onProcessStateChanged;
+        private readonly Action<int> _onTerminalChanged;
         private string _lanIp;
+        private int _started;
         private int _stopped;
         private int _disposed;
 
@@ -76,10 +81,14 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // === Constructor: create all components, wire dependencies ===
 
-        public ProxyServer(Action<string> log, Action<bool> onProcessStateChanged = null)
+        public ProxyServer(
+            Action<string> log,
+            Action<bool> onProcessStateChanged = null,
+            Action<int> onTerminalChanged = null)
         {
             _log = log;
             _onProcessStateChanged = onProcessStateChanged;
+            _onTerminalChanged = onTerminalChanged;
 
             // Infrastructure
             _transport = new Runtime.TransportLayer(log);
@@ -92,27 +101,31 @@ namespace HZCYKJTHardWare.Proxy.Server
             _previewManager = new PreviewManager(_terminalClient);
             _queueManager = new QueueManager();
             _requestRegistry = new RequestRegistry();
+            _processRegistry = new TerminalProcessRegistry();
+            _controlGate = new ControlOperationGate();
 
             // === Four components ===
 
             // Scheduler
             _engine = new WorkerExecutionEngine(
                 _terminalManager, _terminalClient, _requestRegistry,
+                _processRegistry,
                 log, GetTerminalCallbackBaseUrl, GetTerminalIrisCallbackUrl);
 
             // Runtime: lifecycle
             _runtime = new ProxyRuntime(
-                _transport, _requestRegistry, _taskTracker,
-                _queueManager, _previewManager, log);
+                _transport, _requestRegistry, _processRegistry, _taskTracker,
+                _queueManager, _previewManager, _dllCallback, log);
 
             // Coordinator: SwitchCoordinator
             _coordinator = new SwitchCoordinator(
                 _terminalManager, _previewManager, _requestRegistry,
-                _queueManager, log);
+                _queueManager, log, NotifyTerminalChanged, _controlGate);
 
             // Coordinator: BizOperationHandler
             _bizOps = new BizOperationHandler(
                 _terminalManager, _terminalClient, _requestRegistry,
+                _processRegistry, _controlGate,
                 _queueManager, _previewManager, log,
                 GetTerminalCallbackBaseUrl, GetTerminalIrisCallbackUrl,
                 onProcessStateChanged, _coordinator, _dllCallback);
@@ -127,25 +140,32 @@ namespace HZCYKJTHardWare.Proxy.Server
             _queueManager.AuthorizeHandler = _engine.ExecuteAuthorizeInternal;
 
             // Wire capture delegates (WorkerExecutionEngine → BizOperationHandler async)
-            _engine.CaptureFaceFunc = (d) => _bizOps.CaptureFaceAsync(d).GetAwaiter().GetResult();
-            _engine.CaptureFingerprintFunc = (d) => _bizOps.CaptureFingerprintAsync(d).GetAwaiter().GetResult();
+            _engine.CaptureFaceFunc = (d, route) =>
+                _bizOps.CaptureFaceAsync(d, route).GetAwaiter().GetResult();
+            _engine.CaptureFingerprintFunc = (d, route) =>
+                _bizOps.CaptureFingerprintAsync(d, route).GetAwaiter().GetResult();
 
             // Supporting modules
             _commandHandler = new DllCommandHandler(
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
-                _requestRegistry, log,
+                _requestRegistry, _processRegistry, _controlGate, log,
                 GetTerminalCallbackBaseUrl, _queueManager, _taskTracker,
                 _coordinator, onProcessStateChanged);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _terminalManager, _dllCallback,
-                _requestRegistry, log);
+                _requestRegistry, _processRegistry, log);
         }
 
         // === Lifecycle ===
 
         public void Start()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+                throw new ObjectDisposedException(nameof(ProxyServer));
+            if (Interlocked.Exchange(ref _started, 1) != 0)
+                throw new InvalidOperationException("ProxyServer has already been started.");
+
             var cfg = AppConfig.Instance;
             var cts = _runtime.BeginSession();
 
@@ -172,6 +192,26 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _log("[VLC预热] 后台任务容量已满，跳过本次预热");
 
             _log($"服务已启动。本机IP: {_lanIp}, 当前终端: {_terminalManager.CurrentName} ({_terminalManager.CurrentBaseUrl})");
+            NotifyTerminalChanged(_terminalManager.CurrentIndex);
+        }
+
+        private void NotifyTerminalChanged(int terminalIndex)
+        {
+            try
+            {
+                var processActive = _processRegistry.TryGetActive(terminalIndex,
+                    out var processSession);
+                _terminalManager.ProcessActive = processActive;
+                _terminalManager.ProcessSaveDir = processActive
+                    ? processSession.SaveDir
+                    : "";
+                _onTerminalChanged?.Invoke(terminalIndex);
+                _onProcessStateChanged?.Invoke(processActive);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("[服务] 通知当前终端变化失败", ex);
+            }
         }
 
         public void Stop()
@@ -180,7 +220,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
             // Ordered shutdown via Runtime (one shared ~5s budget)
             try { _runtime.StopAsync().GetAwaiter().GetResult(); }
-            catch (Exception ex) { _log($"[服务] 关闭异常: {ex.Message}"); }
+            catch (Exception ex) { Logger.Error("[服务] 关闭异常", ex); }
 
             _log("服务已停止");
         }
@@ -190,12 +230,20 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             Stop();
-            try { _requestRegistry?.Dispose(); } catch { }
-            try { _taskTracker?.Dispose(); } catch { }
-            try { _transport?.Dispose(); } catch { }
-            try { _previewManager?.Dispose(); } catch { }
-            try { _terminalClient?.Dispose(); } catch { }
-            try { _dllCallback?.Dispose(); } catch { }
+            SafeDispose(_processRegistry, nameof(TerminalProcessRegistry));
+            SafeDispose(_requestRegistry, nameof(RequestRegistry));
+            SafeDispose(_taskTracker, nameof(ActiveTasksTracker));
+            SafeDispose(_transport, nameof(TransportLayer));
+            SafeDispose(_previewManager, nameof(PreviewManager));
+            SafeDispose(_terminalClient, nameof(TerminalClient));
+            SafeDispose(_dllCallback, nameof(DllCallbackSender));
+        }
+
+        private static void SafeDispose(IDisposable component, string name)
+        {
+            if (component == null) return;
+            try { component.Dispose(); }
+            catch (Exception ex) { Logger.Error($"[服务] 释放{name}异常", ex); }
         }
 
         // === HTTP handlers (delegated from TransportLayer) ===
@@ -209,9 +257,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                 {
                     stream.ReadTimeout = 2000;
                     stream.WriteTimeout = 2000;
-                    var (method, path, body) = await HttpProtocolHandler.ReadHttpRequestAsync(stream);
+                    var (method, path, body) = await ReadHttpRequestWithDeadlineAsync(
+                        client, stream, 2000).ConfigureAwait(false);
                     var result = await _commandHandler.HandleAsync(method, path, body);
-                    await HttpProtocolHandler.WriteHttpResponseAsync(stream, 200, result);
+                    await WriteHttpResponseWithDeadlineAsync(client, stream, 200,
+                        result, 2000).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) { _log($"[DLL请求] 处理异常: {ex.Message}"); }
@@ -221,12 +271,15 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             try
             {
+                var remoteAddress =
+                    (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
                 using (client)
                 using (var stream = client.GetStream())
                 {
                     stream.ReadTimeout = 30000;
                     stream.WriteTimeout = 30000;
-                    var (_, path, body) = await HttpProtocolHandler.ReadHttpRequestAsync(stream);
+                    var (_, path, body) = await ReadHttpRequestWithDeadlineAsync(
+                        client, stream, 30000).ConfigureAwait(false);
                     var requestId = JsonHelper.ExtractString(body, "request_id");
                     var resourceType = JsonHelper.ExtractString(body, "resource_type");
                     var callbackPath = (path ?? "").Split('?')[0];
@@ -234,34 +287,66 @@ namespace HZCYKJTHardWare.Proxy.Server
                     if (string.Equals(callbackPath, "/iris-image", StringComparison.OrdinalIgnoreCase) &&
                         (string.IsNullOrEmpty(requestId) || resourceType != "iris_image"))
                     {
-                        await HttpProtocolHandler.WriteHttpResponseAsync(stream, 400,
+                        await WriteHttpResponseWithDeadlineAsync(client, stream, 400,
                             "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
                             "\",\"status\":\"rejected\",\"message\":\"invalid iris callback\"," +
-                            "\"error_code\":\"invalid_callback\"}");
+                            "\"error_code\":\"invalid_callback\"}", 30000).ConfigureAwait(false);
                         return;
                     }
 
-                    var accepted = _taskTracker.TryRun(() =>
+                    var accepted = _taskTracker.TryRun(async () =>
                     {
-                        try { _callbackHandler.Handle(body); }
+                        try
+                        {
+                            await _callbackHandler.HandleAsync(body, remoteAddress)
+                                .ConfigureAwait(false);
+                        }
                         catch (Exception ex) { _log("[终端回调] 后台处理异常: " + ex.Message); }
                     }, "terminal_callback_handler");
 
                     if (!accepted)
                     {
-                        await HttpProtocolHandler.WriteHttpResponseAsync(stream, 503,
+                        await WriteHttpResponseWithDeadlineAsync(client, stream, 503,
                             "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
                             "\",\"status\":\"rejected\",\"message\":\"service busy\"," +
-                            "\"error_code\":\"service_busy\"}");
+                            "\"error_code\":\"service_busy\"}", 30000).ConfigureAwait(false);
                         return;
                     }
 
-                    await HttpProtocolHandler.WriteHttpResponseAsync(stream, 202,
+                    await WriteHttpResponseWithDeadlineAsync(client, stream, 202,
                         "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
-                        "\",\"status\":\"accepted\"}");
+                        "\",\"status\":\"accepted\"}", 30000).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) { _log($"[终端回调] HTTP处理异常: {ex.Message}"); }
+        }
+
+        private static async Task<(string method, string path, string body)>
+            ReadHttpRequestWithDeadlineAsync(TcpClient client, NetworkStream stream,
+                int timeoutMs)
+        {
+            using (var cancellation = new CancellationTokenSource(timeoutMs))
+            using (cancellation.Token.Register(() => CloseClient(client)))
+            {
+                return await HttpProtocolHandler.ReadHttpRequestAsync(
+                    stream, cancellation.Token).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task WriteHttpResponseWithDeadlineAsync(TcpClient client,
+            NetworkStream stream, int statusCode, string body, int timeoutMs)
+        {
+            using (var cancellation = new CancellationTokenSource(timeoutMs))
+            using (cancellation.Token.Register(() => CloseClient(client)))
+            {
+                await HttpProtocolHandler.WriteHttpResponseAsync(stream, statusCode,
+                    body, cancellation.Token).ConfigureAwait(false);
+            }
+        }
+
+        private static void CloseClient(TcpClient client)
+        {
+            try { client?.Close(); } catch { }
         }
 
         // === Public API (delegated to Coordinator) ===

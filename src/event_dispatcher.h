@@ -23,7 +23,7 @@ public:
     void PostEvent(const HZCYKJTHardWare_EVENT& event);
 
     // 处理来自 CallbackServer 的回调数据
-    void PostCallbackData(const CallbackData& cbData);
+    bool TryPostCallbackData(const CallbackData& cbData);
 
     // 设置第三方回调
     void SetCallback(THZCYKJTHardWareEventCallback callback);
@@ -74,6 +74,9 @@ private:
     CONDITION_VARIABLE m_cv;
     std::queue<HZCYKJTHardWare_EVENT> m_queue;
     std::queue<CallbackData> m_pendingCallbacks;
+    size_t m_pendingCallbackBytes = 0;
+    DWORD m_workerThreadId = 0;
+    bool m_processingCallback = false;
 
     THZCYKJTHardWareEventCallback m_callback = nullptr;
 

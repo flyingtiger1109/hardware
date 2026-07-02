@@ -109,6 +109,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             // Using ContinueWith to avoid blocking the task's own continuation.
             task.ContinueWith(t =>
             {
+                if (t.IsFaulted && t.Exception != null)
+                    Logger.Error($"[TaskTracker] background task failed: {label}",
+                        t.Exception.Flatten());
                 if (_tasks.TryRemove(id, out _))
                     Interlocked.Increment(ref _totalCompleted);
                 _slots.Release();

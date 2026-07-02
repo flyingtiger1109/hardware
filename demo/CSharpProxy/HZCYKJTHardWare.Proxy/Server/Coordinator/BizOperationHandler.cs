@@ -21,6 +21,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private readonly TerminalManager _terminalManager;
         private readonly TerminalClient _terminalClient;
         private readonly RequestRegistry _requestRegistry;
+        private readonly TerminalProcessRegistry _processRegistry;
+        private readonly ControlOperationGate _controlGate;
         private readonly QueueManager _queueManager;
         private readonly PreviewManager _previewManager;
         private readonly Action<string> _log;
@@ -41,6 +43,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             TerminalManager terminalManager,
             TerminalClient terminalClient,
             RequestRegistry requestRegistry,
+            TerminalProcessRegistry processRegistry,
+            ControlOperationGate controlGate,
             QueueManager queueManager,
             PreviewManager previewManager,
             Action<string> log,
@@ -53,6 +57,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
             _requestRegistry = requestRegistry;
+            _processRegistry = processRegistry;
+            _controlGate = controlGate;
             _queueManager = queueManager;
             _previewManager = previewManager;
             _log = log;
@@ -67,46 +73,74 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> StartProcessAsync(string saveDir)
         {
-            var callbackBase = _getCallbackBaseUrl();
-            var irisCallback = _getIrisCallbackUrl();
-            var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
-            var body = $"{{\"request_id\":\"{requestId}\"," +
-                $"\"callbacks\":{{" +
-                $"\"ocr_document\":\"{callbackBase}\"," +
-                $"\"ocr_event_status\":\"{callbackBase}\"," +
-                $"\"nfc_card\":\"{callbackBase}\"," +
-                $"\"iris_image\":\"{irisCallback}\"}}}}";
-
-            _terminalManager.ProcessSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
-            if (!RegisterProcessResources(requestId, _terminalManager.ProcessSaveDir,
-                _queueManager.TerminalGeneration))
-                return "Failed";
-
-            _log("[流程] 正在向终端开始流程，url=" + _terminalManager.CurrentBaseUrl + "/process/start，save_dir=" + _terminalManager.ProcessSaveDir);
-
-            var (ok, _) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl,
-                "/process/start", body, 5000).ConfigureAwait(false);
-            if (ok)
+            using (var controlLease = _controlGate.TryEnter("start_process"))
             {
-                if (!MarkProcessResourcesAccepted(requestId))
-                    return "Failed";
-                _terminalManager.ProcessActive = true;
-                _onProcessStateChanged?.Invoke(true);
-                _log("[流程] 终端流程已开始，save_dir=" + _terminalManager.ProcessSaveDir);
-                return "OK";
+                if (controlLease == null)
+                    return "Busy";
+
+                if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                    return "Busy";
+                var route = routeEpoch.Route;
+                var callbackBase = _getCallbackBaseUrl();
+                var irisCallback = _getIrisCallbackUrl();
+                var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+                var resolvedSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
+                var body = $"{{\"request_id\":\"{requestId}\"," +
+                    $"\"callbacks\":{{" +
+                    $"\"ocr_document\":\"{callbackBase}\"," +
+                    $"\"ocr_event_status\":\"{callbackBase}\"," +
+                    $"\"nfc_card\":\"{callbackBase}\"," +
+                    $"\"iris_image\":\"{irisCallback}\"}}}}";
+
+                var registration = _processRegistry.Prepare(route.TerminalIndex,
+                    route.BaseUrl, requestId, resolvedSaveDir,
+                    routeEpoch.Generation);
+                if (registration == null)
+                    return "Busy";
+
+                var committed = false;
+                try
+                {
+                    _log("[流程] 正在向终端开始流程，url=" + route.BaseUrl +
+                        "/process/start，save_dir=" + resolvedSaveDir);
+
+                    var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
+                        "/process/start", body, 5000, routeEpoch.CancellationToken)
+                        .ConfigureAwait(false);
+                    if (!ok || !_processRegistry.Commit(registration))
+                        return "Failed";
+
+                    committed = true;
+                    _terminalManager.ProcessSaveDir = resolvedSaveDir;
+                    _terminalManager.ProcessActive = true;
+                    _onProcessStateChanged?.Invoke(true);
+                    _log("[流程] 终端流程已开始，terminal=" + route.TerminalIndex +
+                        ", request_id=" + requestId + ", save_dir=" + resolvedSaveDir);
+                    return "OK";
+                }
+                finally
+                {
+                    if (!committed)
+                        _processRegistry.Rollback(registration);
+                }
             }
-            FailProcessResources(requestId);
-            return "Failed";
         }
 
         internal string EndProcess()
         {
-            _terminalManager.ProcessActive = false;
-            _onProcessStateChanged?.Invoke(false);
-            _terminalManager.ProcessSaveDir = "";
-            _requestRegistry.CancelAll();
-            _log("[流程] 流程已结束");
-            return "OK";
+            using (var controlLease = _controlGate.TryEnter("end_process"))
+            {
+                if (controlLease == null)
+                    return "Busy";
+
+                _processRegistry.ClearAll();
+                _terminalManager.ProcessActive = false;
+                _onProcessStateChanged?.Invoke(false);
+                _terminalManager.ProcessSaveDir = "";
+                _requestRegistry.CancelAll();
+                _log("[流程] 流程已结束");
+                return "OK";
+            }
         }
 
         // ====== Terminal Switch ======
@@ -126,12 +160,23 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<(bool ok, string path)> CaptureFaceAsync(string saveDir)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return (false, "");
+            return await CaptureFaceAsync(saveDir, routeEpoch).ConfigureAwait(false);
+        }
+
+        internal async Task<(bool ok, string path)> CaptureFaceAsync(string saveDir,
+            TerminalRouteEpochSnapshot routeEpoch)
+        {
+            if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                return (false, "");
             var requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/face-image/sync-request", body, 2500)
+                routeEpoch.Route.BaseUrl, "/resources/face-image/sync-request", body, 2500,
+                routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
-            if (!ok) return (false, "");
+            if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
 
             string savePath = "";
             if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
@@ -163,12 +208,23 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<(bool ok, string path)> CaptureFingerprintAsync(string saveDir)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return (false, "");
+            return await CaptureFingerprintAsync(saveDir, routeEpoch).ConfigureAwait(false);
+        }
+
+        internal async Task<(bool ok, string path)> CaptureFingerprintAsync(string saveDir,
+            TerminalRouteEpochSnapshot routeEpoch)
+        {
+            if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                return (false, "");
             var requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/fingerprint/sync-request", body, 2500)
+                routeEpoch.Route.BaseUrl, "/resources/fingerprint/sync-request", body, 2500,
+                routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
-            if (!ok) return (false, "");
+            if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
 
             string savePath = "";
             if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
@@ -202,15 +258,23 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> RequestOCRAsync(string saveDir)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return "";
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var callbackBase = _getCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.OcrDocument, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr"))
+                AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr", routeEpoch))
                 return "";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/ocr-document/request", body, 5000)
+                routeEpoch.Route.BaseUrl, "/resources/ocr-document/request", body, 5000,
+                routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.OcrDocument);
+                return "";
+            }
             if (!IsAcceptedResponse(ok, response, requestId))
             {
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.OcrDocument);
@@ -223,15 +287,23 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> RequestNfcAsync(string saveDir)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return "";
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var callbackBase = _getCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.NfcCard, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card"))
+                AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card", routeEpoch))
                 return "";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/nfc-card/request", body, 5000)
+                routeEpoch.Route.BaseUrl, "/resources/nfc-card/request", body, 5000,
+                routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.NfcCard);
+                return "";
+            }
             if (!IsAcceptedResponse(ok, response, requestId))
             {
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.NfcCard);
@@ -244,17 +316,25 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> CaptureIrisAsync(string saveDir)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return "";
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var callbackBase = _getIrisCallbackUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"}}";
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.IrisImage, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris"))
+                AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris", routeEpoch))
                 return "";
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                    _terminalManager.CurrentBaseUrl, "/resources/iris/request", body, 5000)
+                    routeEpoch.Route.BaseUrl, "/resources/iris/request", body, 5000,
+                    routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
+                return "";
+            }
             var status = JsonHelper.ExtractString(response, "status");
             if (!ok || !string.Equals(status, "accepted", StringComparison.OrdinalIgnoreCase))
             {
@@ -271,6 +351,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             string idNo, string docType, string nationality,
             string name, string sex, string birthday)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return new AuthorizeRequestResult
+                {
+                    Ok = false,
+                    RequestId = "",
+                    Message = "terminal switching"
+                };
             var requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
             var callbackBase = _getCallbackBaseUrl();
             var body = $"{{\"request_id\":\"{requestId}\",\"callback_url\":\"{callbackBase}\"," +
@@ -279,13 +366,24 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 $"\"birthday\":\"{JsonHelper.EscapeString(birthday)}\",\"nationality\":\"{JsonHelper.EscapeString(nationality)}\"}}";
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.Protocol,
-                _terminalManager.ProcessSaveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize"))
+                _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex),
+                AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize", routeEpoch))
                 return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "registry full" };
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                _terminalManager.CurrentBaseUrl, "/resources/protocol/request", body, 5000)
+                routeEpoch.Route.BaseUrl, "/resources/protocol/request", body, 5000,
+                routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
+                return new AuthorizeRequestResult
+                {
+                    Ok = false,
+                    RequestId = requestId,
+                    Message = "terminal switching"
+                };
+            }
             if (ok)
             {
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))
@@ -304,6 +402,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<bool> StartLocalPreviewAsync(string resourceType, Control panel)
         {
+            if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                return false;
             PreviewResourceType resType;
             switch (resourceType)
             {
@@ -314,7 +414,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
 
             return await _previewManager.StartPreview(resType, PreviewSessionType.Local,
-                IntPtr.Zero, _terminalManager.CurrentBaseUrl, panel);
+                IntPtr.Zero, routeEpoch.Route.BaseUrl, panel,
+                shouldContinue: () => !routeEpoch.IsCancellationRequested);
         }
 
         internal void StopLocalPreview(string resourceType)
@@ -333,49 +434,24 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         // ====== Private Helpers ======
 
-        private bool RegisterProcessResources(string requestId, string saveDir, int generation)
-        {
-            return RegisterProcessResource(requestId, ProxyResourceTypes.OcrDocument, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr", generation) &&
-                RegisterProcessResource(requestId, ProxyResourceTypes.NfcCard, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card", generation) &&
-                RegisterProcessResource(requestId, ProxyResourceTypes.IrisImage, saveDir,
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/iris", generation);
-        }
-
-        private bool RegisterProcessResource(string requestId, string resourceType,
-            string saveDir, string callbackUrl, int generation)
-        {
-            var context = _requestRegistry.Register(requestId, resourceType, saveDir,
-                callbackUrl, generation, processFlow: true);
-            if (context == null) return false;
-            context.TryMarkSubmitting();
-            return true;
-        }
-
-        private bool MarkProcessResourcesAccepted(string requestId)
-        {
-            return _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.OcrDocument) &
-                _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.NfcCard) &
-                _requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.IrisImage);
-        }
-
-        private void FailProcessResources(string requestId)
-        {
-            _requestRegistry.Fail(requestId, ProxyResourceTypes.OcrDocument);
-            _requestRegistry.Fail(requestId, ProxyResourceTypes.NfcCard);
-            _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
-        }
-
         private bool RegisterDirectRequest(string requestId, string resourceType,
-            string saveDir, string callbackUrl)
+            string saveDir, string callbackUrl, TerminalRouteEpochSnapshot routeEpoch)
         {
-            if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+            if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                return false;
+            var terminalIndex = routeEpoch.Route.TerminalIndex;
+            if (string.IsNullOrEmpty(saveDir))
+                saveDir = _processRegistry.GetActiveSaveDir(terminalIndex);
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
             var context = _requestRegistry.Register(requestId, resourceType,
                 PathHelper.SafeResolveSaveDir(saveDir), callbackUrl,
-                _queueManager.TerminalGeneration);
+                routeEpoch.Generation, terminalIndex: terminalIndex);
             if (context == null) return false;
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, resourceType);
+                return false;
+            }
             context.TryMarkSubmitting();
             return true;
         }

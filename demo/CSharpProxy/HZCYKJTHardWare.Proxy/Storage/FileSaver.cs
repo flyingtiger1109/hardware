@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 
 namespace HZCYKJTHardWare.Proxy.Storage
@@ -39,12 +41,11 @@ namespace HZCYKJTHardWare.Proxy.Storage
 
             try
             {
-                byte[] data = Convert.FromBase64String(base64Str);
                 var ext = MimeTypeToExtension(mimeType);
                 var filePath = PathHelper.ResolveExactSaveFile(saveDir, requestId, prefix, ext);
                 CheckDiskSpace(filePath);
-                File.WriteAllBytes(filePath, data);
-                Logger.Debug($"已保存图片: {filePath} ({data.Length} 字节)");
+                var bytesWritten = WriteBase64ToFile(base64Str, filePath);
+                Logger.Debug($"已保存图片: {filePath} ({bytesWritten} 字节)");
                 return filePath;
             }
             catch (Exception ex)
@@ -60,13 +61,12 @@ namespace HZCYKJTHardWare.Proxy.Storage
 
             try
             {
-                byte[] data = Convert.FromBase64String(base64Str);
                 var dir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
                 CheckDiskSpace(filePath);
-                File.WriteAllBytes(filePath, data);
-                Logger.Debug($"已保存图片: {filePath} ({data.Length} 字节)");
+                var bytesWritten = WriteBase64ToFile(base64Str, filePath);
+                Logger.Debug($"已保存图片: {filePath} ({bytesWritten} 字节)");
                 return filePath;
             }
             catch (Exception ex)
@@ -106,6 +106,53 @@ namespace HZCYKJTHardWare.Proxy.Storage
             if (mimeType.Contains("gif")) return ".gif";
             if (mimeType.Contains("tiff")) return ".tiff";
             return ".dat";
+        }
+
+        /// <summary>
+        /// Decode directly to disk with a fixed-size buffer. This avoids a second
+        /// image-sized byte[] allocation on the LOH in the x86 process.
+        /// A temporary file prevents invalid Base64 from damaging an existing file.
+        /// </summary>
+        private static long WriteBase64ToFile(string base64Str, string filePath)
+        {
+            var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                long length;
+                using (var output = new FileStream(tempPath, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None, 64 * 1024,
+                    FileOptions.SequentialScan))
+                using (var transform = new FromBase64Transform(
+                    FromBase64TransformMode.IgnoreWhiteSpaces))
+                using (var decoder = new CryptoStream(output, transform,
+                    CryptoStreamMode.Write))
+                {
+                    var inputBuffer = new byte[32 * 1024];
+                    var offset = 0;
+                    while (offset < base64Str.Length)
+                    {
+                        var charCount = Math.Min(inputBuffer.Length,
+                            base64Str.Length - offset);
+                        var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
+                            charCount, inputBuffer, 0);
+                        decoder.Write(inputBuffer, 0, byteCount);
+                        offset += charCount;
+                    }
+                    decoder.FlushFinalBlock();
+                    length = output.Length;
+                }
+
+                File.Copy(tempPath, filePath, true);
+                return length;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                }
+                catch { }
+            }
         }
     }
 }

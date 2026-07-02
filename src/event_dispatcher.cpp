@@ -94,13 +94,15 @@ static bool IsOcrPortraitImage(const EvidenceImage& img) {
     return img.image_type == "2";
 }
 
-namespace { EventDispatcher* g_pEventDisp = nullptr; }
 static const size_t kMaxEventQueueSize = 512;
 static const size_t kMaxPendingCallbackQueueSize = 512;
+static const size_t kMaxPendingCallbackBytes = 64u * 1024u * 1024u;
 
 EventDispatcher& EventDispatcher::Instance() {
-    if (!g_pEventDisp) g_pEventDisp = new EventDispatcher();
-    return *g_pEventDisp;
+    // Function-local static initialization is thread-safe since C++11. Keep the
+    // instance intentionally alive for the DLL lifetime to avoid unload-order races.
+    static EventDispatcher* instance = new EventDispatcher();
+    return *instance;
 }
 
 EventDispatcher::EventDispatcher() { InitializeCriticalSection(&m_cs); }
@@ -108,6 +110,8 @@ EventDispatcher::~EventDispatcher() { DeleteCriticalSection(&m_cs); }
 
 void EventDispatcher::Start() {
     if (m_running) return;
+    m_workerThreadId = 0;
+    m_processingCallback = false;
     m_running = true;
     m_thread = std::make_unique<std::thread>(&EventDispatcher::WorkerLoop, this);
     LOG_DEBUG("事件分发", "事件分发线程已启动");
@@ -151,6 +155,7 @@ void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
         m_queue.swap(emptyEvents);
         m_stringsQueue.swap(emptyStrings);
         m_pendingCallbacks.swap(emptyCallbacks);
+        m_pendingCallbackBytes = 0;
     }
     LeaveCriticalSection(&m_cs);
     if (callbackChanged) {
@@ -161,12 +166,15 @@ void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
 
 void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
     EnterCriticalSection(&m_cs);
-    if (m_queue.size() >= kMaxEventQueueSize) {
-        LOG_WARN("事件分发", "第三方事件队列已满，丢弃最旧事件：queue_size=%zu", m_queue.size());
-        m_queue.pop();
-        if (!m_stringsQueue.empty()) {
-            m_stringsQueue.pop();
-        }
+    const bool callbackProducer = m_processingCallback &&
+        GetCurrentThreadId() == m_workerThreadId;
+    const size_t totalOutstanding = m_queue.size() + m_pendingCallbacks.size() +
+        (m_processingCallback ? 1u : 0u);
+    if (!callbackProducer && totalOutstanding >= kMaxEventQueueSize) {
+        LOG_WARN("事件分发", "第三方事件队列已满，拒绝新事件：outstanding=%zu",
+                 totalOutstanding);
+        LeaveCriticalSection(&m_cs);
+        return;
     }
     EventStrings strs;
     strs.request_id = event.request_id ? event.request_id : "";
@@ -190,21 +198,31 @@ void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
 }
 
 // 处理回调服务器的数据并转化为事件
-void EventDispatcher::PostCallbackData(const CallbackData& cbData) {
+bool EventDispatcher::TryPostCallbackData(const CallbackData& cbData) {
     if (!m_running) {
-        LOG_WARN("事件分发", "回调分发未运行，已丢弃硬件控制程序回调：path=%s", cbData.path.c_str());
-        return;
+        LOG_WARN("事件分发", "回调分发未运行，拒绝硬件控制程序回调：path=%s", cbData.path.c_str());
+        return false;
     }
 
     // 投递到 worker 线程处理，不阻塞 HTTP 线程
     EnterCriticalSection(&m_cs);
-    if (m_pendingCallbacks.size() >= kMaxPendingCallbackQueueSize) {
-        LOG_WARN("事件分发", "硬件控制程序回调处理队列已满，丢弃最旧回调：queue_size=%zu", m_pendingCallbacks.size());
-        m_pendingCallbacks.pop();
+    const size_t totalOutstanding = m_queue.size() + m_pendingCallbacks.size() +
+        (m_processingCallback ? 1u : 0u);
+    const size_t callbackBytes = cbData.body.size() + cbData.path.size() +
+        cbData.remote_addr.size();
+    if (!m_running || totalOutstanding >= kMaxPendingCallbackQueueSize ||
+        callbackBytes > kMaxPendingCallbackBytes ||
+        m_pendingCallbackBytes > kMaxPendingCallbackBytes - callbackBytes) {
+        LOG_WARN("事件分发", "硬件控制程序回调处理队列已满或已停止，拒绝新回调：outstanding=%zu, pending_bytes=%zu, incoming_bytes=%zu",
+                 totalOutstanding, m_pendingCallbackBytes, callbackBytes);
+        LeaveCriticalSection(&m_cs);
+        return false;
     }
     m_pendingCallbacks.push(cbData);
+    m_pendingCallbackBytes += callbackBytes;
     LeaveCriticalSection(&m_cs);
     WakeConditionVariable(&m_cv);
+    return true;
 }
 
 void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
@@ -240,7 +258,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     }
 
     auto& sessionMgr = RequestSessionManager::Instance();
-    if (sessionMgr.IsRecentlyCompleted(requestId)) {
+    if (sessionMgr.IsRecentlyCompleted(requestId, resourceType)) {
         LOG_WARN("事件分发", "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
                  requestId.c_str(), path.c_str());
         return;
@@ -263,7 +281,8 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             std::string errorMsg;
             bool isError = IsDelphiErrorResponse(body, errorCode, errorMsg);
 
-            LOG_DEBUG("事件分发", "处理回调结果：resource=%s", resourceType.c_str());
+            LOG_INFO("事件分发", "处理流程回调：request_id=%s，resource=%s",
+                     requestId.c_str(), resourceType.c_str());
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
                 if (isError) {
@@ -273,11 +292,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                 } else {
                     std::string mrz = JsonHelper::GetString(body, "mrz");
                     std::string savePath = JsonHelper::GetString(body, "save_path");
+                    LOG_INFO("事件分发", "OCR回调完成：request_id=%s，MRZ=%s",
+                             requestId.c_str(), mrz.c_str());
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
                               HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
                               savePath.empty() ? nullptr : savePath.c_str(), body.c_str(),
                               nullptr, mrz.c_str());
                 }
+                sessionMgr.MarkCompleted(requestId, resourceType);
                 return;
             }
 
@@ -296,11 +318,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "",
                                   "IC卡回调缺少card_text", nullptr, body.c_str());
                     } else {
+                        LOG_INFO("NFC", "IC卡回调完成：request_id=%s，卡号=%s",
+                                 requestId.c_str(), cardText.c_str());
                         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
                                   HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(),
                                   cardText.c_str());
                     }
                 }
+                sessionMgr.MarkCompleted(requestId, resourceType);
                 return;
             }
 
@@ -316,6 +341,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                     fallbackSession.save_dir = JsonHelper::GetString(body, "save_path");
                     ProcessIrisCallback(requestId, body, fallbackSession);
                 }
+                sessionMgr.MarkCompleted(requestId, resourceType);
                 return;
             }
         }
@@ -325,17 +351,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         return;
     }
 
-    if (session->status == RequestStatus::Expired ||
-        session->status == RequestStatus::Cancelled ||
-        session->status == RequestStatus::Timeout ||
-        session->status == RequestStatus::CallbackReceived ||
-        session->status == RequestStatus::Completed) {
-        LOG_DEBUG("事件分发", "硬件控制程序回调已忽略：request_id=%s，status=%d",
-                  requestId.c_str(), static_cast<int>(session->status));
-        return;
-    }
-
-    if (!sessionMgr.MarkCallbackReceived(requestId, body)) {
+    if (!sessionMgr.MarkCallbackReceived(requestId, resourceType, body)) {
         LOG_WARN("事件分发", "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
                  requestId.c_str(), path.c_str());
         return;
@@ -379,7 +395,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         }
     }
 
-    sessionMgr.MarkCompleted(requestId);
+    sessionMgr.MarkCompleted(requestId, resourceType);
 }
 
 #if 0
@@ -438,7 +454,7 @@ void EventDispatcher::ProcessCallbackLegacy(const CallbackData& cbData) {
     }
 
     // 标记收到回调
-    sessionMgr.MarkCallbackReceived(requestId, body);
+    sessionMgr.MarkCallbackReceived(requestId, resourceType, body);
 
     // 检查是否为错误响应
     std::string errorCode, errorMsg;
@@ -574,7 +590,8 @@ void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
         savePath = session.save_dir;
     }
 
-    LOG_INFO("事件分发", "OCR回调完成：MRZ=%s", mrz.c_str());
+    LOG_INFO("事件分发", "OCR回调完成：request_id=%s，MRZ=%s",
+             requestId.c_str(), mrz.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
               savePath.c_str(), body.c_str(), nullptr, mrz.c_str());
@@ -749,7 +766,8 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         return;
     }
 
-    LOG_INFO("NFC", "IC卡回调完成：卡号=%s", cardText.c_str());
+    LOG_INFO("NFC", "IC卡回调完成：request_id=%s，卡号=%s",
+             requestId.c_str(), cardText.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(), cardText.c_str());
 }
@@ -935,10 +953,15 @@ void EventDispatcher::ProcessTimeouts() {
 void EventDispatcher::WorkerLoop() {
 LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
 
+    EnterCriticalSection(&m_cs);
+    m_workerThreadId = GetCurrentThreadId();
+    LeaveCriticalSection(&m_cs);
+    bool preferCallbacks = true;
     auto lastTimeoutCheck = std::chrono::steady_clock::now();
-    while (m_running) {
+    while (true) {
         auto nowTick = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(nowTick - lastTimeoutCheck).count() >= 1000) {
+        if (m_running &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(nowTick - lastTimeoutCheck).count() >= 1000) {
             ProcessTimeouts();
             lastTimeoutCheck = nowTick;
         }
@@ -952,23 +975,48 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                     break;
                 }
             }
-            if (!m_running) { LeaveCriticalSection(&m_cs); break; }
+            if (!m_running && m_queue.empty() && m_pendingCallbacks.empty()) {
+                LeaveCriticalSection(&m_cs);
+                break;
+            }
             if (m_queue.empty() && m_pendingCallbacks.empty()) {
                 LeaveCriticalSection(&m_cs);
                 continue;
             }
 
-            // 先处理回调数据
-            if (!m_pendingCallbacks.empty()) {
+            // Alternate callback parsing and event delivery so neither queue can
+            // starve the other. A callback keeps one reserved capacity slot until
+            // ProcessCallback returns.
+            const bool takeCallback = !m_pendingCallbacks.empty() &&
+                (preferCallbacks || m_queue.empty());
+            if (takeCallback) {
                 CallbackData cb = std::move(m_pendingCallbacks.front());
+                const size_t callbackBytes = cb.body.size() + cb.path.size() +
+                    cb.remote_addr.size();
                 m_pendingCallbacks.pop();
+                m_pendingCallbackBytes = callbackBytes <= m_pendingCallbackBytes
+                    ? m_pendingCallbackBytes - callbackBytes : 0;
+                m_processingCallback = true;
+                preferCallbacks = false;
                 LeaveCriticalSection(&m_cs);  // 释放锁再处理
-                ProcessCallback(cb);
+                try {
+                    ProcessCallback(cb);
+                } catch (const std::exception& ex) {
+                    LOG_ERROR("事件分发", "处理回调异常：path=%s，error=%s",
+                              cb.path.c_str(), ex.what());
+                } catch (...) {
+                    LOG_ERROR("事件分发", "处理回调发生未知异常：path=%s",
+                              cb.path.c_str());
+                }
+                EnterCriticalSection(&m_cs);
+                m_processingCallback = false;
+                LeaveCriticalSection(&m_cs);
                 continue;
             }
 
             // 处理事件分发
             if (!m_queue.empty()) {
+                preferCallbacks = true;
                 HZCYKJTHardWare_EVENT event = m_queue.front();
                 m_queue.pop();
                 EventStrings strs = std::move(m_stringsQueue.front());
@@ -1024,7 +1072,10 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                         json += ",\"KADM\":\"" + JsonEscape(strs.auth_kadm) + "\"";
                     json += "}";
                     if (SafeInvokeThirdPartyCallback(cb, json.c_str())) {
-                        LOG_DEBUG("事件分发", "已回调第三方：event=%d", event.event_type);
+                        LOG_INFO("事件分发",
+                                 "已回调第三方：event=%d，request_id=%s，resource=%s，status=%d",
+                                 event.event_type, strs.request_id.c_str(),
+                                 strs.resource_type.c_str(), event.status);
                     } else {
                         LOG_ERROR("事件分发", "第三方事件回调执行异常，已保护：event=%d，request_id=%s",
                                   event.event_type, strs.request_id.c_str());
@@ -1039,6 +1090,10 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
         }
     }
 
+    EnterCriticalSection(&m_cs);
+    m_processingCallback = false;
+    m_workerThreadId = 0;
+    LeaveCriticalSection(&m_cs);
 LOG_DEBUG("事件分发", "第三方回调分发线程已退出");
 }
 
@@ -1082,13 +1137,6 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     strs.auth_xb = JsonHelper::GetString(body, "XB");
     strs.auth_csrq = JsonHelper::GetString(body, "CSRQ");
     strs.auth_kadm = JsonHelper::GetString(body, "KADM");
-    if (m_queue.size() >= kMaxEventQueueSize) {
-        LOG_WARN("事件分发", "第三方事件队列已满，丢弃最旧事件：queue_size=%zu", m_queue.size());
-        m_queue.pop();
-        if (!m_stringsQueue.empty()) {
-            m_stringsQueue.pop();
-        }
-    }
     m_stringsQueue.push(std::move(strs));
     m_queue.push(event);
     WakeConditionVariable(&m_cv);

@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Preview;
+using HZCYKJTHardWare.Proxy.Server;
 
 namespace HZCYKJTHardWare.Proxy.Server.Runtime
 {
@@ -19,9 +20,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
     {
         private readonly TransportLayer _transport;
         private readonly RequestRegistry _registry;
+        private readonly TerminalProcessRegistry _processRegistry;
         private readonly ActiveTasksTracker _taskTracker;
         private readonly QueueManager _queueManager;
         private readonly PreviewManager _previewManager;
+        private readonly DllCallbackSender _dllCallbackSender;
         private readonly Action<string> _log;
         private readonly object _stopLock = new object();
         private CancellationTokenSource _cts;
@@ -32,16 +35,20 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         internal ProxyRuntime(
             TransportLayer transport,
             RequestRegistry registry,
+            TerminalProcessRegistry processRegistry,
             ActiveTasksTracker taskTracker,
             QueueManager queueManager,
             PreviewManager previewManager,
+            DllCallbackSender dllCallbackSender,
             Action<string> log)
         {
             _transport = transport;
             _registry = registry;
+            _processRegistry = processRegistry;
             _taskTracker = taskTracker;
             _queueManager = queueManager;
             _previewManager = previewManager;
+            _dllCallbackSender = dllCallbackSender;
             _log = log;
         }
 
@@ -78,6 +85,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             try { _cts?.Cancel(); }
             catch (Exception ex) { _log($"[Runtime] 取消Token异常: {ex.Message}"); }
 
+            // Cancel any in-flight one-shot callback before draining the
+            // registry and task tracker.
+            try { _dllCallbackSender?.Stop(); }
+            catch (Exception ex) { _log($"[Runtime] callback sender stop failed: {ex.Message}"); }
+
             // Transport drain runs in parallel with business cleanup and shares
             // the same global deadline.
             Task transportStopTask;
@@ -95,6 +107,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 Logger.Debug($"[Runtime] Registry已取消, 活跃={_registry.ActiveCount}");
             }
             catch (Exception ex) { _log($"[Runtime] Registry取消异常: {ex.Message}"); }
+
+            try
+            {
+                _processRegistry.ClearAll();
+                Logger.Debug("[Runtime] TerminalProcessRegistry已清空");
+            }
+            catch (Exception ex) { _log($"[Runtime] 流程会话清理异常: {ex.Message}"); }
 
             // 3. Dispose business queues (one shared 3s worker budget)
             try
@@ -138,6 +157,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             _log($"[Runtime] 队列统计:\n" + (_queueManager?.GetAllStats() ?? "无"));
             _log($"[Runtime] 任务追踪: " + (_taskTracker?.GetStats() ?? "无"));
             _log($"[Runtime] Registry: 活跃={_registry.ActiveCount}, 容量={_registry.MaxActiveEntries}");
+            _log($"[Runtime] ProcessRegistry: 活跃终端={_processRegistry.ActiveCount}");
             _log("[Runtime] 有序关闭完成");
 
             _cts?.Dispose();

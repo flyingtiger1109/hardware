@@ -792,6 +792,62 @@
 详细修改、兼容性、风险和回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
 
+## DLL 回调响应与 INFO 日志（2026-07-01）
+
+### 当前阶段
+
+- [x] 确认当前 DLL 源码已使用响应体实际字节数生成 `Content-Length`。
+- [x] DLL 回调接收、流程回调处理和第三方回调成功日志调整为 `INFO`。
+- [x] 普通请求与流程模式均保留 MRZ、IC卡号明文日志，并增加 `request_id`。
+- [ ] 使用真实终端完成 OCR、NFC 回调联调。
+
+### 本次修改内容
+
+1. 回调服务器在 `INFO` 级别记录回调路径、来源地址和请求体大小；本次新增日志不记录完整 JSON 或 Base64。
+2. 流程模式回调在 `INFO` 级别记录 `request_id` 和资源类型。
+3. OCR、NFC 成功日志保留 MRZ、IC卡号，并补充 `request_id` 便于跨 DLL/Proxy 日志关联。
+4. 第三方回调成功后记录事件类型、`request_id`、资源类型和状态。
+5. 确认 C# Proxy 的 HTTP 响应按 UTF-8 字节数设置 `Content-Length`，回调发送端按 2xx 判断投递成功；本次未修改其接口或业务逻辑。
+
+### 涉及文件
+
+- `src/callback_server.cpp`：回调接收日志提升为 `INFO`；保留动态 `Content-Length` 响应逻辑。
+- `src/event_dispatcher.cpp`：回调处理、MRZ/IC卡号和第三方派发成功日志完善。
+- `todo.md`：记录修改范围与验证结果。
+
+### 兼容性说明
+
+- DLL 导出函数、参数、`__stdcall` 调用约定和回调 JSON 未改变。
+- C# Proxy 继续保持 `net46`、`x86`，未新增依赖。
+- HTTP 成功响应仍为 `202 Accepted` 和 `{"status":"ok"}`，仅确保 `Content-Length` 与响应体一致。
+
+### 风险与注意事项
+
+1. MRZ、IC卡号为敏感信息，需限制日志访问权限和留存周期。
+2. 每次回调增加约 2～3 行 `INFO` 日志，日志量会小幅增加。
+3. 本次新增的 `INFO` 日志不记录完整回调 JSON 和 Base64，避免进一步增加大报文及证件图片日志。
+
+### 验证状态
+
+- [x] DLL `Release|Win32`：编译通过，0 警告、0 错误。
+- [x] C# Proxy `Release|x86`：编译通过，0 警告、0 错误。
+- [x] C# Proxy 测试项目 `Release|x86`：编译通过，0 警告、0 错误。
+- [x] `DllCallbackSenderTests`：3/3 通过。
+- [x] DLL 导出表：20/20 与 v1.2 基线一致，目标架构为 x86。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 提示。
+- [ ] 真实终端 OCR/NFC 回调、第三方回调内容及新日志格式：待验证。
+
+### 下一步计划
+
+- [ ] 部署 `Release/HZCYKJTHardWare.dll` 与 C# Proxy x86 Release 生成物进行联调。
+- [ ] 核对 C# 日志不再出现“将内容复制到流时出错”。
+- [ ] 核对 DLL 日志包含回调路径、`request_id`、MRZ/IC卡号和第三方派发结果。
+
+### 回退方式
+
+- 恢复 `src/callback_server.cpp`、`src/event_dispatcher.cpp` 本节对应的日志语句，并删除本节进度记录。
+- 动态 `Content-Length` 修复在本次修改前已存在于工作区，不应随本次日志级别回退而撤销。
+
 ## 第三方预览方案 B（2026-06-29）
 
 - [x] HTTP MJPEG 断流由播放器上报 `PreviewManager`，不再永久重试失效旧 URL。

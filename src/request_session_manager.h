@@ -46,11 +46,15 @@ public:
 
     // 标记收到回调
     bool MarkCallbackReceived(const std::string& requestId,
+                              const std::string& resourceType,
                               const std::string& callbackBody);
 
     void MarkCompleted(const std::string& requestId);
+    void MarkCompleted(const std::string& requestId,
+                       const std::string& resourceType);
 
-    bool IsRecentlyCompleted(const std::string& requestId);
+    bool IsRecentlyCompleted(const std::string& requestId,
+                             const std::string& resourceType);
 
     // 获取会话
     std::shared_ptr<RequestSession> GetSession(const std::string& requestId);
@@ -80,7 +84,8 @@ private:
 
     mutable CRITICAL_SECTION m_cs;
     std::map<std::string, std::shared_ptr<RequestSession>> m_sessions;
-    std::map<std::string, int64_t> m_completedRequests;
+    using CompletedRequestKey = std::pair<std::string, std::string>;
+    std::map<CompletedRequestKey, int64_t> m_completedRequests;
     int m_seq = 0;
 };
 

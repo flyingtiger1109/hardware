@@ -222,11 +222,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             _currentParentHwnd = _parentHwnd;
-            var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+            // The preview is display-only. Disabling the cross-process child prevents
+            // mouse clicks from moving input focus from the third-party host to Proxy.
+            var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
             if (_visible)
                 windowStyle |= WS_VISIBLE;
 
-            _videoHwnd = CreateWindowEx(0, "STATIC", "", windowStyle,
+            _videoHwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_NOACTIVATE,
+                "STATIC", "", windowStyle,
                 0, 0, 1, 1, _parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
             if (_videoHwnd == IntPtr.Zero)
             {
@@ -550,7 +553,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 _lastHostW = hostW;
                 _lastHostH = hostH;
-                MoveWindow(_videoHwnd, 0, 0, hostW, hostH, false);
+                SetWindowPos(_videoHwnd, HWND_BOTTOM, 0, 0, hostW, hostH,
+                    SWP_NOACTIVATE);
             }
             catch (Exception ex)
             {
@@ -576,7 +580,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string lpModuleName);
-        [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int X, int Y, int cx, int cy, uint uFlags);
         [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
@@ -589,8 +594,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private const uint WS_CHILD = 0x40000000;
         private const uint WS_VISIBLE = 0x10000000;
+        private const uint WS_DISABLED = 0x08000000;
         private const uint WS_CLIPSIBLINGS = 0x04000000;
         private const uint WS_CLIPCHILDREN = 0x02000000;
+        private const uint WS_EX_NOPARENTNOTIFY = 0x00000004;
+        private const uint WS_EX_NOACTIVATE = 0x08000000;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT

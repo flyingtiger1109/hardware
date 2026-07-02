@@ -1,4 +1,6 @@
 using System;
+using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -14,6 +16,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly TerminalManager _terminalManager;
         private readonly DllCallbackSender _dllCallback;
         private readonly RequestRegistry _requestRegistry;
+        private readonly TerminalProcessRegistry _processRegistry;
         private readonly Action<string> _log;
 
         internal TerminalCallbackHandler(
@@ -21,16 +24,19 @@ namespace HZCYKJTHardWare.Proxy.Server
             TerminalManager terminalManager,
             DllCallbackSender dllCallback,
             RequestRegistry requestRegistry,
+            TerminalProcessRegistry processRegistry,
             Action<string> log)
         {
             _terminalClient = terminalClient;
             _terminalManager = terminalManager;
             _dllCallback = dllCallback;
             _requestRegistry = requestRegistry;
+            _processRegistry = processRegistry;
             _log = log;
         }
 
-        public string Handle(string bodyUtf8)
+        public async Task<string> HandleAsync(string bodyUtf8,
+            IPAddress sourceAddress = null)
         {
             try
             {
@@ -40,48 +46,52 @@ namespace HZCYKJTHardWare.Proxy.Server
                     _log($"[终端回调] resource_type={resourceType}");
 
                 switch (resourceType)
-            {
-                case "ocr_event_status":
-                    HandleOcrEventStatus(bodyUtf8);
-                    break;
-                case "ocr_document":
-                    HandleOcrDocument(bodyUtf8);
-                    break;
-                case "nfc_card":
-                    HandleNfcCard(bodyUtf8);
-                    break;
-                case "iris_image":
-                    HandleIrisImage(bodyUtf8);
-                    break;
-                case "face_image":
-                    HandleFaceImage(bodyUtf8);
-                    break;
-                case "fingerprint_image":
-                    HandleFingerprintImage(bodyUtf8);
-                    break;
-                case "protocol":
-                    HandleProtocol(bodyUtf8);
-                    break;
-                default:
-                    // Fallback: detect 2.22 protocol callback by characteristic fields (status=yes/no + id_no)
-                    var cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
-                    var cbIdNo = JsonHelper.ExtractString(bodyUtf8, "id_no");
-                    if ((cbStatus == "yes" || cbStatus == "no") && !string.IsNullOrEmpty(cbIdNo))
-                    {
-                        _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
-                        HandleProtocol(bodyUtf8);
-                    }
-                    else
-                    {
-                        _log($"[终端回调] 未知资源类型: {resourceType}");
-                    }
-                    break;
-            }
-
+                {
+                    case "ocr_event_status":
+                        HandleOcrEventStatus(bodyUtf8);
+                        break;
+                    case "ocr_document":
+                        await HandleOcrDocumentAsync(bodyUtf8, sourceAddress)
+                            .ConfigureAwait(false);
+                        break;
+                    case "nfc_card":
+                        await HandleNfcCardAsync(bodyUtf8, sourceAddress)
+                            .ConfigureAwait(false);
+                        break;
+                    case "iris_image":
+                        await HandleIrisImageAsync(bodyUtf8, sourceAddress)
+                            .ConfigureAwait(false);
+                        break;
+                    case "face_image":
+                        HandleFaceImage(bodyUtf8);
+                        break;
+                    case "fingerprint_image":
+                        HandleFingerprintImage(bodyUtf8);
+                        break;
+                    case "protocol":
+                        await HandleProtocolAsync(bodyUtf8, sourceAddress)
+                            .ConfigureAwait(false);
+                        break;
+                    default:
+                        // Fallback: detect 2.22 protocol callback by characteristic fields (status=yes/no + id_no)
+                        var cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
+                        var cbIdNo = JsonHelper.ExtractString(bodyUtf8, "id_no");
+                        if ((cbStatus == "yes" || cbStatus == "no") && !string.IsNullOrEmpty(cbIdNo))
+                        {
+                            _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
+                            await HandleProtocolAsync(bodyUtf8, sourceAddress)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            _log($"[终端回调] 未知资源类型: {resourceType}");
+                        }
+                        break;
+                }
             }
             catch (Exception ex)
             {
-                _log($"[终端回调] 处理异常: {ex.Message}");
+                Logger.Error("[终端回调] 处理异常", ex);
             }
 
             return "{\"status\":\"ok\"}";
@@ -151,14 +161,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                 Logger.Debug(logLine);   // 其余事件 → Debug
         }
 
-        private void HandleOcrDocument(string bodyUtf8)
+        private async Task HandleOcrDocumentAsync(string bodyUtf8,
+            IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseOcrDocument(bodyUtf8);
             if (!result.Valid) { _log("[OCR回调] 数据无效"); return; }
-            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.OcrDocument, "OCR"))
+            var route = await ResolveCallbackAsync(result.RequestId,
+                ProxyResourceTypes.OcrDocument, "OCR", bodyUtf8, sourceAddress)
+                .ConfigureAwait(false);
+            if (route == null)
                 return;
 
-            var saveDir = GetSaveDir(result.RequestId, ProxyResourceTypes.OcrDocument);
+            var saveDir = route.SaveDir;
             _log($"[OCR回调] MRZ={result.Mrz}");
 
             // Save OCR result JSON
@@ -171,39 +185,55 @@ namespace HZCYKJTHardWare.Proxy.Server
             SaveMrzJson(bodyUtf8, saveDir, result.RequestId);
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
-            _ = _dllCallback.SendOcrResult(result.RequestId, result.Mrz, savePath);
-            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.OcrDocument);
+            if (!CanDeliver(route, "OCR")) return;
+            var delivery = await _dllCallback.SendOcrResult(route.DeliveryRequestId,
+                result.Mrz, savePath, route.CancellationToken).ConfigureAwait(false);
+            FinishDelivery(route, delivery);
         }
 
-        private void HandleNfcCard(string bodyUtf8)
+        private async Task HandleNfcCardAsync(string bodyUtf8,
+            IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseNfcCard(bodyUtf8);
             if (!result.Valid) { _log("[IC卡回调] 数据无效"); return; }
-            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.NfcCard, "NFC"))
+            var route = await ResolveCallbackAsync(result.RequestId,
+                ProxyResourceTypes.NfcCard, "NFC", bodyUtf8, sourceAddress)
+                .ConfigureAwait(false);
+            if (route == null)
                 return;
 
             _log($"[IC卡回调] card_text={result.CardText}");
 
-            _ = _dllCallback.SendNfcResult(result.RequestId, result.CardText);
-            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.NfcCard);
+            if (!CanDeliver(route, "NFC")) return;
+            var delivery = await _dllCallback.SendNfcResult(route.DeliveryRequestId,
+                result.CardText, route.CancellationToken).ConfigureAwait(false);
+            FinishDelivery(route, delivery);
         }
 
-        private void HandleIrisImage(string bodyUtf8)
+        private async Task HandleIrisImageAsync(string bodyUtf8,
+            IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseIrisCapture(bodyUtf8);
             if (!result.Valid) { _log("[虹膜回调] 数据无效"); return; }
 
-            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.IrisImage, "虹膜"))
+            var route = await ResolveCallbackAsync(result.RequestId,
+                ProxyResourceTypes.IrisImage, "虹膜", bodyUtf8, sourceAddress)
+                .ConfigureAwait(false);
+            if (route == null)
                 return;
 
             if (!string.IsNullOrEmpty(result.ErrorCode))
             {
-                ForwardIrisFailure(result.RequestId, result.ErrorCode, result.Message);
-                _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
+                if (!CanDeliver(route, "虹膜")) return;
+                var failureDelivery = await ForwardIrisFailureAsync(
+                    route.DeliveryRequestId, result.ErrorCode, result.Message,
+                    route.CancellationToken)
+                    .ConfigureAwait(false);
+                FinishDelivery(route, failureDelivery);
                 return;
             }
 
-            var saveDir = GetSaveDir(result.RequestId, ProxyResourceTypes.IrisImage);
+            var saveDir = route.SaveDir;
             var savedCount = 0;
             var leftPath = "";
             var rightPath = "";
@@ -223,26 +253,33 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (savedCount == 0)
             {
-                ForwardIrisFailure(result.RequestId, "save_file_failed", "虹膜图片保存失败");
-                _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
+                if (!CanDeliver(route, "虹膜")) return;
+                var failureDelivery = await ForwardIrisFailureAsync(
+                    route.DeliveryRequestId, "save_file_failed",
+                    "虹膜图片保存失败", route.CancellationToken)
+                    .ConfigureAwait(false);
+                FinishDelivery(route, failureDelivery);
                 return;
             }
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             _log($"[虹膜回调] 保存完成: request_id={result.RequestId}, eyes={savedCount}, path={savePath}");
-            _ = _dllCallback.SendIrisResult(result.RequestId, savePath);
-            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.IrisImage);
+            if (!CanDeliver(route, "虹膜")) return;
+            var delivery = await _dllCallback.SendIrisResult(route.DeliveryRequestId,
+                savePath, route.CancellationToken).ConfigureAwait(false);
+            FinishDelivery(route, delivery);
         }
 
-        private void ForwardIrisFailure(string requestId, string errorCode, string message)
+        private Task<CallbackDeliveryResult> ForwardIrisFailureAsync(string requestId,
+            string errorCode, string message, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(errorCode)) errorCode = "collect_failed";
             var payload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
                 "\",\"resource_type\":\"iris_image\",\"error\":true,\"code\":\"" +
                 JsonHelper.EscapeString(errorCode) + "\",\"message\":\"" +
                 JsonHelper.EscapeString(message) + "\"}";
-            _ = _dllCallback.PostCallbackRaw("/iris", payload);
             _log($"[虹膜回调] 采集失败: request_id={requestId}, code={errorCode}, message={message}");
+            return _dllCallback.PostCallbackRaw("/iris", payload, cancellationToken);
         }
 
         private void HandleFaceImage(string bodyUtf8)
@@ -280,11 +317,15 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// Terminal sends: request_id, name, sex, id_no, doc_type, birthday, nationality, status (yes/no)
         /// Maps back to DLL callback format with Chinese field names (ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ).
         /// </summary>
-        private void HandleProtocol(string bodyUtf8)
+        private async Task HandleProtocolAsync(string bodyUtf8,
+            IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseAuthorize(bodyUtf8);
             if (!result.Valid) { _log("[授权回调] 数据无效"); return; }
-            if (!TryClaimRequest(result.RequestId, ProxyResourceTypes.Protocol, "授权"))
+            var route = await ResolveCallbackAsync(result.RequestId,
+                ProxyResourceTypes.Protocol, "授权", bodyUtf8, sourceAddress)
+                .ConfigureAwait(false);
+            if (route == null)
                 return;
 
             // 2.22 status field: "yes" (agreed) or "no" (rejected)
@@ -307,7 +348,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var authResult = isYes ? "1" : "0";
 
             var payload = "{" +
-                "\"request_id\":\"" + JsonHelper.EscapeString(result.RequestId) + "\"," +
+                "\"request_id\":\"" + JsonHelper.EscapeString(route.DeliveryRequestId) + "\"," +
                 "\"resource_type\":\"authorization\"," +
                 "\"auth_result\":" + authResult + "," +
                 "\"ZJHM\":\"" + JsonHelper.EscapeString(idNo) + "\"," +
@@ -321,8 +362,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "}";
 
             _log($"[授权回调] 转发至DLL: request_id={result.RequestId}, auth_result={authResult}");
-            _ = _dllCallback.PostCallbackRaw("/authorize", payload);
-            _requestRegistry.Complete(result.RequestId, ProxyResourceTypes.Protocol);
+            if (!CanDeliver(route, "授权")) return;
+            var delivery = await _dllCallback.PostCallbackRaw("/authorize", payload,
+                route.CancellationToken).ConfigureAwait(false);
+            FinishDelivery(route, delivery);
         }
 
         /// <summary>
@@ -463,28 +506,155 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        private string GetSaveDir(string requestId, string resourceType)
-        {
-            var dir = "";
-            if (_requestRegistry.TryGet(requestId, resourceType, out var context))
-                dir = context.SaveDir;
-            if (string.IsNullOrEmpty(dir))
-                dir = _terminalManager?.ProcessSaveDir;
-            return PathHelper.SafeResolveSaveDir(dir);
-        }
-
         private string GetSaveDir(string requestId)
         {
-            return PathHelper.SafeResolveSaveDir(_terminalManager?.ProcessSaveDir);
+            var terminalIndex = _terminalManager?.CurrentIndex ?? 0;
+            return PathHelper.SafeResolveSaveDir(
+                _processRegistry.GetActiveSaveDir(terminalIndex));
         }
 
-        private bool TryClaimRequest(string requestId, string resourceType, string operation)
+        private async Task<CallbackRoute> ResolveCallbackAsync(string requestId,
+            string resourceType, string operation, string callbackBody,
+            IPAddress sourceAddress)
         {
-            if (_requestRegistry.TryClaimCallback(requestId, resourceType, out _))
+            if (_requestRegistry.TryClaimCallback(requestId, resourceType,
+                out var context))
+            {
+                var current = _terminalManager.CurrentRoute;
+                if (context.TerminalIndex > 0 &&
+                    (context.TerminalIndex != current.TerminalIndex ||
+                     !SourceMatchesTerminal(sourceAddress, context.TerminalIndex,
+                         operation, requestId)))
+                {
+                    _requestRegistry.Fail(requestId, resourceType);
+                    Logger.Warn($"[{operation}回调] 回调终端与请求路由不一致，已跳过: request_id={requestId}, request_terminal={context.TerminalIndex}, current_terminal={current.TerminalIndex}");
+                    return null;
+                }
+
+                return new CallbackRoute(requestId, requestId, resourceType,
+                    PathHelper.SafeResolveSaveDir(context.SaveDir),
+                    context.CancellationToken, context.TerminalIndex,
+                    current.RouteEpoch, false);
+            }
+
+            if (!_processRegistry.TryGetByRequestId(requestId, out var session))
+            {
+                Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过: request_id={requestId}");
+                return null;
+            }
+
+            if (!await session.WaitUntilActiveAsync(5000).ConfigureAwait(false))
+            {
+                Logger.Warn($"[{operation}回调] 流程会话未激活或已停止，已跳过: request_id={requestId}, terminal={session.TerminalIndex}");
+                return null;
+            }
+
+            var activeRoute = _terminalManager.CurrentRoute;
+            if (session.TerminalIndex != activeRoute.TerminalIndex ||
+                !SourceMatchesTerminal(sourceAddress, session.TerminalIndex,
+                    operation, requestId))
+            {
+                Logger.Warn($"[{operation}回调] 来自非当前终端的流程回调已跳过: request_id={requestId}, callback_terminal={session.TerminalIndex}, current_terminal={activeRoute.TerminalIndex}");
+                return null;
+            }
+
+            if (!_processRegistry.TryReserveEvent(session, resourceType,
+                callbackBody, out var deliveryRequestId))
+            {
+                Logger.Warn($"[{operation}回调] 流程事件重复或会话已失效，已跳过: request_id={requestId}");
+                return null;
+            }
+
+            Logger.Debug($"[{operation}回调] 流程路由: process_request_id={requestId}, delivery_request_id={deliveryRequestId}, terminal={session.TerminalIndex}");
+            return new CallbackRoute(requestId, deliveryRequestId, resourceType,
+                PathHelper.SafeResolveSaveDir(session.SaveDir),
+                session.CancellationToken, session.TerminalIndex,
+                activeRoute.RouteEpoch, true);
+        }
+
+        private bool SourceMatchesTerminal(IPAddress sourceAddress,
+            int expectedTerminalIndex, string operation, string requestId)
+        {
+            if (sourceAddress == null ||
+                !_terminalManager.TryResolveTerminalIndex(sourceAddress,
+                    out var sourceTerminalIndex))
                 return true;
 
-            Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过: request_id={requestId}");
+            if (sourceTerminalIndex == expectedTerminalIndex)
+                return true;
+
+            Logger.Warn($"[{operation}回调] 来源IP与回调会话不一致: request_id={requestId}, source={sourceAddress}, source_terminal={sourceTerminalIndex}, expected_terminal={expectedTerminalIndex}");
             return false;
+        }
+
+        private bool CanDeliver(CallbackRoute route, string operation)
+        {
+            if (route == null || route.CancellationToken.IsCancellationRequested)
+                return false;
+
+            if (route.TerminalIndex <= 0)
+                return true;
+
+            var current = _terminalManager.CurrentRoute;
+            if (current.TerminalIndex == route.TerminalIndex &&
+                current.RouteEpoch == route.RouteEpoch)
+                return true;
+
+            Logger.Warn($"[{operation}回调] 处理期间终端路由已变更，取消投递: request_id={route.SourceRequestId}, callback_terminal={route.TerminalIndex}, current_terminal={current.TerminalIndex}");
+            if (!route.Persistent)
+                _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
+            return false;
+        }
+
+        private void FinishDelivery(CallbackRoute route,
+            CallbackDeliveryResult delivery)
+        {
+            if (route == null || route.Persistent)
+            {
+                if (route != null && delivery == CallbackDeliveryResult.Failed)
+                    Logger.Warn($"[DLL回调] 流程事件投递失败，本次不重试且会话保持有效: process_request_id={route.SourceRequestId}, delivery_request_id={route.DeliveryRequestId}, resource={route.ResourceType}");
+                return;
+            }
+
+            if (delivery == CallbackDeliveryResult.Delivered)
+            {
+                _requestRegistry.Complete(route.SourceRequestId,
+                    route.ResourceType);
+                return;
+            }
+
+            if (delivery == CallbackDeliveryResult.Failed)
+            {
+                Logger.Warn($"[DLL回调] 结果投递失败，请求立即结束且不重试: request_id={route.SourceRequestId}, resource={route.ResourceType}");
+                _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
+            }
+        }
+
+        private sealed class CallbackRoute
+        {
+            internal CallbackRoute(string sourceRequestId,
+                string deliveryRequestId, string resourceType, string saveDir,
+                CancellationToken cancellationToken, int terminalIndex,
+                long routeEpoch, bool persistent)
+            {
+                SourceRequestId = sourceRequestId;
+                DeliveryRequestId = deliveryRequestId;
+                ResourceType = resourceType;
+                SaveDir = saveDir;
+                CancellationToken = cancellationToken;
+                TerminalIndex = terminalIndex;
+                RouteEpoch = routeEpoch;
+                Persistent = persistent;
+            }
+
+            internal string SourceRequestId { get; }
+            internal string DeliveryRequestId { get; }
+            internal string ResourceType { get; }
+            internal string SaveDir { get; }
+            internal CancellationToken CancellationToken { get; }
+            internal int TerminalIndex { get; }
+            internal long RouteEpoch { get; }
+            internal bool Persistent { get; }
         }
     }
 }

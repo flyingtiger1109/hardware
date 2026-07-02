@@ -17,6 +17,12 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
             _registry = new RequestRegistry();
         }
 
+        [TestCleanup]
+        public void Cleanup()
+        {
+            _registry?.Dispose();
+        }
+
         [TestMethod]
         public void Register_NewRequest_ReturnsContext()
         {
@@ -26,6 +32,67 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
             Assert.AreEqual(ProxyResourceTypes.OcrDocument, ctx.ResourceType);
             Assert.AreEqual(1, ctx.Generation);
             Assert.AreEqual(ProxyRequestState.Created, ctx.State);
+        }
+
+        [TestMethod]
+        public void Register_DuplicateKey_DoesNotOverwriteActiveContext()
+        {
+            var first = _registry.Register("dup-001", "ocr", @"C:\first",
+                "http://cb/ocr", 1);
+            var duplicate = _registry.Register("dup-001", "ocr", @"C:\second",
+                "http://cb/ocr", 2);
+
+            Assert.IsNotNull(first);
+            Assert.IsNull(duplicate);
+            Assert.IsTrue(_registry.TryGet("dup-001", "ocr", out var current));
+            Assert.AreSame(first, current);
+            Assert.AreEqual(@"C:\first", current.SaveDir);
+            Assert.AreEqual(1, current.Generation);
+        }
+
+        [TestMethod]
+        public void Register_ConcurrentCapacity_NeverExceedsLimit()
+        {
+            _registry.Dispose();
+            _registry = new RequestRegistry(8);
+            var accepted = 0;
+
+            Parallel.For(0, 100, i =>
+            {
+                if (_registry.Register("cap-" + i, "ocr", @"C:\save",
+                    "http://cb/ocr", 1) != null)
+                    Interlocked.Increment(ref accepted);
+            });
+
+            Assert.AreEqual(8, accepted);
+            Assert.AreEqual(8, _registry.ActiveCount);
+        }
+
+        [TestMethod]
+        public void Complete_CancelsRequestLifetimeToken()
+        {
+            var context = _registry.Register("cancel-001", "nfc", @"C:\save",
+                "http://cb/nfc", 1);
+            Assert.IsFalse(context.CancellationToken.IsCancellationRequested);
+
+            _registry.Complete("cancel-001", "nfc");
+
+            Assert.IsTrue(context.CancellationToken.IsCancellationRequested);
+        }
+
+        [TestMethod]
+        public void CompletedRecords_AreBoundedForX86Process()
+        {
+            for (var i = 0; i < 8200; i++)
+            {
+                var requestId = "completed-" + i;
+                Assert.IsNotNull(_registry.Register(requestId, "nfc", @"C:\save",
+                    "http://cb/nfc", 1));
+                _registry.Complete(requestId, "nfc");
+            }
+
+            Assert.AreEqual(8192, _registry.CompletedCount);
+            Assert.AreEqual(0, _registry.ActiveCount);
         }
 
         [TestMethod]
@@ -166,6 +233,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
 
             Assert.IsFalse(foundOld, "gen=1 should be cancelled");
             Assert.IsTrue(foundNew, "gen=3 should remain");
+        }
+
+        [TestMethod]
+        public void CancelOlderThan_PreservesLegacyProcessFlowEntry()
+        {
+            _registry.Register("process-legacy", "ocr", @"C:\save",
+                "http://cb/ocr", 1, processFlow: true);
+
+            _registry.CancelOlderThan(2);
+
+            Assert.IsTrue(_registry.TryGet("process-legacy", "ocr", out _));
         }
 
         [TestMethod]

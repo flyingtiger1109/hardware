@@ -20,18 +20,22 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
         private readonly TerminalManager _terminalManager;
         private readonly TerminalClient _terminalClient;
         private readonly RequestRegistry _requestRegistry;
+        private readonly TerminalProcessRegistry _processRegistry;
         private readonly Action<string> _log;
         private readonly Func<string> _getCallbackBaseUrl;
         private readonly Func<string> _getIrisCallbackUrl;
+        private const string TerminalSwitchingResult =
+            "{\"error\":true,\"code\":\"terminal_switching\"}";
 
         // Synchronous adapters invoked only by dedicated capture workers.
-        public Func<string, (bool ok, string path)> CaptureFaceFunc { get; set; }
-        public Func<string, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
+        public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFaceFunc { get; set; }
+        public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
 
         internal WorkerExecutionEngine(
             TerminalManager terminalManager,
             TerminalClient terminalClient,
             RequestRegistry requestRegistry,
+            TerminalProcessRegistry processRegistry,
             Action<string> log,
             Func<string> getCallbackBaseUrl,
             Func<string> getIrisCallbackUrl)
@@ -39,6 +43,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
             _requestRegistry = requestRegistry;
+            _processRegistry = processRegistry;
             _log = log;
             _getCallbackBaseUrl = getCallbackBaseUrl;
             _getIrisCallbackUrl = getIrisCallbackUrl;
@@ -52,20 +57,30 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             var tcs = data?.Tcs;
             try
             {
+                var routeEpoch = data?.RouteEpoch;
+                if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                {
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
                 var saveDir = data?.SaveDir;
-                if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir))
+                    saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
                 var captureFunc = CaptureFaceFunc;
                 var (ok, path) = captureFunc != null
-                    ? captureFunc(saveDir)
+                    ? captureFunc(saveDir, routeEpoch)
                     : (false, "");
 
-                tcs?.TrySetResult(ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
+                tcs?.TrySetResult(routeEpoch.IsCancellationRequested
+                    ? TerminalSwitchingResult
+                    : ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
                     : "{\"error\":true,\"code\":\"capture_failed\"}");
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.Error("[人脸抓拍] 队列执行异常", ex);
                 tcs?.TrySetResult("{\"error\":true,\"code\":\"capture_failed\"}");
             }
         }
@@ -76,20 +91,30 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             var tcs = data?.Tcs;
             try
             {
+                var routeEpoch = data?.RouteEpoch;
+                if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                {
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
                 var saveDir = data?.SaveDir;
-                if (string.IsNullOrEmpty(saveDir)) saveDir = _terminalManager.ProcessSaveDir;
+                if (string.IsNullOrEmpty(saveDir))
+                    saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
                 var captureFunc = CaptureFingerprintFunc;
                 var (ok, path) = captureFunc != null
-                    ? captureFunc(saveDir)
+                    ? captureFunc(saveDir, routeEpoch)
                     : (false, "");
 
-                tcs?.TrySetResult(ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
+                tcs?.TrySetResult(routeEpoch.IsCancellationRequested
+                    ? TerminalSwitchingResult
+                    : ok ? "{\"status\":\"ok\",\"save_path\":\"" + JsonHelper.EscapeString(path) + "\"}"
                     : "{\"error\":true,\"code\":\"capture_failed\"}");
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.Error("[指纹抓拍] 队列执行异常", ex);
                 tcs?.TrySetResult("{\"error\":true,\"code\":\"capture_failed\"}");
             }
         }
@@ -119,6 +144,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
             try
             {
+                var routeEpoch = data.RouteEpoch;
+                if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                {
+                    _requestRegistry.Fail(data.RequestId, data.ResourceType);
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
                 if (!_requestRegistry.TryMarkSubmitting(data.RequestId, data.ResourceType))
                 {
                     tcs?.TrySetResult("{\"error\":true,\"code\":\"request_expired\"}");
@@ -129,8 +161,15 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 var body = "{\"request_id\":\"" + JsonHelper.EscapeString(data.RequestId) +
                     "\",\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"}";
                 var terminalResult = _terminalClient.PostJsonAsync(
-                        _terminalManager.CurrentBaseUrl, terminalPath, body, 5000)
+                        routeEpoch.Route.BaseUrl, terminalPath, body, 5000,
+                        routeEpoch.CancellationToken)
                     .GetAwaiter().GetResult();
+                if (routeEpoch.IsCancellationRequested)
+                {
+                    _requestRegistry.Fail(data.RequestId, data.ResourceType);
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
                 if (IsAcceptedResponse(terminalResult.ok, terminalResult.response, data.RequestId))
                 {
                     if (!_requestRegistry.TryMarkAccepted(data.RequestId, data.ResourceType))
@@ -169,6 +208,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
             try
             {
+                var routeEpoch = data.RouteEpoch;
+                if (routeEpoch == null || routeEpoch.IsCancellationRequested)
+                {
+                    _requestRegistry.Fail(data.RequestId, ProxyResourceTypes.IrisImage);
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
                 if (!_requestRegistry.TryMarkSubmitting(data.RequestId,
                     ProxyResourceTypes.IrisImage))
                 {
@@ -182,11 +228,19 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 var body = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
                     "\",\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"}";
                 var terminalResult = _terminalClient.PostJsonAsync(
-                        _terminalManager.CurrentBaseUrl,
+                        routeEpoch.Route.BaseUrl,
                         "/resources/iris/request",
                         body,
-                        5000)
+                        5000,
+                        routeEpoch.CancellationToken)
                     .GetAwaiter().GetResult();
+
+                if (routeEpoch.IsCancellationRequested)
+                {
+                    _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
+                    tcs?.TrySetResult(TerminalSwitchingResult);
+                    return;
+                }
 
                 var responseRequestId = JsonHelper.ExtractString(terminalResult.response, "request_id");
                 var status = JsonHelper.ExtractString(terminalResult.response, "status");
@@ -245,8 +299,15 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
             try
             {
+                if (data.RouteEpoch == null || data.RouteEpoch.IsCancellationRequested)
+                {
+                    _requestRegistry.Fail(data.RequestId, ProxyResourceTypes.Protocol);
+                    data.TrySetQueueResult(TerminalSwitchingResult);
+                    return;
+                }
                 var result = HandleAuthorizeDirect(
-                        data.BodyUtf8, data.RequestId, data.CallbackUrl)
+                        data.BodyUtf8, data.RequestId, data.CallbackUrl,
+                        data.RouteEpoch)
                     .GetAwaiter().GetResult();
                 data.TrySetQueueResult(result);
             }
@@ -258,8 +319,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             }
         }
 
-        private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId, string callbackUrl)
+        private async Task<string> HandleAuthorizeDirect(string bodyUtf8, string requestId,
+            string callbackUrl, TerminalRouteEpochSnapshot routeEpoch)
         {
+            if (routeEpoch.IsCancellationRequested)
+                return TerminalSwitchingResult;
             if (!_requestRegistry.TryMarkSubmitting(requestId, ProxyResourceTypes.Protocol))
                 return "{\"error\":true,\"code\":\"request_expired\"}";
 
@@ -286,8 +350,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
             _log("[授权] 转发至终端");
 
-            var (ok, response) = await _terminalClient.PostJsonAsync(_terminalManager.CurrentBaseUrl,
-                "/resources/protocol/request", terminalBody, 5000).ConfigureAwait(false);
+            var (ok, response) = await _terminalClient.PostJsonAsync(routeEpoch.Route.BaseUrl,
+                "/resources/protocol/request", terminalBody, 5000,
+                routeEpoch.CancellationToken).ConfigureAwait(false);
+            if (routeEpoch.IsCancellationRequested)
+            {
+                _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
+                return TerminalSwitchingResult;
+            }
             if (ok)
             {
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))

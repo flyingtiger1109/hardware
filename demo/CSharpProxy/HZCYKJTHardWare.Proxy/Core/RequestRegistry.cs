@@ -84,9 +84,12 @@ namespace HZCYKJTHardWare.Proxy.Core
     internal sealed class ProxyRequestContext
     {
         private int _state;
+        private readonly CancellationTokenSource _lifetimeCancellation =
+            new CancellationTokenSource();
 
         internal ProxyRequestContext(string requestId, string resourceType, string saveDir,
-            string dllCallbackUrl, int generation, bool processFlow, TimeSpan lifetime)
+            string dllCallbackUrl, int generation, bool processFlow, TimeSpan lifetime,
+            int terminalIndex)
         {
             RequestId = requestId;
             ResourceType = ProxyResourceTypes.Normalize(resourceType);
@@ -94,6 +97,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             DllCallbackUrl = dllCallbackUrl ?? "";
             Generation = generation;
             IsProcessFlow = processFlow;
+            TerminalIndex = terminalIndex;
             CreatedAtUtc = DateTime.UtcNow;
             ExpiresAtUtc = CreatedAtUtc.Add(lifetime);
             _state = (int)ProxyRequestState.Created;
@@ -105,9 +109,11 @@ namespace HZCYKJTHardWare.Proxy.Core
         internal string DllCallbackUrl { get; }
         internal int Generation { get; }
         internal bool IsProcessFlow { get; }
+        internal int TerminalIndex { get; }
         internal DateTime CreatedAtUtc { get; }
         internal DateTime ExpiresAtUtc { get; }
         internal ProxyRequestState State => (ProxyRequestState)Volatile.Read(ref _state);
+        internal CancellationToken CancellationToken => _lifetimeCancellation.Token;
 
         internal bool TryMarkQueued()
         {
@@ -149,9 +155,21 @@ namespace HZCYKJTHardWare.Proxy.Core
             }
         }
 
-        internal void MarkTerminal(ProxyRequestState state)
+        internal bool TryMarkTerminal(ProxyRequestState state)
         {
-            Interlocked.Exchange(ref _state, (int)state);
+            while (true)
+            {
+                var current = State;
+                if (IsTerminal(current))
+                    return false;
+                if (Interlocked.CompareExchange(ref _state, (int)state,
+                    (int)current) != (int)current)
+                    continue;
+
+                try { _lifetimeCancellation.Cancel(); }
+                catch (ObjectDisposedException) { }
+                return true;
+            }
         }
 
         private bool TryAdvance(ProxyRequestState from, ProxyRequestState to)
@@ -186,15 +204,21 @@ namespace HZCYKJTHardWare.Proxy.Core
         private static readonly TimeSpan ProcessLifetime = TimeSpan.FromHours(8);
         private static readonly TimeSpan CompletedLifetime = TimeSpan.FromMinutes(10);
         private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(30);
+        private const int MaxCompletedEntries = 8192;
 
         // Capacity configurable via AppConfig (read at construction time)
         private readonly int _maxActiveEntries;
         private int _registerRejectedCount;
+        private int _duplicateRejectedCount;
+        private int _disposed;
+        private readonly object _mutationLock = new object();
+        private readonly SemaphoreSlim _capacity;
 
         private readonly ConcurrentDictionary<CompositeKey, ProxyRequestContext> _active =
             new ConcurrentDictionary<CompositeKey, ProxyRequestContext>();
         private readonly ConcurrentDictionary<CompositeKey, CompletedRequestRecord> _completed =
             new ConcurrentDictionary<CompositeKey, CompletedRequestRecord>();
+        private readonly Queue<CompositeKey> _completedOrder = new Queue<CompositeKey>();
 
         private readonly System.Threading.Timer _pruneTimer;
         private int _pruneRunning;
@@ -202,8 +226,10 @@ namespace HZCYKJTHardWare.Proxy.Core
         private int _lastPruneCompletedRemoved;
 
         internal int ActiveCount => _active.Count;
+        internal int CompletedCount => _completed.Count;
         internal int MaxActiveEntries => _maxActiveEntries;
-        internal int RegisterRejectedCount => _registerRejectedCount;
+        internal int RegisterRejectedCount => Volatile.Read(ref _registerRejectedCount);
+        internal int DuplicateRejectedCount => Volatile.Read(ref _duplicateRejectedCount);
         internal int LastPruneActiveRemoved => _lastPruneActiveRemoved;
         internal int LastPruneCompletedRemoved => _lastPruneCompletedRemoved;
 
@@ -212,6 +238,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         internal RequestRegistry(int maxActiveEntries)
         {
             _maxActiveEntries = maxActiveEntries > 0 ? maxActiveEntries : 5000;
+            _capacity = new SemaphoreSlim(_maxActiveEntries, _maxActiveEntries);
             _pruneTimer = new System.Threading.Timer(
                 _ => PruneExpiredCallback(),
                 null,
@@ -224,27 +251,44 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// (caller must handle rejection and return an error response).
         /// </summary>
         internal ProxyRequestContext Register(string requestId, string resourceType,
-            string saveDir, string dllCallbackUrl, int generation, bool processFlow = false)
+            string saveDir, string dllCallbackUrl, int generation,
+            bool processFlow = false, int terminalIndex = 0)
         {
             if (string.IsNullOrEmpty(requestId))
                 throw new ArgumentException("request_id is required", nameof(requestId));
 
-            // Capacity check — reject early if full
-            if (_active.Count >= _maxActiveEntries)
-            {
-                Interlocked.Increment(ref _registerRejectedCount);
-                Logger.Warn($"[Registry] 容量已满({_maxActiveEntries})，拒绝注册: request_id={requestId}, resource={resourceType} (累计拒绝={_registerRejectedCount})");
-                return null;
-            }
-
             var normalized = ProxyResourceTypes.Normalize(resourceType);
             var key = new CompositeKey(requestId, normalized);
-            var context = new ProxyRequestContext(requestId, normalized, saveDir,
-                dllCallbackUrl, generation, processFlow,
-                processFlow ? ProcessLifetime : DefaultLifetime);
-            _completed.TryRemove(key, out _);
-            _active[key] = context;
-            return context;
+
+            lock (_mutationLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                    return null;
+
+                if (_active.ContainsKey(key) || _completed.ContainsKey(key))
+                {
+                    var rejected = Interlocked.Increment(ref _duplicateRejectedCount);
+                    Logger.Warn($"[Registry] duplicate registration rejected: request_id={requestId}, resource={normalized}, total={rejected}");
+                    return null;
+                }
+
+                if (!_capacity.Wait(0))
+                {
+                    var rejected = Interlocked.Increment(ref _registerRejectedCount);
+                    Logger.Warn($"[Registry] capacity reached ({_maxActiveEntries}), request_id={requestId}, resource={normalized}, total={rejected}");
+                    return null;
+                }
+
+                var context = new ProxyRequestContext(requestId, normalized, saveDir,
+                    dllCallbackUrl, generation, processFlow,
+                    processFlow ? ProcessLifetime : DefaultLifetime, terminalIndex);
+                if (_active.TryAdd(key, context))
+                    return context;
+
+                _capacity.Release();
+                Interlocked.Increment(ref _duplicateRejectedCount);
+                return null;
+            }
         }
 
         internal bool TryGet(string requestId, string resourceType, out ProxyRequestContext context)
@@ -298,7 +342,10 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             foreach (var item in _active)
             {
-                if (item.Value.Generation < generation)
+                // Legacy process-flow entries must survive route generation
+                // changes. New code stores them in TerminalProcessRegistry, but
+                // this guard protects in-flight sessions during rolling upgrade.
+                if (!item.Value.IsProcessFlow && item.Value.Generation < generation)
                     Finish(item.Value.RequestId, item.Value.ResourceType, ProxyRequestState.Cancelled);
             }
         }
@@ -309,6 +356,8 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         private void PruneExpiredCallback()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
             if (Interlocked.Exchange(ref _pruneRunning, 1) != 0)
                 return; // Already running
 
@@ -323,7 +372,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             }
             catch (Exception ex)
             {
-                Logger.Warn($"[Registry] Timer清理异常: {ex.Message}");
+                Logger.Error("[Registry] Timer清理异常", ex);
             }
             finally
             {
@@ -339,18 +388,34 @@ namespace HZCYKJTHardWare.Proxy.Core
             {
                 if (item.Value.ExpiresAtUtc <= now)
                 {
-                    Finish(item.Value.RequestId, item.Value.ResourceType, ProxyRequestState.TimedOut);
-                    activeRemoved++;
+                    if (Finish(item.Value.RequestId, item.Value.ResourceType,
+                        ProxyRequestState.TimedOut))
+                        activeRemoved++;
                 }
             }
 
             var completedCutoff = now.Subtract(CompletedLifetime).Ticks;
             var completedRemoved = 0;
-            foreach (var item in _completed)
+            lock (_mutationLock)
             {
-                if (item.Value.CompletedAtTicks < completedCutoff &&
-                    _completed.TryRemove(item.Key, out _))
-                    completedRemoved++;
+                while (_completedOrder.Count > 0)
+                {
+                    var key = _completedOrder.Peek();
+                    if (!_completed.TryGetValue(key, out var record))
+                    {
+                        _completedOrder.Dequeue();
+                        continue;
+                    }
+
+                    // Completion records are enqueued in timestamp order while
+                    // holding this same lock, so no later record can be stale.
+                    if (record.CompletedAtTicks >= completedCutoff)
+                        break;
+
+                    _completedOrder.Dequeue();
+                    if (_completed.TryRemove(key, out _))
+                        completedRemoved++;
+                }
             }
             return (activeRemoved, completedRemoved);
         }
@@ -360,17 +425,51 @@ namespace HZCYKJTHardWare.Proxy.Core
             return new List<ProxyRequestContext>(_active.Values);
         }
 
-        private void Finish(string requestId, string resourceType, ProxyRequestState state)
+        private bool Finish(string requestId, string resourceType, ProxyRequestState state)
         {
             var key = new CompositeKey(requestId, resourceType);
-            if (_active.TryRemove(key, out var context))
-                context.MarkTerminal(state);
-            _completed[key] = new CompletedRequestRecord(state);
+            ProxyRequestContext context;
+            lock (_mutationLock)
+            {
+                if (!_active.TryRemove(key, out context))
+                    return false;
+
+                _completed[key] = new CompletedRequestRecord(state);
+                _completedOrder.Enqueue(key);
+                while (_completed.Count > MaxCompletedEntries &&
+                    _completedOrder.Count > 0)
+                {
+                    var oldest = _completedOrder.Dequeue();
+                    _completed.TryRemove(oldest, out _);
+                }
+                _capacity.Release();
+            }
+
+            // Cancellation callbacks may execute synchronously. Never run them
+            // while holding the registry mutation lock.
+            context.TryMarkTerminal(state);
+            return true;
         }
 
         public void Dispose()
         {
-            _pruneTimer?.Dispose();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            using (var stopped = new ManualResetEvent(false))
+            {
+                try
+                {
+                    if (_pruneTimer != null && _pruneTimer.Dispose(stopped))
+                        stopped.WaitOne(2000);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("[Registry] timer dispose failed", ex);
+                }
+            }
+
+            CancelAll();
         }
     }
 }

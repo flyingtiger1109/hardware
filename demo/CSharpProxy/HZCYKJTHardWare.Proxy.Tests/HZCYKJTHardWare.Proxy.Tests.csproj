@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.csproj" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
 </Project>

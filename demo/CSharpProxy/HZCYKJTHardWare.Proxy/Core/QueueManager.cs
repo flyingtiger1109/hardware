@@ -28,7 +28,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         private readonly WorkerQueue<object> _nfcQueue;
         private readonly WorkerQueue<object> _authorizeQueue;
 
-        public int TerminalGeneration => _terminalGeneration;
+        public int TerminalGeneration => Volatile.Read(ref _terminalGeneration);
         public bool SwitchingTerminal => _switchingTerminal;
 
         /// <summary>
@@ -97,7 +97,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         public bool IsGenerationValid(int taskGeneration)
         {
-            return taskGeneration >= _terminalGeneration;
+            return taskGeneration >= Volatile.Read(ref _terminalGeneration);
         }
 
         public string GetAllStats()

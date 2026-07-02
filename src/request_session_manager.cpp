@@ -6,8 +6,6 @@
 
 namespace HZCYKJTHardWare {
 
-namespace { RequestSessionManager* g_pReqSessMgr = nullptr; }
-
 namespace {
 class CriticalSectionGuard {
 public:
@@ -28,11 +26,13 @@ static int64_t NowMs() {
 }
 
 static const int64_t kCompletedKeepMs = 10 * 60 * 1000;
-static const size_t kMaxCompletedRequests = 1024;
+// Keep enough composite callback keys for retry de-duplication without placing
+// material pressure on the x86 address space.
+static const size_t kMaxCompletedRequests = 8192;
 
 RequestSessionManager& RequestSessionManager::Instance() {
-    if (!g_pReqSessMgr) g_pReqSessMgr = new RequestSessionManager();
-    return *g_pReqSessMgr;
+    static RequestSessionManager* instance = new RequestSessionManager();
+    return *instance;
 }
 
 RequestSessionManager::RequestSessionManager() { InitializeCriticalSection(&m_cs); }
@@ -96,24 +96,45 @@ std::string RequestSessionManager::CreateSession(const std::string& resourceType
 bool RequestSessionManager::MarkAccepted(const std::string& requestId) {
     CriticalSectionGuard guard(&m_cs);
     auto it = m_sessions.find(requestId);
-    if (it == m_sessions.end()) return false;
+    if (it == m_sessions.end()) {
+        // A very fast callback may complete before the synchronous submission
+        // response returns. Treat that as accepted instead of reporting busy.
+        PruneCompletedLocked(NowMs());
+        const auto completed = m_completedRequests.lower_bound(
+            CompletedRequestKey(requestId, std::string()));
+        return completed != m_completedRequests.end() &&
+            completed->first.first == requestId;
+    }
+    if (it->second->status == RequestStatus::CallbackReceived ||
+        it->second->status == RequestStatus::Completed ||
+        it->second->status == RequestStatus::Accepted) {
+        return true;
+    }
+    if (it->second->status != RequestStatus::Pending) return false;
     it->second->status = RequestStatus::Accepted;
     LOG_DEBUG("RequestSession", "异步请求已受理：request_id=%s", requestId.c_str());
     return true;
 }
 
 bool RequestSessionManager::MarkCallbackReceived(const std::string& requestId,
+                                                   const std::string& resourceType,
                                                    const std::string& callbackBody) {
     CriticalSectionGuard guard(&m_cs);
     PruneCompletedLocked(NowMs());
-    if (m_completedRequests.find(requestId) != m_completedRequests.end()) {
+    const CompletedRequestKey completedKey(requestId, resourceType);
+    if (m_completedRequests.find(completedKey) != m_completedRequests.end()) {
         LOG_WARN("RequestSession", "重复回调已忽略：request_id=%s，原因=已完成", requestId.c_str());
         return false;
     }
     auto it = m_sessions.find(requestId);
     if (it == m_sessions.end()) return false;
-    if (it->second->status == RequestStatus::CallbackReceived ||
-        it->second->status == RequestStatus::Completed) {
+    if (it->second->resource_type != resourceType) {
+        LOG_WARN("RequestSession", "回调资源类型不匹配：request_id=%s，expected=%s，actual=%s",
+                 requestId.c_str(), it->second->resource_type.c_str(), resourceType.c_str());
+        return false;
+    }
+    if (it->second->status != RequestStatus::Pending &&
+        it->second->status != RequestStatus::Accepted) {
         LOG_WARN("RequestSession", "重复回调已忽略：request_id=%s，status=%d",
                  requestId.c_str(), static_cast<int>(it->second->status));
         return false;
@@ -129,24 +150,48 @@ void RequestSessionManager::MarkCompleted(const std::string& requestId) {
     if (requestId.empty()) return;
     CriticalSectionGuard guard(&m_cs);
     int64_t now = NowMs();
+    std::string resourceType;
     auto it = m_sessions.find(requestId);
     if (it != m_sessions.end()) {
+        resourceType = it->second->resource_type;
         it->second->status = RequestStatus::Completed;
         it->second->callback_body.clear();
         it->second->callback_received = false;
         m_sessions.erase(it);
     }
-    m_completedRequests[requestId] = now;
+    if (!resourceType.empty()) {
+        m_completedRequests[CompletedRequestKey(requestId, resourceType)] = now;
+    }
     PruneCompletedLocked(now);
     LOG_DEBUG("RequestSession", "请求会话已完成并清理：request_id=%s", requestId.c_str());
 }
 
-bool RequestSessionManager::IsRecentlyCompleted(const std::string& requestId) {
-    if (requestId.empty()) return false;
+void RequestSessionManager::MarkCompleted(const std::string& requestId,
+                                          const std::string& resourceType) {
+    if (requestId.empty() || resourceType.empty()) return;
+    CriticalSectionGuard guard(&m_cs);
+    const int64_t now = NowMs();
+    auto it = m_sessions.find(requestId);
+    if (it != m_sessions.end() && it->second->resource_type == resourceType) {
+        it->second->status = RequestStatus::Completed;
+        it->second->callback_body.clear();
+        it->second->callback_received = false;
+        m_sessions.erase(it);
+    }
+    m_completedRequests[CompletedRequestKey(requestId, resourceType)] = now;
+    PruneCompletedLocked(now);
+    LOG_DEBUG("RequestSession", "请求会话已完成并清理：request_id=%s，resource=%s",
+              requestId.c_str(), resourceType.c_str());
+}
+
+bool RequestSessionManager::IsRecentlyCompleted(const std::string& requestId,
+                                                 const std::string& resourceType) {
+    if (requestId.empty() || resourceType.empty()) return false;
     CriticalSectionGuard guard(&m_cs);
     int64_t now = NowMs();
     PruneCompletedLocked(now);
-    return m_completedRequests.find(requestId) != m_completedRequests.end();
+    return m_completedRequests.find(CompletedRequestKey(requestId, resourceType)) !=
+           m_completedRequests.end();
 }
 
 std::shared_ptr<RequestSession> RequestSessionManager::GetSession(const std::string& requestId) {
@@ -188,7 +233,8 @@ void RequestSessionManager::CancelAll() {
             kv.second->status == RequestStatus::Accepted) {
             kv.second->status = RequestStatus::Cancelled;
             LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=流程结束", kv.first.c_str());
-            m_completedRequests[kv.first] = now;
+            m_completedRequests[CompletedRequestKey(
+                kv.first, kv.second->resource_type)] = now;
             it = m_sessions.erase(it);
         } else {
             ++it;
@@ -206,7 +252,8 @@ void RequestSessionManager::ExpireAllForTerminalSwitch() {
             kv.second->status == RequestStatus::Accepted) {
             kv.second->status = RequestStatus::Expired;
             LOG_DEBUG("RequestSession", "异步请求已过期：request_id=%s，原因=终端切换", kv.first.c_str());
-            m_completedRequests[kv.first] = now;
+            m_completedRequests[CompletedRequestKey(
+                kv.first, kv.second->resource_type)] = now;
             it = m_sessions.erase(it);
         } else {
             ++it;
@@ -227,7 +274,8 @@ void RequestSessionManager::CancelAllForCallbackReset() {
             kv.second->callback_body.clear();
             kv.second->callback_received = false;
             LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=第三方重新注册回调", kv.first.c_str());
-            m_completedRequests[kv.first] = now;
+            m_completedRequests[CompletedRequestKey(
+                kv.first, kv.second->resource_type)] = now;
             it = m_sessions.erase(it);
         } else {
             ++it;

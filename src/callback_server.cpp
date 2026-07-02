@@ -5,11 +5,9 @@
 
 namespace HZCYKJTHardWare {
 
-namespace { CallbackServer* g_pCbServer = nullptr; }
-
 CallbackServer& CallbackServer::Instance() {
-    if (!g_pCbServer) g_pCbServer = new CallbackServer();
-    return *g_pCbServer;
+    static CallbackServer* instance = new CallbackServer();
+    return *instance;
 }
 
 int CallbackServer::Start(const std::string& host, int port) {
@@ -184,6 +182,7 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
             // 第二步：提取 Content-Length，按需补读 body
             size_t headerEnd = rawRequest.find("\r\n\r\n");
+            bool requestBodyComplete = (headerEnd != std::string::npos);
             if (headerEnd != std::string::npos) {
                 std::string header = rawRequest.substr(0, headerEnd);
                 size_t headerSize = headerEnd + 4;
@@ -238,34 +237,55 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
                         dest += chunk;
                         remaining -= chunk;
                     }
+                    requestBodyComplete = (remaining == 0);
                 }
             }
 
             std::string method, path, body;
-            if (ParseHttpRequest(rawRequest, method, path, body)) {
+            bool parsed = false;
+            bool accepted = false;
+            if (requestBodyComplete && ParseHttpRequest(rawRequest, method, path, body)) {
+                parsed = true;
                 char remoteIp[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &clientAddr.sin_addr, remoteIp, sizeof(remoteIp));
 
-                LOG_DEBUG("回调服务", "收到回调：path=%s", path.c_str());
+                LOG_INFO("回调服务",
+                         "收到硬件控制程序回调：path=%s，remote=%s，body_size=%zu",
+                         path.c_str(), remoteIp, body.size());
                 CallbackData cbData;
                 cbData.path = path;
                 cbData.body = body;
                 cbData.remote_addr = remoteIp;
 
-                EventDispatcher::Instance().PostCallbackData(cbData);
+                accepted = EventDispatcher::Instance().TryPostCallbackData(cbData);
             } else {
                 LOG_WARN("回调服务", "硬件控制程序回调请求解析失败：bytes=%zu", rawRequest.size());
             }
 
-            // 返回 HTTP 202
-            const char* response =
-                "HTTP/1.1 202 Accepted\r\n"
+            const char* statusLine = nullptr;
+            const char* responseBody = nullptr;
+            if (!parsed) {
+                statusLine = "400 Bad Request";
+                responseBody = "{\"status\":\"invalid\"}";
+            } else if (!accepted) {
+                statusLine = "503 Service Unavailable";
+                responseBody = "{\"status\":\"busy\"}";
+            } else {
+                statusLine = "202 Accepted";
+                responseBody = "{\"status\":\"ok\"}";
+            }
+
+            char response[320] = {0};
+            const int responseLength = _snprintf_s(
+                response, sizeof(response), _TRUNCATE,
+                "HTTP/1.1 %s\r\n"
                 "Content-Type: application/json\r\n"
-                "Content-Length: 17\r\n"
-                "Connection: close\r\n"
-                "\r\n"
-                "{\"status\":\"ok\"}";
-            send(clientSocket, response, (int)strlen(response), 0);
+                "Content-Length: %zu\r\n"
+                "Connection: close\r\n\r\n%s",
+                statusLine, strlen(responseBody), responseBody);
+            if (responseLength > 0) {
+                send(clientSocket, response, responseLength, 0);
+            }
         }
 
         SOCKET ownedClient = m_clientSocket.exchange(INVALID_SOCKET);

@@ -27,24 +27,58 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private readonly RequestRegistry _requestRegistry;
         private readonly QueueManager _queueManager;
         private readonly Action<string> _log;
+        private readonly Action<int> _onTerminalChanged;
+        private readonly ControlOperationGate _controlGate;
+        private readonly object _routeEpochSync = new object();
 
         private int _isSwitching;
+        private ControlOperationGate.Lease _switchLease;
+        private CancellationTokenSource _routeEpochCancellation =
+            new CancellationTokenSource();
 
         public bool IsSwitching => Volatile.Read(ref _isSwitching) != 0;
         public int CurrentGeneration => _queueManager.TerminalGeneration;
+
+        /// <summary>
+        /// Atomically captures the terminal route and generation used by one
+        /// admitted operation. A switch cancels the token before changing route.
+        /// </summary>
+        internal bool TryCaptureRoute(out TerminalRouteEpochSnapshot snapshot)
+        {
+            lock (_routeEpochSync)
+            {
+                if (_isSwitching != 0 || _queueManager.SwitchingTerminal ||
+                    _routeEpochCancellation == null ||
+                    _routeEpochCancellation.IsCancellationRequested)
+                {
+                    snapshot = null;
+                    return false;
+                }
+
+                snapshot = new TerminalRouteEpochSnapshot(
+                    _terminalManager.CurrentRoute,
+                    _queueManager.TerminalGeneration,
+                    _routeEpochCancellation.Token);
+                return true;
+            }
+        }
 
         internal SwitchCoordinator(
             TerminalManager terminalManager,
             PreviewManager previewManager,
             RequestRegistry requestRegistry,
             QueueManager queueManager,
-            Action<string> log)
+            Action<string> log,
+            Action<int> onTerminalChanged = null,
+            ControlOperationGate controlGate = null)
         {
             _terminalManager = terminalManager;
             _previewManager = previewManager;
             _requestRegistry = requestRegistry;
             _queueManager = queueManager;
             _log = log;
+            _onTerminalChanged = onTerminalChanged;
+            _controlGate = controlGate ?? new ControlOperationGate();
         }
 
         /// <summary>
@@ -98,14 +132,39 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private bool TryBeginSwitch(int terminalIndex, out int generation)
         {
             generation = 0;
-            if (Interlocked.Exchange(ref _isSwitching, 1) != 0)
+            var lease = _controlGate.TryEnter("switch_terminal");
+            if (lease == null)
                 return false;
 
-            _queueManager.SetSwitching(true);
-            generation = _queueManager.IncrementGeneration();
-            _requestRegistry.CancelOlderThan(generation);
-            Logger.Info($"[Coordinator] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
-            return true;
+            CancellationTokenSource previousEpoch;
+            lock (_routeEpochSync)
+            {
+                if (_isSwitching != 0)
+                {
+                    lease.Dispose();
+                    return false;
+                }
+
+                Volatile.Write(ref _isSwitching, 1);
+                _switchLease = lease;
+                _queueManager.SetSwitching(true);
+                generation = _queueManager.IncrementGeneration();
+                previousEpoch = _routeEpochCancellation;
+                _routeEpochCancellation = null;
+            }
+
+            try
+            {
+                CancelEpoch(previousEpoch);
+                _requestRegistry.CancelOlderThan(generation);
+                Logger.Info($"[Coordinator] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
+                return true;
+            }
+            catch
+            {
+                FinishSwitch();
+                throw;
+            }
         }
 
         private async Task<bool> SwitchToCoreAsync(int terminalIndex, int generation)
@@ -121,6 +180,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 _terminalManager.SwitchTo(terminalIndex);
                 Logger.Debug($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
                 _log("[Coordinator] 当前终端=" + _terminalManager.CurrentName);
+                NotifyTerminalChanged(_terminalManager.CurrentIndex);
 
                 phase = sw.ElapsedMilliseconds;
                 await _previewManager.RestartPreviewsOnTerminalSwitch(
@@ -143,8 +203,40 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         private void FinishSwitch()
         {
-            _queueManager.ClearSwitching();
-            Interlocked.Exchange(ref _isSwitching, 0);
+            lock (_routeEpochSync)
+            {
+                if (_routeEpochCancellation == null)
+                    _routeEpochCancellation = new CancellationTokenSource();
+                _queueManager.ClearSwitching();
+                Volatile.Write(ref _isSwitching, 0);
+            }
+            var lease = Interlocked.Exchange(ref _switchLease, null);
+            lease?.Dispose();
+        }
+
+        private static void CancelEpoch(CancellationTokenSource cancellation)
+        {
+            if (cancellation == null) return;
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (AggregateException ex)
+            {
+                Logger.Error("[Coordinator] 取消旧终端批次时发生回调异常", ex);
+            }
+        }
+
+        private void NotifyTerminalChanged(int terminalIndex)
+        {
+            try
+            {
+                _onTerminalChanged?.Invoke(terminalIndex);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("[Coordinator] 通知当前终端变化失败", ex);
+            }
         }
     }
 }

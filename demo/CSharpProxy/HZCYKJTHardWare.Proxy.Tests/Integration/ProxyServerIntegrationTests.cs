@@ -193,6 +193,18 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
 
             Assert.IsTrue(result.Contains("\"status\":\"ok\""),
                 $"Terminal switch should succeed, got: {result}");
+
+            // The HTTP endpoint returns before the queued switch is committed.
+            // Restore terminal 1 so this test does not leak route state into the
+            // following OCR backpressure test (terminal 2 has no mock server).
+            var restored = false;
+            for (var i = 0; i < 40 && !restored; i++)
+            {
+                Thread.Sleep(25);
+                var restoreResult = _proxy.SwitchTerminal(1);
+                restored = restoreResult.Contains("已切换到终端 1");
+            }
+            Assert.IsTrue(restored, "test route should be restored to mock terminal 1");
         }
 
         [TestMethod]

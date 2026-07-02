@@ -18,6 +18,7 @@ namespace HZCYKJTHardWare.Proxy.Core
 
     public interface IQueueResultSink
     {
+        bool IsQueueResultCompleted { get; }
         void TrySetQueueResult(string result);
     }
 
@@ -202,6 +203,16 @@ namespace HZCYKJTHardWare.Proxy.Core
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                // The HTTP waiter may time out while this item is pending. Do
+                // not start a hardware operation after its caller has already
+                // received a terminal queue result.
+                var resultSink = task.Data as IQueueResultSink;
+                if (resultSink != null && resultSink.IsQueueResultCompleted)
+                {
+                    Logger.Debug($"[Queue] {_name} skipped a completed pending task");
+                    return;
+                }
+
                 var queueWaitMs = (DateTime.UtcNow - task.EnqueueTime).TotalMilliseconds;
                 if (queueWaitMs > _timeoutMs)
                 {

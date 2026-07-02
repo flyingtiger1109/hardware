@@ -408,44 +408,23 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
-        private bool _suppressTrayHide;
-
-        internal void SetMinimizeToTaskbar()
+        internal void HideToTrayForExternalPreview()
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(SetMinimizeToTaskbar));
+                BeginInvoke(new Action(HideToTrayForExternalPreview));
                 return;
             }
 
-            try
-            {
-                _suppressTrayHide = true;
-                ShowInTaskbar = true;
-                if (!Visible)
-                    Show();
-                if (WindowState == FormWindowState.Minimized)
-                    WindowState = FormWindowState.Normal;
-                WindowState = FormWindowState.Minimized;
-                if (_trayIcon != null)
-                    _trayIcon.Visible = true;
-            }
-            finally
-            {
-                _suppressTrayHide = false;
-            }
+            // Match the v0.9 external-preview behavior: remove the Proxy top-level
+            // window from the taskbar so an embedded child cannot activate it.
+            HideToTray();
         }
 
         private void HideToTray()
         {
             try
             {
-                if (_suppressTrayHide)
-                {
-                    ShowInTaskbar = true;
-                    _trayIcon.Visible = true;
-                    return;
-                }
                 ShowInTaskbar = false;
                 Hide();
                 _trayIcon.Visible = true;
@@ -492,7 +471,7 @@ namespace HZCYKJTHardWare.Proxy
             if (_server != null) return;
             try
             {
-                _server = new ProxyServer(AppendLog, OnProcessStateChanged);
+                _server = new ProxyServer(AppendLog, OnProcessStateChanged, OnTerminalChanged);
                 _server.Start();
                 btnStartServer.Enabled = true;
                 btnStopServer.Enabled = true;
@@ -582,6 +561,34 @@ namespace HZCYKJTHardWare.Proxy
                 return;
             }
             SetPersistentButtonStyle(btnStartProcess, active);
+        }
+
+        private void OnTerminalChanged(int terminalIndex)
+        {
+            if (terminalIndex < 1 || terminalIndex > 2 || IsDisposed || Disposing)
+                return;
+
+            if (InvokeRequired)
+            {
+                if (!IsHandleCreated)
+                    return;
+                try
+                {
+                    BeginInvoke(new Action<int>(OnTerminalChanged), terminalIndex);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The application is shutting down; no UI update is required.
+                }
+                catch (InvalidOperationException)
+                {
+                    // The form handle was destroyed while the switch worker completed.
+                }
+                return;
+            }
+
+            _headerTerminalIndex = terminalIndex;
+            UpdateHeaderStatus();
         }
 
         private void SetPersistentButtonStyle(Button button, bool active)
@@ -724,8 +731,6 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(1));
-            _headerTerminalIndex = 1;
-            UpdateHeaderStatus();
             AppendLog("切换到左通道: " + result);
         }
 
@@ -733,8 +738,6 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(2));
-            _headerTerminalIndex = 2;
-            UpdateHeaderStatus();
             AppendLog("切换到右通道: " + result);
         }
 

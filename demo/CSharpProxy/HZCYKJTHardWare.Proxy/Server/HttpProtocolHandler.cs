@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace HZCYKJTHardWare.Proxy.Server
@@ -24,7 +25,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// Same implementation as the original ProxyServer.ReadHttpRequest.
         /// </summary>
         public static async Task<(string method, string path, string body)> ReadHttpRequestAsync(
-            NetworkStream stream)
+            NetworkStream stream,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             var raw = new MemoryStream();
             var buf = new byte[4096];
@@ -36,7 +38,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             while (headerEnd < 0)
             {
-                int bytesRead = await stream.ReadAsync(buf, 0, buf.Length).ConfigureAwait(false);
+                int bytesRead = await stream.ReadAsync(buf, 0, buf.Length,
+                    cancellationToken).ConfigureAwait(false);
                 if (bytesRead == 0) break;
                 raw.Write(buf, 0, bytesRead);
                 headerEnd = IndexOf(raw.GetBuffer(), (int)raw.Length, marker);
@@ -79,7 +82,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 int totalRead = alreadyRead;
                 while (totalRead < contentLength)
                 {
-                    int read = await stream.ReadAsync(bodyBuf, totalRead, contentLength - totalRead).ConfigureAwait(false);
+                    int read = await stream.ReadAsync(bodyBuf, totalRead,
+                        contentLength - totalRead, cancellationToken).ConfigureAwait(false);
                     if (read == 0) break;
                     totalRead += read;
                 }
@@ -94,16 +98,19 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// Same implementation as the original ProxyServer.WriteHttpResponse.
         /// </summary>
         public static async Task WriteHttpResponseAsync(NetworkStream stream,
-            int statusCode, string body)
+            int statusCode, string body,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             var statusText = statusCode == 200 ? "OK" : statusCode == 202 ? "Accepted" : "Error";
             var bodyBytes = Encoding.UTF8.GetBytes(body);
             var header = $"HTTP/1.1 {statusCode} {statusText}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n";
             var headerBytes = Encoding.UTF8.GetBytes(header);
 
-            await stream.WriteAsync(headerBytes, 0, headerBytes.Length);
-            await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length);
-            await stream.FlushAsync();
+            await stream.WriteAsync(headerBytes, 0, headerBytes.Length,
+                cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length,
+                cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
