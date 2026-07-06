@@ -576,18 +576,18 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
     Addr.sin_addr.S_addr := inet_addr(PChar(FOwner.FTerminalCallbackListenHost));
     Addr.sin_port := htons(FOwner.FTerminalCallbackPort);
     if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
-      FOwner.DoLog('[´íÎó] [ÖÕ¶Ë»Øµ÷] »Øµ÷½ÓÊÕ·þÎñÆô¶¯Ê§°Ü£ºbind ' + FOwner.FTerminalCallbackListenHost + ':' +
-        IntToStr(FOwner.FTerminalCallbackPort) + ' £¬error=' + IntToStr(WSAGetLastError) + '£¬');
+      FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [?????] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?????bind ' + FOwner.FTerminalCallbackListenHost + ':' +
+        IntToStr(FOwner.FTerminalCallbackPort) + ' ?ï¿½ï¿½error=' + IntToStr(WSAGetLastError) + '?ï¿½ï¿½');
       Exit;
     end;
     if listen(FListenSocket, SOMAXCONN) <> 0 then begin
-      FOwner.DoLog('[´íÎó] [ÖÕ¶Ë»Øµ÷] »Øµ÷½ÓÊÕ·þÎñÆô¶¯Ê§°Ü£ºlisten ' + FOwner.FTerminalCallbackListenHost + ':' +
-        IntToStr(FOwner.FTerminalCallbackPort) + ' £¬error=' + IntToStr(WSAGetLastError) + '£¬');
+      FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [?????] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?????listen ' + FOwner.FTerminalCallbackListenHost + ':' +
+        IntToStr(FOwner.FTerminalCallbackPort) + ' ?ï¿½ï¿½error=' + IntToStr(WSAGetLastError) + '?ï¿½ï¿½');
       Exit;
     end;
-    FOwner.DoLog('[ÐÅÏ¢] [ÖÕ¶Ë»Øµ÷] »Øµ÷½ÓÊÕ·þÎñ³ÌÐòÒÑÆô¶¯£¬listen=' + FOwner.FTerminalCallbackListenHost + ':' +
+    FOwner.DoLog('[ï¿½ï¿½?] [?????] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½listen=' + FOwner.FTerminalCallbackListenHost + ':' +
       IntToStr(FOwner.FTerminalCallbackPort));
-    FOwner.DoLog('[ÐÅÏ¢] [ÖÕ¶Ë»Øµ÷] ÖÕ¶Ë»Øµ÷µØÖ·Îª£º' + FOwner.GetCallbackBase);
+    FOwner.DoLog('[ï¿½ï¿½?] [?????] ????ï¿½ï¿½????ï¿½ï¿½' + FOwner.GetCallbackBase);
     while not Terminated do begin
       Client := accept(FListenSocket, nil, nil); if Client = INVALID_SOCKET then Continue;
       TimeoutMs := 5000;
@@ -609,7 +609,7 @@ begin if WSAStartup($0202, WSA) <> 0 then Exit;
           while (NeedLen > 0) do begin RecvLen := recv(Client, Buf, SizeOf(Buf), 0);
             if RecvLen <= 0 then Break; SetString(Chunk, PChar(@Buf[0]), RecvLen); Raw := Raw + Chunk; Dec(NeedLen, RecvLen); end;
           BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
-          FOwner.DoLog('[ÐÅÏ¢] [ÖÕ¶Ë»Øµ÷] ÊÕµ½ÖÕ¶Ë»Øµ÷£¬body_size=' + IntToStr(Length(BodyUtf8)));
+          FOwner.DoLog('[ï¿½ï¿½?] [?????] ??ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½body_size=' + IntToStr(Length(BodyUtf8)));
           ResponseBody := FOwner.HandleTerminalCallback(BodyUtf8); end
         else ResponseBody := '{"status":"rejected"}';
         Response := 'HTTP/1.1 202 Accepted'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
@@ -646,16 +646,16 @@ begin
     Addr.sin_addr.S_addr := inet_addr(PChar(FOwner.FDelphiServerHost));
     Addr.sin_port := htons(FOwner.FDelphiServerPort);
     if bind(FListenSocket, Addr, SizeOf(Addr)) <> 0 then begin
-      FOwner.DoLog('[´íÎó] [·þÎñ] DLLÍ¨ÐÅ·þÎñÆô¶¯Ê§°Ü£ºbind ' + FOwner.FDelphiServerHost + ':' +
-        IntToStr(FOwner.FDelphiServerPort) + ' £¬error=' + IntToStr(WSAGetLastError) + '£¬');
+      FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½] DLL???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?????bind ' + FOwner.FDelphiServerHost + ':' +
+        IntToStr(FOwner.FDelphiServerPort) + ' ?ï¿½ï¿½error=' + IntToStr(WSAGetLastError) + '?ï¿½ï¿½');
       Exit;
     end;
     if listen(FListenSocket, SOMAXCONN) <> 0 then begin
-      FOwner.DoLog('[´íÎó] [·þÎñ] DLLÍ¨ÐÅ·þÎñÆô¶¯Ê§°Ü£ºlisten ' + FOwner.FDelphiServerHost + ':' +
-        IntToStr(FOwner.FDelphiServerPort) + ' £¬error=' + IntToStr(WSAGetLastError) + '£¬');
+      FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½] DLL???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?????listen ' + FOwner.FDelphiServerHost + ':' +
+        IntToStr(FOwner.FDelphiServerPort) + ' ?ï¿½ï¿½error=' + IntToStr(WSAGetLastError) + '?ï¿½ï¿½');
       Exit;
     end;
-    FOwner.DoLog('[ÐÅÏ¢] [·þÎñ] DLLÍ¨ÐÅ·þÎñ³ÌÐòÒÑÆô¶¯£¬http://' + FOwner.FDelphiServerHost + ':' +
+    FOwner.DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] DLL???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½http://' + FOwner.FDelphiServerHost + ':' +
       IntToStr(FOwner.FDelphiServerPort));
     while not Terminated do begin
       Client := accept(FListenSocket, nil, nil);
@@ -672,7 +672,7 @@ begin
           'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
         send(Client, Response[1], Length(Response), 0);
         closesocket(Client);
-        FOwner.DoLog('[¾¯¸æ] [DLLÇëÇó] HTTP¹¤×÷¶ÓÁÐÒÑÂú£¬ÒÑ¾Ü¾øÐÂÇëÇó£¬·ÀÖ¹ÇëÇó¶Ñ»ý¡£');
+        FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [DLLï¿½ï¿½ï¿½ï¿½] HTTPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½');
       end;
     end;
   finally
@@ -723,8 +723,8 @@ begin
       FHttpWorkers[I].Resume;
     end;
   end;
-  DoLog('[ÐÅÏ¢] [DLLÇëÇó] HTTP¹Ì¶¨¹¤×÷Ïß³ÌÒÑÆô¶¯£¬Ïß³ÌÊý=' + IntToStr(High(FHttpWorkers) - Low(FHttpWorkers) + 1) +
-    '£¬¶ÓÁÐÉÏÏÞ=' + IntToStr(HTTP_QUEUE_LIMIT));
+  DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] HTTP??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½?=' + IntToStr(High(FHttpWorkers) - Low(FHttpWorkers) + 1) +
+    'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½=' + IntToStr(HTTP_QUEUE_LIMIT));
 end;
 
 procedure TDelphiProxyServer.StopHttpWorkers;
@@ -835,7 +835,7 @@ begin
           Method := Copy(Header, 1, P1 - 1);
           Path := Copy(Header, P1 + 1, P2 - P1 - 1);
           BodyUtf8 := Copy(Raw, HeaderEnd + 4, ContentLength);
-          DoLog('[ÐÅÏ¢] [DLLÇëÇó] ÊÕµ½DLLÏÂ·¢ÇëÇó£º' + Method + ' ' + Path);
+          DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] ???DLL?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½' + Method + ' ' + Path);
           ResponseBody := HandleRequest(Method, Path, BodyUtf8);
         end;
       end else begin
@@ -846,7 +846,7 @@ begin
       send(Client, Response[1], Length(Response), 0);
     except
       on E: Exception do begin
-        DoLog('[´íÎó] [DLLÇëÇó] HTTP¹¤×÷Ïß³Ì´¦ÀíÇëÇóÒì³££º' + E.Message);
+        DoLog('[ï¿½ï¿½ï¿½ï¿½] [DLLï¿½ï¿½ï¿½ï¿½] HTTPï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½' + E.Message);
         ResponseBody := '{"error":true,"code":"internal_error"}';
         Response := 'HTTP/1.1 500 Internal Server Error'#13#10 + 'Content-Type: application/json; charset=utf-8'#13#10 +
           'Content-Length: ' + IntToStr(Length(ResponseBody)) + #13#10 + 'Connection: close'#13#10#13#10 + ResponseBody;
@@ -923,7 +923,7 @@ begin
         OldTask.StateLock.Acquire;
         try
           OldTask.Response := '{"error":true,"code":"request_replaced"}';
-          FOwner.DoLog('[¾¯¸æ] [ÒµÎñ¶ÓÁÐ] ÐÂÇëÇóÒÑÌæ»»µÈ´ýÖÐµÄ¾ÉÇëÇó£º¶ÓÁÐ=' + FWorkerName + '£¬old_path=' + OldTask.Path + '£¬new_path=' + Task.Path);
+          FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½I??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½?=' + FWorkerName + 'ï¿½ï¿½old_path=' + OldTask.Path + 'ï¿½ï¿½new_path=' + Task.Path);
           if OldTask.WaitForResponse then
             NotifyOldTask := True
           else
@@ -1011,14 +1011,14 @@ begin
     try
       if Task.Generation <> FOwner.CurrentSwitchGeneration then begin
         Task.Response := '{"error":true,"code":"stale_request"}';
-        FOwner.DoLog('[¾¯¸æ] [ÒµÎñ¶ÓÁÐ] ¶ªÆú¾ÉÖÕ¶ËÇëÇó£º¶ÓÁÐ=' + FWorkerName + '£¬path=' + Task.Path);
+        FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½?=' + FWorkerName + 'ï¿½ï¿½path=' + Task.Path);
       end else begin
         Task.Response := FOwner.HandleRequestDirect(Task.Method, Task.Path, Task.BodyUtf8);
       end;
     except
       on E: Exception do begin
         Task.Response := '{"error":true,"code":"worker_exception"}';
-        FOwner.DoLog('[´íÎó] [ÒµÎñ¶ÓÁÐ] ¹¤×÷Ïß³ÌÒì³££º¶ÓÁÐ=' + FWorkerName + '£¬´íÎó=' + E.Message);
+        FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½=' + FWorkerName + 'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½=' + E.Message);
       end;
     end;
     FreeTask := False;
@@ -1113,7 +1113,7 @@ begin
       FOwner.FPreviewManager.StopPreview(FResType, FSessionType);
       Exit;
     end;
-    FOwner.DoLog('[ÐÅÏ¢] [Òì²½Ô¤ÀÀ] ÒÑ¿ªÊ¼: resource=' + ResourceType +
+    FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [OCRï¿½Øµï¿½] Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½' + ResourceType +
       ', request_id=' + FRequestId);
     PayloadUtf8 := '{' +
       JsonStr('request_id', FRequestId) + ',' +
@@ -1124,14 +1124,14 @@ begin
     begin
       FOwner.MarkCompletedCallback(FRequestId);
       FOwner.ForgetRequestContext(FRequestId);
-      FOwner.DoLog('[ÐÅÏ¢] [Òì²½Ô¤ÀÀ] Íâ²¿Ô¤ÀÀÒÑ³É¹¦»Øµ÷µÚÈý·½£¬Í¨ÖªÖ÷´°¿Ú×îÐ¡»¯µ½ÈÎÎñÀ¸¡£');
+      FOwner.DoLog('[ï¿½ï¿½?] [???ï¿½ï¿½] ???ï¿½ï¿½???ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½');
       FOwner.NotifyExternalPreviewReady;
     end;
   end
   else
   begin
     if not FOwner.IsSwitchGenerationCurrent(FSwitchGeneration) then Exit;
-    FOwner.DoLog('[´íÎó] [Òì²½Ô¤ÀÀ] Ê§°Ü: resource=' + ResourceType +
+    FOwner.DoLog('[ï¿½ï¿½ï¿½ï¿½] [???ï¿½ï¿½] ?ï¿½ï¿½: resource=' + ResourceType +
       ', request_id=' + FRequestId);
     Exclude(FOwner.FExternalActivePreviews, FResType);
     case FResType of
@@ -1166,11 +1166,11 @@ procedure TVlcWarmupThread.Execute;
 var
   Vlc: TVlcPlayer;
 begin
-  FOwner.DoLog('[ÐÅÏ¢] [VLCÔ¤ÈÈ] ÕýÔÚÆô¶¯...');
+  FOwner.DoLog('[ï¿½ï¿½?] [VLC?ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½...');
   Vlc := TVlcPlayer.Create;
   try
     Vlc.Warmup;
-    FOwner.DoLog('[ÐÅÏ¢] [VLCÔ¤ÈÈ] ÒÑÍê³É, ºÄÊ±=' + IntToStr(Vlc.WarmupMs) + 'ms');
+    FOwner.DoLog('[ï¿½ï¿½?] [VLC?ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½?, ï¿½ï¿½?=' + IntToStr(Vlc.WarmupMs) + 'ms');
   finally
     Vlc.Free;
   end;
@@ -1228,15 +1228,15 @@ procedure TDelphiProxyServer.Start;
 begin if FThread <> nil then Exit;
   FLanIp := GetLocalLanIp;
   FThirdPartyCameraHwnd := 0; FThirdPartyFingerprintHwnd := 0; FThirdPartyIrisHwnd := 0;
-  DoLog('[ÐÅÏ¢] [·þÎñ] ÒÑ¼ì²â±¾»ú¾ÖÓòÍøµØÖ·£º' + FLanIp);
-  DoLog('[ÐÅÏ¢] [ÖÕ¶Ë×´Ì¬] µ±Ç°ÖÕ¶Ë£º' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ????ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½' + FLanIp);
+  DoLog('[ï¿½ï¿½?] [?????] ï¿½ï¿½????ï¿½ï¿½' + FTerminalManager.CurrentName + ' ' + FTerminalManager.CurrentBaseUrl);
   FCallbackThread := TCallbackReceiverThread.Create(Self); FCallbackThread.Resume;
   StartHttpWorkers;
   StartBusinessWorkers;
-  DoLog('[ÐÅÏ¢] [·þÎñ] ÕýÔÚÆô¶¯DLLÍ¨ÐÅ·þÎñ£¬http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½DLL???ï¿½ï¿½?http://' + FDelphiServerHost + ':' + IntToStr(FDelphiServerPort));
   FThread := TDelphiHttpServerThread.Create(Self); FThread.Resume;
-  DoLog('[ÐÅÏ¢] [·þÎñ] DLLÍ¨ÐÅÖÕ¶Ë»Øµ÷=' + GetCallbackBase);
-  DoLog('[ÐÅÏ¢] [Ô¤ÀÀ¹ÜÀí] ·þÎñ³ÌÐòÒÑÆô¶¯£¬µÈ´ýÍâ²¿Ô¤ÀÀÖ¸ÁîÖÐ...'); TVlcWarmupThread.Create(Self); end;
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] DLL?ï¿½ï¿½?????=' + GetCallbackBase);
+  DoLog('[ï¿½ï¿½?] [?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½??ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½...'); TVlcWarmupThread.Create(Self); end;
 
 procedure TDelphiProxyServer.Stop;
 begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.Free; FThread := nil; end;
@@ -1245,19 +1245,19 @@ begin if FThread <> nil then begin FThread.StopServer; FThread.WaitFor; FThread.
   if FCallbackThread <> nil then begin FCallbackThread.StopServer; FCallbackThread.WaitFor; FCallbackThread.Free; FCallbackThread := nil; end;
   FPreviewManager.StopPreview(prtCamera, pstLocal); FPreviewManager.StopPreview(prtFingerprint, pstLocal); FPreviewManager.StopPreview(prtIris, pstLocal);
   FPreviewManager.StopPreview(prtCamera, pstExternal); FPreviewManager.StopPreview(prtFingerprint, pstExternal); FPreviewManager.StopPreview(prtIris, pstExternal);
-  FLocalActivePreviews := []; FExternalActivePreviews := []; DoLog('[ÐÅÏ¢] [·þÎñ] ·þÎñ³ÌÐòÒÑÍ£Ö¹¡£'); end;
+  FLocalActivePreviews := []; FExternalActivePreviews := []; DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½'); end;
 
 function TDelphiProxyServer.MakeCallback(const RequestId, DllCallbackUrl, PayloadUtf8: string): Boolean;
 begin
   Result := False;
   if DllCallbackUrl = '' then Exit;
-  DoLog('[ÐÅÏ¢] [DLL»Øµ÷] ÕýÔÚÏòDLL»Ø´«Òì²½½á¹û£¬url=' + DllCallbackUrl +
-    '£¬body_size=' + IntToStr(Length(PayloadUtf8)));
+  DoLog('[ï¿½ï¿½?] [DLL???] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½DLL??ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½url=' + DllCallbackUrl +
+    '?ï¿½ï¿½body_size=' + IntToStr(Length(PayloadUtf8)));
   Result := HttpPostJson(DllCallbackUrl, PayloadUtf8);
   if Result then
-    DoLog('[ÐÅÏ¢] [DLL»Øµ÷] DLL»Øµ÷³É¹¦£¬request_id=' + RequestId)
+    DoLog('[ï¿½ï¿½?] [DLL???] DLL??ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½request_id=' + RequestId)
   else
-    DoLog('[´íÎó] [DLL»Øµ÷] DLL»Øµ÷Ê§°Ü£¬request_id=' + RequestId + '£¬url=' + DllCallbackUrl);
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [DLL???] DLL??????ï¿½ï¿½request_id=' + RequestId + '?ï¿½ï¿½url=' + DllCallbackUrl);
 end;
 
 function TDelphiProxyServer.BeginTerminalSwitch(out SwitchGeneration: Integer): Boolean;
@@ -1446,7 +1446,7 @@ var
   TotalTick, ItemTick: DWORD;
 begin
   TotalTick := GetTickCount;
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÇÐ»»] ÇÐ»»Ç°ÕýÔÚÍ£Ö¹»î¶¯Ô¤ÀÀ...');
+  DoLog('[ï¿½ï¿½?] [??ï¿½ï¿½ï¿½ï¿½?] ?ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½?????ï¿½ï¿½...');
   for SessionType := pstLocal to pstExternal do
   begin
     if SessionType = pstLocal then
@@ -1462,11 +1462,11 @@ begin
       begin
         ItemTick := GetTickCount;
         FPreviewManager.StopPreview(ResType, SessionType);
-        DoLog(Format('[ÐÔÄÜ] Í£Ö¹Ô¤ÀÀ resource=%d session=%d ºÄÊ±=%dºÁÃë',
+        DoLog(Format('[ï¿½ï¿½ï¿½ï¿½] ???ï¿½ï¿½ resource=%d session=%d ï¿½ï¿½?=%dï¿½ï¿½?ï¿½ï¿½',
           [Ord(ResType), Ord(SessionType), Integer(GetTickCount - ItemTick)]));
       end;
   end;
-  DoLog(Format('[ÐÔÄÜ] Í£Ö¹È«²¿Ô¤ÀÀ ºÄÊ±=%dºÁÃë', [Integer(GetTickCount - TotalTick)]));
+  DoLog(Format('[ï¿½ï¿½ï¿½ï¿½] ???ï¿½ï¿½?ï¿½ï¿½ ï¿½ï¿½?=%dï¿½ï¿½?ï¿½ï¿½', [Integer(GetTickCount - TotalTick)]));
 end;
 procedure TDelphiProxyServer.AutoStartPreviews;
 var
@@ -1477,7 +1477,7 @@ var
   TotalTick, ItemTick: DWORD;
 begin
   TotalTick := GetTickCount;
-  DoLog(Format('[ÐÅÏ¢] [ÖÕ¶ËÇÐ»»] ÕýÔÚÖÕ¶Ë%dÉÏ»Ö¸´»î¶¯Ô¤ÀÀ', [FTerminalManager.CurrentIndex]));
+  DoLog(Format('[ï¿½ï¿½?] [??ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½???%d???ï¿½ï¿½???ï¿½ï¿½', [FTerminalManager.CurrentIndex]));
   for SessionType := pstLocal to pstExternal do
   begin
     if SessionType = pstLocal then
@@ -1501,11 +1501,11 @@ begin
         ItemTick := GetTickCount;
         FPreviewManager.StartPreview(ResType, SessionType, TargetHwnd,
           FTerminalManager.CurrentBaseUrl);
-        DoLog(Format('[ÐÔÄÜ] Æô¶¯Ô¤ÀÀ resource=%d session=%d ºÄÊ±=%dºÁÃë',
+        DoLog(Format('[ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ resource=%d session=%d ï¿½ï¿½?=%dï¿½ï¿½?ï¿½ï¿½',
           [Ord(ResType), Ord(SessionType), Integer(GetTickCount - ItemTick)]));
       end;
   end;
-  DoLog(Format('[ÐÔÄÜ] Æô¶¯È«²¿Ô¤ÀÀ ºÄÊ±=%dºÁÃë', [Integer(GetTickCount - TotalTick)]));
+  DoLog(Format('[ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ ï¿½ï¿½?=%dï¿½ï¿½?ï¿½ï¿½', [Integer(GetTickCount - TotalTick)]));
 end;
 // ============================================================
 // DIRECT METHODS
@@ -1531,7 +1531,7 @@ begin
     Result := True;
   except
     on E: Exception do
-      DoLog('[´íÎó] [ÖÕ¶ËÇÐ»»] ºóÌ¨ÇÐ»»Òì³££º' + E.Message);
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [??ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½??ï¿½Ý¡ï¿½??ï¿½ï¿½' + E.Message);
   end;
   EndTerminalSwitch(SwitchGeneration);
 end;
@@ -1551,12 +1551,12 @@ begin
   try
     TAsyncSwitchThread.Create(Self, Index, SwitchGeneration);
     Result := True;
-    DoLog(Format('[ÐÅÏ¢] [ÖÕ¶ËÇÐ»»] ÒÑÊÜÀíºóÌ¨ÇÐ»»ÇëÇó£ºterminal=%d£¬generation=%d', [Index, SwitchGeneration]));
+    DoLog(Format('[ï¿½ï¿½?] [??ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½Ý¡ï¿½ï¿½ï¿½ï¿½ï¿½terminal=%dï¿½ï¿½generation=%d', [Index, SwitchGeneration]));
   except
     on E: Exception do
     begin
       EndTerminalSwitch(SwitchGeneration);
-      DoLog('[´íÎó] [ÖÕ¶ËÇÐ»»] ´´½¨ºóÌ¨ÇÐ»»Ïß³ÌÊ§°Ü£º' + E.Message);
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [??ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½Ý¡ï¿½?????ï¿½ï¿½' + E.Message);
     end;
   end;
 end;
@@ -1582,91 +1582,91 @@ begin
   BaseUrl := FTerminalManager.CurrentBaseUrl;
   BodyUtf8 := BuildTerminalProcessStartBody;
   FTerminalManager.ProcessSaveDir := ResolvedSaveDir;
-  DoLog('[ÐÅÏ¢] [Á÷³Ì] ÕýÔÚÏòÖÕ¶Ë¿ªÊ¼Á÷³Ì£¬url=' + BaseUrl + '/process/start?£¬save_dir=' + ResolvedSaveDir);
-  DoLog('[ÐÅÏ¢] [Á÷³Ì] ÖÕ¶Ë»Øµ÷µØÖ·=' + GetCallbackBase);
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?????ï¿½ï¿½??ï¿½ï¿½url=' + BaseUrl + '/process/start??ï¿½ï¿½save_dir=' + ResolvedSaveDir);
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ????ï¿½ï¿½??=' + GetCallbackBase);
   if not FTerminalClient.PostJson(BaseUrl, '/process/start', BodyUtf8, ResponseUtf8) then
   begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] ¿ªÊ¼Á÷³ÌÖ¸Áî·¢ËÍµ½ÖÕ¶ËÊ§°Ü¡£');
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?????ï¿½ï¿½?????ï¿½ï¿½');
     Exit;
   end;
   FTerminalManager.ProcessActive := True;
-  DoLog('[ÐÅÏ¢] [Á÷³Ì] ÖÕ¶ËÁ÷³ÌÒÑ¿ªÊ¼£¬save_dir=' + FTerminalManager.ProcessSaveDir);
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½save_dir=' + FTerminalManager.ProcessSaveDir);
   Result := True;
 end;
 
 function TDelphiProxyServer.EndProcessDirect: Boolean;
 begin FTerminalManager.ProcessActive := False; FTerminalManager.ProcessSaveDir := '';
-  ClearRequestContexts; DoLog('[ÐÅÏ¢] [Á÷³Ì] Á÷³ÌÒÑ½áÊø¡£'); Result := True; end;
+  ClearRequestContexts; DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Result := True; end;
 
 function TDelphiProxyServer.CaptureFaceDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FaceResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FACE');
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÍ¨ÐÅ] ÕýÔÚÏòÖÕ¶ËÇëÇóÈËÁ³×¥ÅÄ£¬request_id=' + ReqId + '£¬url=' + BaseUrl + '/resources/face-image/sync-request');
+  DoLog('[ï¿½ï¿½?] [????ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½request_id=' + ReqId + '?ï¿½ï¿½url=' + BaseUrl + '/resources/face-image/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/face-image/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] ÈËÁ³×¥ÅÄÖ¸Áî·¢ËÍÊ§°Ü£¬terminal=' + BaseUrl); Exit; end;
-  DoLog('[ÐÅÏ¢] [ÈËÁ³×¥ÅÄ] ÊÕµ½ÖÕ¶ËÏìÓ¦£¬response_size=' + IntToStr(Length(ResponseUtf8)));
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½???ï¿½ï¿½???ï¿½ï¿½terminal=' + BaseUrl); Exit; end;
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½] ??ï¿½ï¿½?ï¿½ï¿½???ï¿½ï¿½response_size=' + IntToStr(Length(ResponseUtf8)));
   FaceResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
-  if not FaceResult.Valid then begin DoLog('[´íÎó] [ÈËÁ³×¥ÅÄ] ÏìÓ¦½âÎöÊ§°Ü¡£'); Exit; end;
+  if not FaceResult.Valid then begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½] ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½'); Exit; end;
   if FaceResult.RequestId = '' then FaceResult.RequestId := ReqId;
   if ExtractFileExt(SaveDir) <> '' then
     SavePath := FFileSaver.SaveBase64ImageToFile(FaceResult.ImageBase64, ResolveExactSaveFile(SaveDir))
   else
     SavePath := FFileSaver.SaveBase64Image(FaceResult.ImageBase64, FaceResult.ImageMimeType,
       SafeResolveSaveDir(SaveDir), FaceResult.RequestId, 'face');
-  if SavePath = '' then begin DoLog('[´íÎó] [ÈËÁ³×¥ÅÄ] Í¼Æ¬±£´æÊ§°Ü¡£'); Exit; end;
-  DoLog('[ÐÅÏ¢] [ÈËÁ³×¥ÅÄ] Í¼Æ¬±£´æ³É¹¦£º' + SavePath); Result := True; end;
+  if SavePath = '' then begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½] ??ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½'); Exit; end;
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½' + SavePath); Result := True; end;
 
 function TDelphiProxyServer.CaptureFingerprintDirect(const SaveDir: string; out SavePath: string): Boolean;
 var BaseUrl, ReqId, ResponseUtf8: string; FpResult: TImageCallbackResult;
 begin Result := False; SavePath := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; ReqId := GenRequestId('FP');
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÍ¨ÐÅ] ÕýÔÚÏòÖÕ¶ËÇëÇóÖ¸ÎÆ×¥ÅÄ£¬request_id=' + ReqId + '£¬url=' + BaseUrl + '/resources/fingerprint/sync-request');
+  DoLog('[ï¿½ï¿½Ï¢] [ï¿½Õ¶ï¿½Í¨ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¶ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½×¥ï¿½Ä£ï¿½request_id=' + ReqId + 'ï¿½ï¿½url=' + BaseUrl + '/resources/fingerprint/sync-request');
   if not FTerminalClient.PostJson(BaseUrl, '/resources/fingerprint/sync-request',
       '{"request_id":"' + ReqId + '"}', ResponseUtf8) then begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] Ö¸ÎÆ×¥ÅÄÖ¸Áî·¢ËÍÊ§°Ü£¬terminal=' + BaseUrl); Exit; end;
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½Õ¶ï¿½Í¨ï¿½ï¿½] Ö¸ï¿½ï¿½×¥ï¿½ï¿½Ö¸ï¿½î·¢ï¿½ï¿½Ê§ï¿½Ü£ï¿½terminal=' + BaseUrl); Exit; end;
   FpResult := FCallbackParser.ParseImageCapture(ResponseUtf8);
-  if not FpResult.Valid then begin DoLog('[´íÎó] [Ö¸ÎÆ×¥ÅÄ] ÏìÓ¦½âÎöÊ§°Ü¡£'); Exit; end;
+  if not FpResult.Valid then begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] ï¿½ï¿½Ó¦ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½'); Exit; end;
   if FpResult.RequestId = '' then FpResult.RequestId := ReqId;
   if ExtractFileExt(SaveDir) <> '' then
     SavePath := FFileSaver.SaveBase64ImageToFile(FpResult.ImageBase64, ResolveExactSaveFile(SaveDir))
   else
     SavePath := FFileSaver.SaveBase64Image(FpResult.ImageBase64, FpResult.ImageMimeType,
       SafeResolveSaveDir(SaveDir), FpResult.RequestId, 'fingerprint');
-  if SavePath = '' then begin DoLog('[´íÎó] [Ö¸ÎÆ×¥ÅÄ] Í¼Æ¬±£´æÊ§°Ü¡£'); Exit; end;
-  DoLog('[ÐÅÏ¢] [Ö¸ÎÆ×¥ÅÄ] Í¼Æ¬±£´æ³É¹¦£º' + SavePath); Result := True; end;
+  if SavePath = '' then begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] Í¼Æ¬ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½'); Exit; end;
+  DoLog('[ï¿½ï¿½Ï¢] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] Í¼Æ¬ï¿½ï¿½ï¿½ï¿½É¹ï¿½ï¿½ï¿½' + SavePath); Result := True; end;
 
 function TDelphiProxyServer.RequestOCRDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('OCR');
   CallbackUrl := GetCallbackBase;
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÍ¨ÐÅ] ÕýÔÚÌá½»OCRÊ¶±ð£¬request_id=' + Result + '£¬callback=' + CallbackUrl);
+  DoLog('[ï¿½ï¿½?] [????ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½??OCR??ï¿½ï¿½request_id=' + Result + '?ï¿½ï¿½callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/ocr-document/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] OCRÊ¶±ðÖ¸Áî·¢ËÍµ½ÖÕ¶ËÊ§°Ü¡£'); Result := ''; Exit; end;
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] OCR?ï¿½ï¿½?????ï¿½ï¿½?????ï¿½ï¿½'); Result := ''; Exit; end;
   RememberRequestContext(Result, SaveDir, '');
-  DoLog('[ÐÅÏ¢] [OCRÊ¶±ð] ÕýÔÚµÈ´ýÖÕ¶Ë»Øµ÷...' + CallbackUrl); end;
+  DoLog('[ï¿½ï¿½?] [OCR?ï¿½ï¿½] ï¿½ï¿½???ï¿½ï¿½????...' + CallbackUrl); end;
 
 function TDelphiProxyServer.RequestNfcDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('NFC');
   CallbackUrl := GetCallbackBase;
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÍ¨ÐÅ] ÕýÔÚÌá½»IC¿¨Ê¶±ð£¬request_id=' + Result + '£¬callback=' + CallbackUrl);
+  DoLog('[ï¿½ï¿½?] [????ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½??ICï¿½ï¿½??ï¿½ï¿½request_id=' + Result + '?ï¿½ï¿½callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/nfc-card/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] IC¿¨Ê¶±ðÖ¸Áî·¢ËÍµ½ÖÕ¶ËÊ§°Ü¡£'); Result := ''; Exit; end;
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] ICï¿½ï¿½?ï¿½ï¿½?????ï¿½ï¿½?????ï¿½ï¿½'); Result := ''; Exit; end;
   RememberRequestContext(Result, SaveDir, '');
-  DoLog('[ÐÅÏ¢] [IC¿¨Ê¶±ð] ÕýÔÚµÈ´ýË¢¿¨»Øµ÷...'); end;
+  DoLog('[ï¿½ï¿½?] [ICï¿½ï¿½?ï¿½ï¿½] ï¿½ï¿½?????ï¿½ï¿½???...'); end;
 
 function TDelphiProxyServer.CaptureIrisDirect(const SaveDir: string): string;
 var BaseUrl, ResponseUtf8, CallbackUrl: string;
 begin Result := ''; BaseUrl := FTerminalManager.CurrentBaseUrl; Result := GenRequestId('IRIS');
   CallbackUrl := GetCallbackBase;
-  DoLog('[ÐÅÏ¢] [ÖÕ¶ËÍ¨ÐÅ] ÕýÔÚÌá½»ºçÄ¤×¥ÅÄ£¬request_id=' + Result + '?£¬callback=' + CallbackUrl);
+  DoLog('[ï¿½ï¿½?] [????ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½????ï¿½ï¿½request_id=' + Result + '??ï¿½ï¿½callback=' + CallbackUrl);
   if not FTerminalClient.PostJson(BaseUrl, '/resources/iris/request',
       '{"request_id":"' + Result + '","callback_url":"' + CallbackUrl + '"}', ResponseUtf8) then begin
-    DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] ºçÄ¤×¥ÅÄÖ¸Áî·¢ËÍµ½ÖÕ¶ËÊ§°Ü¡£'); Result := ''; Exit; end;
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] ï¿½ï¿½??ï¿½ï¿½?????ï¿½ï¿½?????ï¿½ï¿½'); Result := ''; Exit; end;
   RememberRequestContext(Result, SaveDir, '');
-  DoLog('[ÐÅÏ¢] [ºçÄ¤×¥ÅÄ] ÕýÔÚµÈ´ýÖÕ¶Ë»Øµ÷...'); end;
+  DoLog('[ï¿½ï¿½?] [ï¿½ï¿½??ï¿½ï¿½] ï¿½ï¿½???ï¿½ï¿½????...'); end;
 
 function TDelphiProxyServer.StartCameraPreviewDirect: Boolean;
 var BaseUrl: string;
@@ -1703,15 +1703,15 @@ begin Result := FPreviewManager.StopPreview(prtIris, pstLocal);
 // ============================================================
 procedure TDelphiProxyServer.StartBusinessWorkers;
 begin
-  if FFaceCaptureWorker = nil then FFaceCaptureWorker := TProxyTaskWorker.Create(Self, 'ÈËÁ³×¥ÅÄ', 1);
-  if FFingerprintCaptureWorker = nil then FFingerprintCaptureWorker := TProxyTaskWorker.Create(Self, 'Ö¸ÎÆ×¥ÅÄ', 1);
-  if FOcrWorker = nil then FOcrWorker := TProxyTaskWorker.Create(Self, 'OCR¶ÁÈ¡', 1);
-  if FNfcWorker = nil then FNfcWorker := TProxyTaskWorker.Create(Self, 'IC¿¨¶ÁÈ¡', 1);
+  if FFaceCaptureWorker = nil then FFaceCaptureWorker := TProxyTaskWorker.Create(Self, 'ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½', 1);
+  if FFingerprintCaptureWorker = nil then FFingerprintCaptureWorker := TProxyTaskWorker.Create(Self, '?ï¿½ï¿½??ï¿½ï¿½', 1);
+  if FOcrWorker = nil then FOcrWorker := TProxyTaskWorker.Create(Self, 'OCRï¿½ï¿½?', 1);
+  if FNfcWorker = nil then FNfcWorker := TProxyTaskWorker.Create(Self, 'ICï¿½ï¿½ï¿½ï¿½?', 1);
   FFaceCaptureWorker.Resume;
   FFingerprintCaptureWorker.Resume;
   FOcrWorker.Resume;
   FNfcWorker.Resume;
-  DoLog('[ÐÅÏ¢] [ÒµÎñ¶ÓÁÐ] ¹Ì¶¨ÒµÎñÏß³ÌÒÑÆô¶¯£ºÈËÁ³×¥ÅÄ=1£¬Ö¸ÎÆ×¥ÅÄ=1£¬OCR=1£¬IC¿¨=1£»Ã¿Àà×î¶à1¸öÖ´ÐÐÖÐ+1¸öµÈ´ýÖÐ£¬ÐÂÇëÇóÌæ»»¾ÉµÈ´ýÇëÇó¡£');
+  DoLog('[ï¿½ï¿½?] [?ï¿½ï¿½ï¿½ï¿½?] ????ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½=1ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½=1ï¿½ï¿½OCR=1ï¿½ï¿½ICï¿½ï¿½=1ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?1ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½+1ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½I???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½');
 end;
 
 procedure TDelphiProxyServer.StopBusinessWorkers;
@@ -1729,12 +1729,12 @@ var
 begin
   Result := '{"error":true,"code":"service_unavailable"}';
   if Worker = nil then begin
-    DoLog('[´íÎó] [ÒµÎñ¶ÓÁÐ] ¶ÓÁÐÎ´Æô¶¯£º' + WorkerName);
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½ï¿½ï¿½ï¿½Ä¡ï¿½ï¿½ï¿½?ï¿½ï¿½' + WorkerName);
     Exit;
   end;
   Task := TProxyQueuedTask.Create(Method, Path, BodyUtf8, CurrentSwitchGeneration, True);
   if not Worker.Enqueue(Task) then begin
-    DoLog('[´íÎó] [ÒµÎñ¶ÓÁÐ] ¶ÓÁÐ²»¿ÉÓÃ£¬ÎÞ·¨½ÓÊÜÇëÇó£º¶ÓÁÐ=' + WorkerName + '£¬path=' + Path);
+    DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ï¿½ï¿½?ï¿½Ó¡ï¿½ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½?=' + WorkerName + 'ï¿½ï¿½path=' + Path);
     Task.Free;
     Exit;
   end;
@@ -1749,7 +1749,7 @@ begin
         CompletedAfterTimeout := True
       else begin
         Task.WaitForResponse := False;
-        DoLog('[´íÎó] [ÒµÎñ¶ÓÁÐ] µÈ´ýÒµÎñ½á¹û³¬Ê±£¬ÒÑ·µ»Øtimeout£º¶ÓÁÐ=' + WorkerName + '£¬path=' + Path + '£¬timeout=' + IntToStr(WaitMs) + 'ms');
+        DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½?] ????ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½??ï¿½ï¿½?timeoutï¿½ï¿½ï¿½ï¿½ï¿½ï¿½=' + WorkerName + 'ï¿½ï¿½path=' + Path + 'ï¿½ï¿½timeout=' + IntToStr(WaitMs) + 'ms');
         Result := '{"error":true,"code":"timeout"}';
       end;
     finally
@@ -1770,19 +1770,19 @@ begin
     Exit;
   end;
   if Path = '/capture/face' then begin
-    Result := QueueBusinessRequest(FFaceCaptureWorker, 'ÈËÁ³×¥ÅÄ', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Result := QueueBusinessRequest(FFaceCaptureWorker, 'ï¿½ï¿½ï¿½ï¿½??ï¿½ï¿½', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
     Exit;
   end;
   if Path = '/capture/fingerprint' then begin
-    Result := QueueBusinessRequest(FFingerprintCaptureWorker, 'Ö¸ÎÆ×¥ÅÄ', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Result := QueueBusinessRequest(FFingerprintCaptureWorker, '?ï¿½ï¿½??ï¿½ï¿½', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
     Exit;
   end;
   if Path = '/ocr' then begin
-    Result := QueueBusinessRequest(FOcrWorker, 'OCR¶ÁÈ¡', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Result := QueueBusinessRequest(FOcrWorker, 'OCRï¿½ï¿½?', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
     Exit;
   end;
   if Path = '/nfc' then begin
-    Result := QueueBusinessRequest(FNfcWorker, 'IC¿¨¶ÁÈ¡', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
+    Result := QueueBusinessRequest(FNfcWorker, 'ICï¿½ï¿½ï¿½ï¿½?', Method, Path, BodyUtf8, BUSINESS_WAIT_TIMEOUT_MS);
     Exit;
   end;
   Result := HandleRequestDirect(Method, Path, BodyUtf8);
@@ -1843,8 +1843,8 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/iris/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[ÐÅÏ¢] [DLLÇëÇó] DLLÏÂ·¢µÄºçÄ¤×¥ÅÄÖ¸ÁîÒÑ×ª·¢µ½ÖÕ¶Ë£¬request_id=' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] DLLÏÂ·¢µÄºçÄ¤×¥ÅÄÖ¸Áî×ª·¢µ½ÖÕ¶ËÊ§°Ü¡£'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½??????ï¿½ï¿½'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/ocr' then begin
@@ -1854,8 +1854,8 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/ocr-document/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[ÐÅÏ¢] [DLLÇëÇó] DLLÏÂ·¢µÄOCRÊ¶±ðÖ¸ÁîÒÑ×ª·¢µ½ÖÕ¶Ë£¬request_id=' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] DLLÏÂ·¢µÄOCRÊ¶±ðÖ¸Áî×ª·¢µ½ÖÕ¶ËÊ§°Ü¡£'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½?OCR?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½?OCR?ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½??????ï¿½ï¿½'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/nfc' then begin
@@ -1865,8 +1865,8 @@ begin
     try
       if Client.PostJson(TerminalBaseUrl, '/resources/nfc-card/request',
           '{"request_id":"' + RequestId + '","callback_url":"' + GetCallbackBase + '"}', ResponseUtf8) then
-      begin DoLog('[ÐÅÏ¢] [DLLÇëÇó] DLLÏÂ·¢µÄIC¿¨Ê¶±ðÖ¸ÁîÒÑ×ª·¢µ½ÖÕ¶Ë£¬request_id=' + RequestId); Result := '{"accepted":true}'; end
-      else begin DoLog('[´íÎó] [ÖÕ¶ËÍ¨ÐÅ] DLLÏÂ·¢µÄIC¿¨Ê¶±ðÖ¸Áî×ª·¢µ½ÖÕ¶ËÊ§°Ü¡£'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
+      begin DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½?ICï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½request_id=' + RequestId); Result := '{"accepted":true}'; end
+      else begin DoLog('[ï¿½ï¿½ï¿½ï¿½] [????ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½?ICï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½??????ï¿½ï¿½'); Result := '{"error":true,"code":"terminal_request_failed"}'; end;
     finally Client.Free; end; Exit; end;
 
   if Path = '/preview/camera/url' then begin
@@ -1889,10 +1889,10 @@ begin
   if Path = '/preview/camera/start' then begin
     ThirdPartyHwndVal := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
     if (ThirdPartyHwndVal = 0) or not IsWindow(ThirdPartyHwndVal) then begin
-      DoLog('[´íÎó] [Ô¤ÀÀ¹ÜÀí] ÉãÏñÍ·Ä¿±ê´°¿Ú¾ä±úÎÞÐ§£¬hwnd=' + IntToStr(ThirdPartyHwndVal));
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½??????ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½hwnd=' + IntToStr(ThirdPartyHwndVal));
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyCameraHwnd := ThirdPartyHwndVal;
-    DoLog('[ÐÅÏ¢] [DLLÇëÇó] DLLÏÂ·¢ÉãÏñÍ·Ô¤ÀÀ£¬target_hwnd=' + IntToStr(ThirdPartyHwndVal));
+    DoLog('[ï¿½ï¿½?] [DLLï¿½ï¿½ï¿½ï¿½] DLL?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½?ï¿½ï¿½target_hwnd=' + IntToStr(ThirdPartyHwndVal));
     Include(FExternalActivePreviews, prtCamera);
     TAsyncStartPreviewThread.Create(Self, prtCamera, pstExternal,
       ThirdPartyHwndVal, TerminalBaseUrl, RequestId, CallbackUrl, CurrentSwitchGeneration);
@@ -1903,7 +1903,7 @@ begin
   if Path = '/preview/fingerprint/start' then begin
     FpHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
     if (FpHwnd = 0) or not IsWindow(FpHwnd) then begin
-      DoLog('[´íÎó] [Ô¤ÀÀ¹ÜÀí] Ö¸ÎÆÄ¿±ê´°¿Ú¾ä±úÎÞÐ§£¬hwnd=' + IntToStr(FpHwnd));
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½] ?ï¿½ï¿½?????ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½hwnd=' + IntToStr(FpHwnd));
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyFingerprintHwnd := FpHwnd;
     Include(FExternalActivePreviews, prtFingerprint);
@@ -1916,7 +1916,7 @@ begin
   if Path = '/preview/iris/start' then begin
     IrisHwnd := HWND(ExtractJsonInt(BodyUtf8, 'hwnd'));
     if (IrisHwnd = 0) or not IsWindow(IrisHwnd) then begin
-      DoLog('[´íÎó] [Ô¤ÀÀ¹ÜÀí] ºçÄ¤Ä¿±ê´°¿Ú¾ä±úÎÞÐ§£¬hwnd=' + IntToStr(IrisHwnd));
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½??????ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½hwnd=' + IntToStr(IrisHwnd));
       Result := '{"error":true,"code":"invalid_target_hwnd"}'; Exit; end;
     FThirdPartyIrisHwnd := IrisHwnd;
     Include(FExternalActivePreviews, prtIris);
@@ -1960,7 +1960,7 @@ begin
   try
   ResourceType := FCallbackParser.GetResourceType(BodyUtf8);
   RequestId := FCallbackParser.ExtractField(BodyUtf8, 'request_id');
-  DoLog('[ÐÅÏ¢] [ÖÕ¶Ë»Øµ÷] ÊÕµ½ÖÕ¶Ë»Øµ÷£¬resource_type=' + ResourceType + '?£¬request_id=' + RequestId);
+  DoLog('[ï¿½ï¿½?] [?????] ??ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½resource_type=' + ResourceType + '??ï¿½ï¿½request_id=' + RequestId);
 
   if IsCompletedCallback(RequestId) then begin
     Result := '{"status":"ignored","code":"duplicate_callback"}';
@@ -1984,7 +1984,7 @@ begin
   if SaveDir = '' then SaveDir := ExtractFilePath(ParamStr(0)) + 'captures';
 
   if ResourceType = 'ocr_event_status' then begin
-    DoLog('[ÐÅÏ¢] [OCR»Øµ÷] ÊÕµ½ÊÂ¼þ×´Ì¬»Øµ÷£¬µÈ´ýÊ¶±ð½á¹ûÖÐ...');
+    DoLog('[ï¿½ï¿½?] [OCR???] ??ï¿½ï¿½??????ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½...');
   end
   else if ResourceType = 'ocr_document' then begin
     OcrResult := FCallbackParser.ParseOcrDocument(BodyUtf8);
@@ -1997,22 +1997,22 @@ begin
       while I < OcrResult.EvidenceImagesCount do begin
         if OcrResult.EvidenceImages[I].ImageBase64 <> '' then begin
           ImgName := '';
-          if OcrResult.EvidenceImages[I].ImageType = 2 then ImgName := 'ÈËÏñ'
+          if OcrResult.EvidenceImages[I].ImageType = 2 then ImgName := 'ï¿½ï¿½?ï¿½ï¿½'
           else case OcrResult.EvidenceImages[I].LampType of
-            1: ImgName := '¿É¼û¹â';
-            2: ImgName := 'ºìÍâ¹â';
-            3: ImgName := '×ÏÍâ¹â';
+            1: ImgName := '??ï¿½ï¿½ï¿½ï¿½';
+            2: ImgName := 'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½';
+            3: ImgName := 'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½';
           end;
           if ImgName <> '' then begin
             ImgPath := FFileSaver.SaveBase64ImageToFile(OcrResult.EvidenceImages[I].ImageBase64,
               IncludeTrailingBackslash(FFileSaver.EnsureDir(SaveDir)) + ImgName + '.jpg');
-            DoLog('[ÐÅÏ¢] [OCR] ÕÕÆ¬ÒÑ±£´æ: type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
+            DoLog('[ï¿½ï¿½?] [OCR] ï¿½ï¿½???ï¿½ï¿½?: type=' + IntToStr(OcrResult.EvidenceImages[I].ImageType) +
               ',lamp=' + IntToStr(OcrResult.EvidenceImages[I].LampType) + ',path=' + ImgPath);
           end;
         end;
         I := I + 1;
       end;
-      DoLog('[ÐÅÏ¢] [OCR] ÒÑÍê³É, mrz=' + OcrResult.Mrz + ',evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + ',save_path=' + SavePath);
+      DoLog('[ï¿½ï¿½?] [OCR] ï¿½ï¿½ï¿½ï¿½?, mrz=' + OcrResult.Mrz + ',evidence_count=' + IntToStr(OcrResult.EvidenceImagesCount) + ',save_path=' + SavePath);
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/ocr');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('mrz', OcrResult.Mrz) + ',' +
@@ -2021,12 +2021,12 @@ begin
           MarkCompletedCallback(RequestId);
           ForgetRequestContext(RequestId);
         end; end; end
-    else DoLog('[´íÎó] [OCR»Øµ÷] Ê¶±ð½á¹û½âÎöÊ§°Ü¡£'); end
+    else DoLog('[ï¿½ï¿½ï¿½ï¿½] [OCR???] ?ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½???ï¿½ï¿½'); end
 
   else if ResourceType = 'nfc_card' then begin
     NfcResult := FCallbackParser.ParseNfcCard(BodyUtf8);
     if NfcResult.Valid then begin
-      DoLog('[ÐÅÏ¢] [IC¿¨»Øµ÷] ¿¨Æ¬Ê¶±ðÍê³É£¬card_text=' + Utf8ToAnsi(NfcResult.CardText));
+      DoLog('[ï¿½ï¿½?] [ICï¿½ï¿½???] ï¿½ï¿½??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½card_text=' + Utf8ToAnsi(NfcResult.CardText));
       if DllCallbackUrl = '' then DllCallbackUrl := GetDllCallbackUrl('/nfc-card');
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('card_text', NfcResult.CardText) + '}';
@@ -2034,40 +2034,40 @@ begin
           MarkCompletedCallback(RequestId);
           ForgetRequestContext(RequestId);
         end; end; end
-    else DoLog('[´íÎó] [IC¿¨»Øµ÷] »Øµ÷½âÎöÊ§°Ü£¬Î´ÕÒµ½card_text¡£'); end
+    else DoLog('[ï¿½ï¿½ï¿½ï¿½] [ICï¿½ï¿½???] ??ï¿½ï¿½ï¿½ï¿½?????ï¿½ï¿½???card_text?ï¿½ï¿½'); end
 
   else if ResourceType = 'iris_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'iris');
-      DoLog('[ÐÅÏ¢] [ºçÄ¤»Øµ÷] Í¼Æ¬±£´æ³É¹¦£¬save_path=' + SavePath);
+      DoLog('[ï¿½ï¿½?] [ï¿½ï¿½????] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½save_path=' + SavePath);
       if DllCallbackUrl <> '' then begin
         PayloadUtf8 := '{' + JsonStr('request_id', RequestId) + ',' + JsonStr('save_path', AnsiToUtf8(SavePath)) + '}';
         if MakeCallback(RequestId, DllCallbackUrl, PayloadUtf8) then begin
           MarkCompletedCallback(RequestId);
           ForgetRequestContext(RequestId);
         end; end; end
-    else DoLog('[´íÎó] [ºçÄ¤»Øµ÷] »Øµ÷½âÎöÊ§°Ü¡£'); end
+    else DoLog('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½????] ??ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½'); end
 
   else if ResourceType = 'face_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'face_async');
-      DoLog('[ÐÅÏ¢] [ÈËÁ³»Øµ÷] Í¼Æ¬±£´æ³É¹¦£¬save_path=' + SavePath); end; end
+      DoLog('[ï¿½ï¿½?] [ï¿½ï¿½ï¿½ï¿½???] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½save_path=' + SavePath); end; end
 
   else if ResourceType = 'fingerprint_image' then begin
     ImgResult := FCallbackParser.ParseImageCapture(BodyUtf8);
     if ImgResult.Valid then begin
       SavePath := FFileSaver.SaveBase64Image(ImgResult.ImageBase64, ImgResult.ImageMimeType, SaveDir, RequestId, 'fingerprint_async');
-      DoLog('[ÐÅÏ¢] [Ö¸ÎÆ»Øµ÷] Í¼Æ¬±£´æ³É¹¦£¬save_path=' + SavePath); end; end
+      DoLog('[ï¿½ï¿½?] [?????] ??ï¿½ï¿½ï¿½ï¿½?ï¿½ï¿½ï¿½ï¿½save_path=' + SavePath); end; end
 
-  else DoLog('[ÌáÊ¾] [ÖÕ¶Ë»Øµ÷] ÊÕµ½Î´Öª×ÊÔ´ÀàÐÍ£¬resource_type=' + ResourceType);
+  else DoLog('[ï¿½ï¿½?] [?????] ???ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½??ï¿½ï¿½resource_type=' + ResourceType);
 
   Result := '{"status":"accepted"}';
   except
     on E: Exception do begin
-      DoLog('[´íÎó] [ÖÕ¶Ë»Øµ÷] ´¦ÀíÖÕ¶Ë»Øµ÷Òì³££ºresource_type=' + ResourceType +
-        '£¬request_id=' + RequestId + '£¬´íÎó=' + E.Message);
+      DoLog('[ï¿½ï¿½ï¿½ï¿½] [?????] ï¿½ï¿½ï¿½ï¿½????ï¿½ï¿½??ï¿½ï¿½resource_type=' + ResourceType +
+        '?ï¿½ï¿½request_id=' + RequestId + 'ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½=' + E.Message);
       if DllCallbackUrl = '' then begin
         if ResourceType = 'ocr_document' then
           DllCallbackUrl := GetDllCallbackUrl('/ocr')

@@ -42,6 +42,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly BizOperationHandler _bizOps;
         private readonly DllCommandHandler _commandHandler;
         private readonly TerminalCallbackHandler _callbackHandler;
+        private readonly TerminalHealthChecker _healthChecker;
 
         private readonly ProxyRuntime _runtime;
         private readonly Action<string> _log;
@@ -84,7 +85,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         public ProxyServer(
             Action<string> log,
             Action<bool> onProcessStateChanged = null,
-            Action<int> onTerminalChanged = null)
+            Action<int> onTerminalChanged = null,
+            Action<HealthStatus> onHealthChanged = null)
         {
             _log = log;
             _onProcessStateChanged = onProcessStateChanged;
@@ -142,8 +144,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Wire capture delegates (WorkerExecutionEngine → BizOperationHandler async)
             _engine.CaptureFaceFunc = (d, route) =>
                 _bizOps.CaptureFaceAsync(d, route).GetAwaiter().GetResult();
-            _engine.CaptureFingerprintFunc = (d, route) =>
-                _bizOps.CaptureFingerprintAsync(d, route).GetAwaiter().GetResult();
+            _engine.CaptureFingerprintFunc = (d, hk, route) =>
+                _bizOps.CaptureFingerprintAsync(d, hk, route).GetAwaiter().GetResult();
 
             // Supporting modules
             _commandHandler = new DllCommandHandler(
@@ -155,6 +157,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _terminalManager, _dllCallback,
                 _requestRegistry, _processRegistry, log);
+
+            _healthChecker = new TerminalHealthChecker(
+                _terminalClient, _terminalManager, log, onHealthChanged);
         }
 
         // === Lifecycle ===
@@ -180,6 +185,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             _log($"回调服务监听: {cfg.CallbackListenHost}:{cfg.CallbackListenPort}");
 
             _transport.StartAll(cts.Token);
+
+            // Terminal hardware health check
+            _healthChecker.Start();
 
             // VLC warmup
             if (!_taskTracker.TryRun(() =>
@@ -237,6 +245,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             SafeDispose(_previewManager, nameof(PreviewManager));
             SafeDispose(_terminalClient, nameof(TerminalClient));
             SafeDispose(_dllCallback, nameof(DllCallbackSender));
+            SafeDispose(_healthChecker, nameof(TerminalHealthChecker));
         }
 
         private static void SafeDispose(IDisposable component, string name)
@@ -298,7 +307,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     {
                         try
                         {
-                            await _callbackHandler.HandleAsync(body, remoteAddress)
+                            await _callbackHandler.HandleAsync(body, remoteAddress, callbackPath)
                                 .ConfigureAwait(false);
                         }
                         catch (Exception ex) { _log("[终端回调] 后台处理异常: " + ex.Message); }

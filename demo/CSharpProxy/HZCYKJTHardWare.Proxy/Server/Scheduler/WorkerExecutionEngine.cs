@@ -29,7 +29,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
         // Synchronous adapters invoked only by dedicated capture workers.
         public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFaceFunc { get; set; }
-        public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
+        public Func<string, string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
 
         internal WorkerExecutionEngine(
             TerminalManager terminalManager,
@@ -101,10 +101,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 if (string.IsNullOrEmpty(saveDir))
                     saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
+                var saveDirHk = data?.SaveDirHk;
 
                 var captureFunc = CaptureFingerprintFunc;
                 var (ok, path) = captureFunc != null
-                    ? captureFunc(saveDir, routeEpoch)
+                    ? captureFunc(saveDir, saveDirHk, routeEpoch)
                     : (false, "");
 
                 tcs?.TrySetResult(routeEpoch.IsCancellationRequested

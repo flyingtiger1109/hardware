@@ -58,6 +58,19 @@ std::string BuildRequestIdSaveDirJson(const std::string& requestId,
         "}";
 }
 
+std::string BuildFingerprintCaptureJson(const std::string& requestId,
+                                        const std::string& saveDir,
+                                        const std::string& saveDirHk) {
+    if (saveDirHk.empty()) {
+        return BuildRequestIdSaveDirJson(requestId, saveDir);
+    }
+    return "{" +
+        JsonStringField("request_id", requestId) + "," +
+        JsonStringField("save_dir", saveDir) + "," +
+        JsonStringField("save_dir_hk", saveDirHk) +
+        "}";
+}
+
 std::string BuildAsyncJson(const std::string& requestId,
                            const std::string& saveDir,
                            const std::string& callbackUrl) {
@@ -97,6 +110,19 @@ bool DelphiProxy::Ping() {
     return true;
 }
 
+bool DelphiProxy::GetInstanceId(std::string& outInstanceId, int timeoutMs) {
+    outInstanceId.clear();
+    std::string response;
+    if (!Get("/ping", response, timeoutMs, true)) {
+        return false;
+    }
+    if (JsonHelper::GetString(response, "status") != "ok") {
+        return false;
+    }
+    outInstanceId = JsonHelper::GetString(response, "proxy_instance_id");
+    return !outInstanceId.empty();
+}
+
 bool DelphiProxy::ProcessStart(const std::string& requestId, const std::string& saveDir, const std::string& callbacksJson) {
     std::string body = "{" + JsonStringField("request_id", requestId) +
         "," + JsonStringField("save_dir", saveDir) +
@@ -129,9 +155,10 @@ bool DelphiProxy::CaptureFace(const std::string& requestId,
 
 bool DelphiProxy::CaptureFingerprint(const std::string& requestId,
                                      const std::string& saveDir,
+                                     const std::string& saveDirHk,
                                      std::string& outSavePath) {
     std::string response;
-    std::string body = BuildRequestIdSaveDirJson(requestId, saveDir);
+    std::string body = BuildFingerprintCaptureJson(requestId, saveDir, saveDirHk);
     if (!PostJson("/capture/fingerprint", body, response)) {
         return false;
     }
@@ -176,7 +203,8 @@ bool DelphiProxy::GetIrisPreviewUrl(const std::string& requestId, std::string& o
 
 bool DelphiProxy::StartCameraPreview(const std::string& requestId,
                                      intptr_t thirdPartyHwnd,
-                                     const std::string& callbackUrl) {
+                                     const std::string& callbackUrl,
+                                     int timeoutMs) {
     std::string body = "{" +
         JsonStringField("request_id", requestId) + "," +
         JsonIntField("hwnd", thirdPartyHwnd) + "," +
@@ -184,18 +212,19 @@ bool DelphiProxy::StartCameraPreview(const std::string& requestId,
         "}";
 
     std::string response;
-    return PostJson("/preview/camera/start", body, response) && IsAcceptedResponse(response);
+    return PostJson("/preview/camera/start", body, response, timeoutMs) && IsAcceptedResponse(response);
 }
 
-bool DelphiProxy::StopCameraPreview(const std::string& requestId) {
+bool DelphiProxy::StopCameraPreview(const std::string& requestId, int timeoutMs) {
     std::string body = "{" + JsonStringField("request_id", requestId) + "}";
     std::string response;
-    return PostJson("/preview/camera/stop", body, response) && IsOkResponse(response);
+    return PostJson("/preview/camera/stop", body, response, timeoutMs) && IsOkResponse(response);
 }
 
 bool DelphiProxy::StartFingerprintPreview(const std::string& requestId,
                                            intptr_t thirdPartyHwnd,
-                                           const std::string& callbackUrl) {
+                                           const std::string& callbackUrl,
+                                           int timeoutMs) {
     std::string body = "{" +
         JsonStringField("request_id", requestId) + "," +
         JsonIntField("hwnd", thirdPartyHwnd) + "," +
@@ -203,13 +232,13 @@ bool DelphiProxy::StartFingerprintPreview(const std::string& requestId,
         "}";
 
     std::string response;
-    return PostJson("/preview/fingerprint/start", body, response) && IsAcceptedResponse(response);
+    return PostJson("/preview/fingerprint/start", body, response, timeoutMs) && IsAcceptedResponse(response);
 }
 
-bool DelphiProxy::StopFingerprintPreview(const std::string& requestId) {
+bool DelphiProxy::StopFingerprintPreview(const std::string& requestId, int timeoutMs) {
     std::string body = "{" + JsonStringField("request_id", requestId) + "}";
     std::string response;
-    return PostJson("/preview/fingerprint/stop", body, response) && IsOkResponse(response);
+    return PostJson("/preview/fingerprint/stop", body, response, timeoutMs) && IsOkResponse(response);
 }
 
 bool DelphiProxy::StartIrisPreview(const std::string& requestId,
@@ -231,6 +260,31 @@ bool DelphiProxy::StopIrisPreview(const std::string& requestId) {
     return PostJson("/preview/iris/stop", body, response) && IsOkResponse(response);
 }
 
+bool DelphiProxy::StartPlatePreview(const std::string& plateCode,
+                                    const std::string& requestId,
+                                    intptr_t thirdPartyHwnd,
+                                    const std::string& callbackUrl,
+                                    int timeoutMs) {
+    std::string body = "{" +
+        JsonStringField("request_id", requestId) + "," +
+        JsonIntField("hwnd", thirdPartyHwnd) + "," +
+        JsonStringField("callback_url", callbackUrl) +
+        "}";
+
+    std::string response;
+    return PostJson("/preview/plate/" + plateCode + "/start", body, response, timeoutMs) &&
+        IsAcceptedResponse(response);
+}
+
+bool DelphiProxy::StopPlatePreview(const std::string& plateCode,
+                                   const std::string& requestId,
+                                   int timeoutMs) {
+    std::string body = "{" + JsonStringField("request_id", requestId) + "}";
+    std::string response;
+    return PostJson("/preview/plate/" + plateCode + "/stop", body, response, timeoutMs) &&
+        IsOkResponse(response);
+}
+
 bool DelphiProxy::RequestAuthorize(const std::string& requestId,
                                     const std::string& ZJHM,
                                     const std::string& ZJLB,
@@ -239,7 +293,8 @@ bool DelphiProxy::RequestAuthorize(const std::string& requestId,
                                     const std::string& XB,
                                     const std::string& CSRQ,
                                     const std::string& KADM,
-                                    const std::string& callbackUrl) {
+                                    const std::string& callbackUrl,
+                                    int timeoutMs) {
     std::string body = "{" +
         JsonStringField("request_id", requestId) + "," +
         JsonStringField("ZJHM", ZJHM) + "," +
@@ -252,39 +307,49 @@ bool DelphiProxy::RequestAuthorize(const std::string& requestId,
         JsonStringField("callback_url", callbackUrl) +
         "}";
     std::string response;
-    return PostJson("/authorize", body, response) && IsAcceptedResponse(response);
+    return PostJson("/authorize", body, response, timeoutMs) && IsAcceptedResponse(response);
 }
 
-bool DelphiProxy::Get(const std::string& path, std::string& response) {
+bool DelphiProxy::Get(const std::string& path, std::string& response,
+                      int timeoutMs, bool quiet) {
     if (baseUrl_.empty()) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：base_url为空，method=GET，path=%s", path.c_str());
+        if (!quiet)
+            LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：base_url为空，method=GET，path=%s", path.c_str());
         return false;
     }
 
     auto& ctx = HzsjkjtContext::Instance();
     int connectTimeout = ctx.http_connect_timeout_ms;
     int requestTimeout = ctx.http_request_timeout_ms;
+    if (timeoutMs > 0) {
+        connectTimeout = timeoutMs;
+        requestTimeout = timeoutMs;
+    }
 
     int statusCode = 0;
     HttpClient client;
     std::string url = BuildUrl(path);
     bool ok = client.Get(url, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", url.c_str());
+        if (!quiet)
+            LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", url.c_str());
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
-        LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=GET，url=%s，status=%d，response=%s",
-                  url.c_str(), statusCode, response.c_str());
+        if (!quiet)
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=GET，url=%s，status=%d，response=%s",
+                      url.c_str(), statusCode, response.c_str());
         return false;
     }
-    LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：method=GET，url=%s，status=%d", url.c_str(), statusCode);
+    if (!quiet)
+        LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：method=GET，url=%s，status=%d", url.c_str(), statusCode);
     return true;
 }
 
 bool DelphiProxy::PostJson(const std::string& path,
                            const std::string& body,
-                           std::string& response) {
+                           std::string& response,
+                           int timeoutMs) {
     if (baseUrl_.empty()) {
         LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：base_url为空，method=POST，path=%s", path.c_str());
         return false;
@@ -293,6 +358,10 @@ bool DelphiProxy::PostJson(const std::string& path,
     auto& ctx = HzsjkjtContext::Instance();
     int connectTimeout = ctx.http_connect_timeout_ms;
     int requestTimeout = ctx.http_request_timeout_ms;
+    if (timeoutMs > 0) {
+        connectTimeout = timeoutMs;
+        requestTimeout = timeoutMs;
+    }
 
     int statusCode = 0;
     HttpClient client;

@@ -73,7 +73,33 @@
     "stop_preview_on_end_process": false,
     "rtsp_network_caching_ms": 50,
     "rtsp_live_caching_ms": 50,
-    "rtsp_transport": "tcp"
+    "rtsp_transport": "tcp",
+    "plate": {
+      "cj": {
+        "enabled": false,
+        "host": "",
+        "port": 554,
+        "username": "",
+        "password": "",
+        "stream_channel": 101
+      },
+      "rj2": {
+        "enabled": false,
+        "host": "",
+        "port": 554,
+        "username": "",
+        "password": "",
+        "stream_channel": 101
+      },
+      "rj3": {
+        "enabled": false,
+        "host": "",
+        "port": 554,
+        "username": "",
+        "password": "",
+        "stream_channel": 101
+      }
+    }
   },
   "log": {
     "dir": "HZCYKJTHardWareDLL_Logs",

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,7 +16,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
     {
         Camera,
         Fingerprint,
-        Iris
+        Iris,
+        PlateCJ,
+        PlateRJ2,
+        PlateRJ3
     }
 
     public enum PreviewSessionType
@@ -36,6 +40,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal string TerminalBaseUrl { get; set; }
         internal Func<bool> ShouldContinue { get; set; }
         internal long Generation { get; set; }
+        internal uint OwnerProcessId { get; set; }
+        internal long OwnerProcessStartTimeUtcTicks { get; set; }
+        internal string ExplicitPreviewUrl { get; set; }
+        internal bool TerminalBound { get; set; }
+        internal bool DirectRenderTarget { get; set; }
     }
 
     public class PreviewManager : IDisposable
@@ -60,7 +69,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly string _rtspTransport;
         private readonly SynchronizationContext _uiContext;  // Captured from UI thread at construction
         private readonly System.Threading.Timer _previewUrlValidationTimer;
+        private readonly System.Threading.Timer _externalHostValidationTimer;
         private int _previewUrlValidationRunning;
+        private int _externalHostValidationRunning;
         private long _sessionGeneration;
         private bool _disposed;
 
@@ -84,6 +95,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _rtspTransport = cfg.RtspTransport ?? "";
             _previewUrlValidationTimer = new System.Threading.Timer(ValidatePreviewUrlCacheCallback,
                 null, PreviewUrlValidationIntervalMs, PreviewUrlValidationIntervalMs);
+            _externalHostValidationTimer = new System.Threading.Timer(ValidateExternalHostsCallback,
+                null, cfg.PreviewCheckHwndIntervalMs, cfg.PreviewCheckHwndIntervalMs);
         }
 
         private static string SessionKey(PreviewResourceType resType, PreviewSessionType sessionType)
@@ -109,6 +122,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 case PreviewResourceType.Camera: return "摄像头";
                 case PreviewResourceType.Fingerprint: return "指纹";
                 case PreviewResourceType.Iris: return "虹膜";
+                case PreviewResourceType.PlateCJ: return "车牌CJ";
+                case PreviewResourceType.PlateRJ2: return "车牌RJ2";
+                case PreviewResourceType.PlateRJ3: return "车牌RJ3";
                 default: return "未知";
             }
         }
@@ -119,6 +135,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 case PreviewResourceType.Camera: return (480, 640, true);
                 case PreviewResourceType.Fingerprint: return (640, 640, false);
+                case PreviewResourceType.PlateCJ:
+                case PreviewResourceType.PlateRJ2:
+                case PreviewResourceType.PlateRJ3:
+                    return (1920, 1080, false);
                 default: return (640, 480, false);
             }
         }
@@ -250,12 +270,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         public async Task<bool> StartPreview(PreviewResourceType resType, PreviewSessionType sessionType,
-            IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null, Func<bool> shouldContinue = null)
+            IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null, Func<bool> shouldContinue = null,
+            string explicitPreviewUrl = null, bool terminalBound = true, bool directRenderTarget = false)
         {
             await _operationLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                return await StartPreviewCore(resType, sessionType, targetHwnd, terminalBaseUrl, localPanel, shouldContinue)
+                return await StartPreviewCore(resType, sessionType, targetHwnd, terminalBaseUrl, localPanel,
+                    shouldContinue, explicitPreviewUrl, terminalBound, directRenderTarget)
                     .ConfigureAwait(false);
             }
             finally
@@ -265,16 +287,29 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         private async Task<bool> StartPreviewCore(PreviewResourceType resType, PreviewSessionType sessionType,
-            IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null, Func<bool> shouldContinue = null)
+            IntPtr targetHwnd, string terminalBaseUrl, Control localPanel = null, Func<bool> shouldContinue = null,
+            string explicitPreviewUrl = null, bool terminalBound = true, bool directRenderTarget = false)
         {
             var totalSw = System.Diagnostics.Stopwatch.StartNew();
             var key = SessionKey(resType, sessionType);
+            uint ownerProcessId = 0;
+            long ownerProcessStartTimeUtcTicks = 0;
 
             if (shouldContinue != null && !shouldContinue())
                 return false;
 
+            if (sessionType == PreviewSessionType.External &&
+                !TryGetWindowOwnerIdentity(targetHwnd, out ownerProcessId,
+                    out ownerProcessStartTimeUtcTicks))
+            {
+                Logger.Warn($"External preview target HWND is invalid: resource={ResourceToName(resType)}, hwnd={targetHwnd}");
+                return false;
+            }
+
             // If already running for same target, skip
-            if (_sessions.TryGetValue(key, out var existing) && existing.IsRunning && existing.TargetHwnd == targetHwnd)
+            if (_sessions.TryGetValue(key, out var existing) && existing.IsRunning &&
+                existing.TargetHwnd == targetHwnd &&
+                (sessionType != PreviewSessionType.External || IsExternalHostCurrent(existing)))
                 return true;
 
             // A faulted session remains registered while it is recovering. An explicit start
@@ -282,9 +317,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (existing != null)
                 await StopPreviewCore(resType, sessionType, preserveRestartInfo: false).ConfigureAwait(false);
 
-            // Get preview URL from terminal
+            // Terminal-bound resources request a URL from the selected terminal. The lane-level
+            // plate camera uses the explicit URL from the shared Proxy configuration.
             var urlTick = totalSw.ElapsedMilliseconds;
-            var rtspUrl = await RequestPreviewUrl(resType, terminalBaseUrl);
+            var rtspUrl = !string.IsNullOrWhiteSpace(explicitPreviewUrl)
+                ? explicitPreviewUrl
+                : await RequestPreviewUrl(resType, terminalBaseUrl).ConfigureAwait(false);
             var urlElapsed = totalSw.ElapsedMilliseconds - urlTick;
             if (string.IsNullOrEmpty(rtspUrl))
             {
@@ -314,7 +352,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             // Get source dimensions
             var (srcW, srcH, swap) = GetSourceDimensions(resType);
             var isHttpPreview = IsHttpPreviewUrl(rtspUrl);
-            if (!isHttpPreview)
+            if (!isHttpPreview && string.IsNullOrWhiteSpace(explicitPreviewUrl))
                 await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
 
             if (shouldContinue != null && !shouldContinue())
@@ -324,7 +362,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             IPreviewController player = null;
             var playTick = totalSw.ElapsedMilliseconds;
             var description = $"{ResourceToName(resType)} {sessionType}";
-            player = await StartPreviewPlayerAsync(description, rtspUrl, parentHwnd, srcW, srcH, swap, isHttpPreview)
+            player = await StartPreviewPlayerAsync(description, rtspUrl, parentHwnd, srcW, srcH, swap,
+                isHttpPreview, directRenderTarget)
                 .ConfigureAwait(false);
             var playElapsed = totalSw.ElapsedMilliseconds - playTick;
             var ok2 = player != null && player.IsRunning;
@@ -333,6 +372,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (player != null)
                     await player.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(explicitPreviewUrl))
+                {
+                    Logger.Error($"Preview play failed: {ResourceToName(resType)}");
+                    return false;
+                }
+
                 ClearPreviewUrlCache(resType, terminalBaseUrl);
                 var retryUrl = await RequestPreviewUrl(resType, terminalBaseUrl, forceRefresh: true).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(retryUrl) && (shouldContinue == null || shouldContinue()))
@@ -342,7 +387,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!isHttpPreview)
                         await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
                     playTick = totalSw.ElapsedMilliseconds;
-                    player = await StartPreviewPlayerAsync(description, rtspUrl, parentHwnd, srcW, srcH, swap, isHttpPreview)
+                    player = await StartPreviewPlayerAsync(description, rtspUrl, parentHwnd, srcW, srcH, swap,
+                        isHttpPreview, directRenderTarget)
                         .ConfigureAwait(false);
                     playElapsed = totalSw.ElapsedMilliseconds - playTick;
                     ok2 = player != null && player.IsRunning;
@@ -371,7 +417,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 HostHwnd = parentHwnd,
                 TerminalBaseUrl = terminalBaseUrl,
                 ShouldContinue = shouldContinue,
-                Generation = Interlocked.Increment(ref _sessionGeneration)
+                Generation = Interlocked.Increment(ref _sessionGeneration),
+                OwnerProcessId = ownerProcessId,
+                OwnerProcessStartTimeUtcTicks = ownerProcessStartTimeUtcTicks,
+                ExplicitPreviewUrl = explicitPreviewUrl,
+                TerminalBound = terminalBound,
+                DirectRenderTarget = directRenderTarget
             };
             _sessions[key] = session;
             _restartInfo[key] = session;
@@ -384,7 +435,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         private async Task<IPreviewController> StartPreviewPlayerAsync(string description, string previewUrl,
-            IntPtr parentHwnd, int srcW, int srcH, bool swap, bool isHttpPreview)
+            IntPtr parentHwnd, int srcW, int srcH, bool swap, bool isHttpPreview,
+            bool directRenderTarget = false)
         {
             if (isHttpPreview)
             {
@@ -401,7 +453,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
-                visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
+                visible: true, timeoutMs: VlcPlayTimeoutMs,
+                directRenderTarget: directRenderTarget).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
                 Logger.Debug($"预览播放器选择: vlc");
 
@@ -479,7 +532,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!CanContinueRecovery(current))
                         return;
 
-                    if (current.HostHwnd == IntPtr.Zero || !IsWindow(current.HostHwnd))
+                    if (current.HostHwnd == IntPtr.Zero || !IsWindow(current.HostHwnd) ||
+                        (current.SessionType == PreviewSessionType.External && !IsExternalHostCurrent(current)))
                     {
                         Logger.Warn($"HTTP MJPEG恢复取消，目标HWND已失效: session={key}, hwnd={current.HostHwnd}");
                         RemoveSessionIfCurrent(key, current);
@@ -590,6 +644,96 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return !IsHttpPreviewUrl(previewUrl);
         }
 
+        private void ValidateExternalHostsCallback(object state)
+        {
+            if (_disposed)
+                return;
+
+            _ = ValidateExternalHostsAsync();
+        }
+
+        private async Task ValidateExternalHostsAsync()
+        {
+            if (Interlocked.Exchange(ref _externalHostValidationRunning, 1) != 0)
+                return;
+
+            try
+            {
+                await _operationLock.WaitAsync(_lifetimeCts.Token).ConfigureAwait(false);
+                try
+                {
+                    foreach (var pair in _sessions)
+                    {
+                        var session = pair.Value;
+                        if (session == null || session.SessionType != PreviewSessionType.External ||
+                            IsExternalHostCurrent(session))
+                            continue;
+
+                        if (!_sessions.TryGetValue(pair.Key, out var current) ||
+                            !ReferenceEquals(current, session))
+                            continue;
+
+                        Logger.Warn($"External preview host has exited or HWND was reused; stopping stale session: resource={ResourceToName(session.ResourceType)}, hwnd={session.TargetHwnd}, owner_pid={session.OwnerProcessId}");
+                        await StopPreviewCore(session.ResourceType, session.SessionType,
+                            preserveRestartInfo: false).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    _operationLock.Release();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Proxy is shutting down.
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"External preview HWND validation failed: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _externalHostValidationRunning, 0);
+            }
+        }
+
+        internal static bool IsExternalHostCurrent(PreviewSession session)
+        {
+            if (session == null || session.TargetHwnd == IntPtr.Zero || !IsWindow(session.TargetHwnd))
+                return false;
+
+            if (!TryGetWindowOwnerIdentity(session.TargetHwnd, out var processId,
+                out var processStartTimeUtcTicks))
+                return false;
+
+            if (session.OwnerProcessId != 0 && processId != session.OwnerProcessId)
+                return false;
+
+            return session.OwnerProcessStartTimeUtcTicks == 0 || processStartTimeUtcTicks == 0 ||
+                   session.OwnerProcessStartTimeUtcTicks == processStartTimeUtcTicks;
+        }
+
+        internal static bool TryGetWindowOwnerIdentity(IntPtr hwnd, out uint processId,
+            out long processStartTimeUtcTicks)
+        {
+            processId = 0;
+            processStartTimeUtcTicks = 0;
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd) ||
+                GetWindowThreadProcessId(hwnd, out processId) == 0 || processId == 0)
+                return false;
+
+            try
+            {
+                using (var process = Process.GetProcessById((int)processId))
+                    processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+            }
+            catch
+            {
+                // HWND and PID validation still prevents most stale-window reuse cases.
+            }
+            return true;
+        }
+
         public bool StopPreview(PreviewResourceType resType, PreviewSessionType sessionType)
         {
             if (_uiContext != null && SynchronizationContext.Current == _uiContext)
@@ -686,8 +830,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (shouldContinue != null && !shouldContinue())
                     return;
 
-                var restartList = new List<PreviewSession>(_restartInfo.Values);
-                await StopAllCore(preserveRestartInfo: true).ConfigureAwait(false);
+                var restartList = new List<PreviewSession>();
+                foreach (var session in _restartInfo.Values)
+                {
+                    if (session.TerminalBound)
+                        restartList.Add(session);
+                }
+
+                // The lane-level plate camera is not tied to terminal 1/2. Stop and restart
+                // terminal sessions individually so plate local/external sessions remain live.
+                var stopTasks = new List<Task>();
+                foreach (var session in restartList)
+                {
+                    var key = SessionKey(session.ResourceType, session.SessionType);
+                    if (_sessions.TryRemove(key, out var active) && active.Player != null)
+                        stopTasks.Add(active.Player.DisposeAsync(VlcStopTimeoutMs));
+                }
+                if (stopTasks.Count > 0)
+                    await Task.WhenAll(stopTasks).ConfigureAwait(false);
 
                 await Task.Delay(VlcReleaseSettleMs).ConfigureAwait(false);
 
@@ -711,7 +871,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     try
                     {
-                        await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd, newTerminalBaseUrl, info.LocalPanel, shouldContinue)
+                        await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd,
+                            newTerminalBaseUrl, info.LocalPanel, shouldContinue,
+                            info.ExplicitPreviewUrl, info.TerminalBound, info.DirectRenderTarget)
                             .ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -734,6 +896,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _disposed = true;
             try { _lifetimeCts.Cancel(); } catch { }
             _previewUrlValidationTimer?.Dispose();
+            _externalHostValidationTimer?.Dispose();
             StopAll();
         }
 
@@ -813,5 +976,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         [DllImport("user32.dll")]
         private static extern bool IsWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     }
 }

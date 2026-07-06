@@ -104,7 +104,7 @@ function HZCYKJTHardWare_StopFingerprintPreview: Integer; stdcall; external DLL_
 function HZCYKJTHardWare_StartIrisPreview(Hwnd: Pointer): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_StopIrisPreview: Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_CaptureCameraImage(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
-function HZCYKJTHardWare_CaptureFingerprintImage(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
+function HZCYKJTHardWare_CaptureFingerprintImage(SaveDir, SaveDirHk: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_CaptureIrisImage(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestOCR(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestNfcCard(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
@@ -468,7 +468,7 @@ end;
 
 procedure TFormMain.BtnFpCaptureClick(Sender: TObject);
 begin
-  LogRet('CaptureFingerprintImage', HZCYKJTHardWare_CaptureFingerprintImage(PAnsiChar(AnsiString(EdtSaveDir.Text))));
+  LogRet('CaptureFingerprintImage', HZCYKJTHardWare_CaptureFingerprintImage(PAnsiChar(AnsiString(EdtSaveDir.Text)), nil));
 end;
 
 procedure TFormMain.BtnOCRClick(Sender: TObject);

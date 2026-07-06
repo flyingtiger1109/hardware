@@ -12,12 +12,8 @@ EXPORTS
     HZCYKJTHardWare_StopFingerprintPreview
     HZCYKJTHardWare_StartIrisPreview
     HZCYKJTHardWare_StopIrisPreview
-    HZCYKJTHardWare_StartPlatePreviewCJ
-    HZCYKJTHardWare_StopPlatePreviewCJ
-    HZCYKJTHardWare_StartPlatePreviewRJ2
-    HZCYKJTHardWare_StopPlatePreviewRJ2
-    HZCYKJTHardWare_StartPlatePreviewRJ3
-    HZCYKJTHardWare_StopPlatePreviewRJ3
+    HZCYKJTHardWare_StartPlatePreview
+    HZCYKJTHardWare_StopPlatePreview
     HZCYKJTHardWare_CaptureCameraImage
     HZCYKJTHardWare_CaptureFingerprintImage
     HZCYKJTHardWare_CaptureIrisImage

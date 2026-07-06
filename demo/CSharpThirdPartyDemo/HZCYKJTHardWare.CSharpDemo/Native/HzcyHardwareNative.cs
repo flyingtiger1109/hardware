@@ -47,10 +47,22 @@ namespace HZCYKJTHardWare.CSharpDemo.Native
         internal static extern int HZCYKJTHardWare_StopIrisPreview();
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
-        internal static extern int HZCYKJTHardWare_StartPlatePreview(IntPtr hwnd);
+        internal static extern int HZCYKJTHardWare_StartPlatePreviewCJ(IntPtr hwnd);
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
-        internal static extern int HZCYKJTHardWare_StopPlatePreview();
+        internal static extern int HZCYKJTHardWare_StopPlatePreviewCJ();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
+        internal static extern int HZCYKJTHardWare_StartPlatePreviewRJ2(IntPtr hwnd);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
+        internal static extern int HZCYKJTHardWare_StopPlatePreviewRJ2();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
+        internal static extern int HZCYKJTHardWare_StartPlatePreviewRJ3(IntPtr hwnd);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
+        internal static extern int HZCYKJTHardWare_StopPlatePreviewRJ3();
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
         internal static extern int HZCYKJTHardWare_CaptureCameraImage(IntPtr saveDir);

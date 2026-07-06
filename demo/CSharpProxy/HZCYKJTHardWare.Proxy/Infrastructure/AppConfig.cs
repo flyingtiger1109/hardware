@@ -5,6 +5,16 @@ using Newtonsoft.Json.Linq;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
+    public sealed class PlatePreviewCameraConfig
+    {
+        public bool Enabled { get; set; }
+        public string Host { get; set; } = "";
+        public int Port { get; set; } = 554;
+        public string Username { get; set; } = "";
+        public string Password { get; set; } = "";
+        public int StreamChannel { get; set; } = 101;
+    }
+
     public class AppConfig
     {
         private static readonly Lazy<AppConfig> _lazy = new Lazy<AppConfig>(() => Load());
@@ -35,7 +45,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         // Preview settings
         public int RtspNetworkCachingMs { get; set; } = 50;
         public int RtspLiveCachingMs { get; set; } = 50;
+        public int PreviewCheckHwndIntervalMs { get; set; } = 500;
         public string RtspTransport { get; set; } = "tcp";   // ""=auto, "tcp" 强制TCP(需live555)
+        public PlatePreviewCameraConfig PlatePreviewCJ { get; set; } = new PlatePreviewCameraConfig();
+        public PlatePreviewCameraConfig PlatePreviewRJ2 { get; set; } = new PlatePreviewCameraConfig();
+        public PlatePreviewCameraConfig PlatePreviewRJ3 { get; set; } = new PlatePreviewCameraConfig();
         // Save settings
         public string DefaultSaveDir { get; set; } = @".\captures";
         public bool CreateDateFolder { get; set; } = true;
@@ -128,6 +142,18 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.RtspNetworkCachingMs = preview.Value<int?>("rtsp_network_caching_ms") ?? config.RtspNetworkCachingMs;
                     config.RtspLiveCachingMs = preview.Value<int?>("rtsp_live_caching_ms") ?? config.RtspLiveCachingMs;
                     config.RtspTransport = preview.Value<string>("rtsp_transport") ?? config.RtspTransport;
+                    config.PreviewCheckHwndIntervalMs = Math.Max(100,
+                        preview.Value<int?>("check_hwnd_interval_ms") ?? config.PreviewCheckHwndIntervalMs);
+
+                    var plate = preview["plate"];
+                    if (plate != null)
+                    {
+                        // Flat camera configuration only. Direction-to-camera composition is
+                        // intentionally owned by the third-party caller.
+                        config.PlatePreviewCJ = ReadPlatePreviewCamera(plate["cj"]);
+                        config.PlatePreviewRJ2 = ReadPlatePreviewCamera(plate["rj2"]);
+                        config.PlatePreviewRJ3 = ReadPlatePreviewCamera(plate["rj3"]);
+                    }
                 }
 
                 // Supports both the old C# key and the unified DLL key.
@@ -167,6 +193,58 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             var host = string.IsNullOrEmpty(DllCallbackHost) ? "127.0.0.1" : DllCallbackHost;
             return $"http://{host}:{DllCallbackPort}{DllCallbackBasePath}";
+        }
+
+        private static PlatePreviewCameraConfig ReadPlatePreviewCamera(JToken token)
+        {
+            var camera = new PlatePreviewCameraConfig();
+            if (token == null)
+                return camera;
+
+            camera.Enabled = token.Value<bool?>("enabled") ?? false;
+            camera.Host = token.Value<string>("host") ?? "";
+            camera.Port = token.Value<int?>("port") ?? 554;
+            camera.Username = token.Value<string>("username") ?? "";
+            camera.Password = token.Value<string>("password") ?? "";
+            camera.StreamChannel = token.Value<int?>("stream_channel") ?? 101;
+            if (camera.Port <= 0 || camera.Port > 65535)
+                camera.Port = 554;
+            if (camera.StreamChannel != 101 && camera.StreamChannel != 102)
+                camera.StreamChannel = 101;
+            return camera;
+        }
+
+        public PlatePreviewCameraConfig GetPlatePreviewCamera(string plateCode)
+        {
+            if (string.Equals(plateCode, "rj2", StringComparison.OrdinalIgnoreCase))
+                return PlatePreviewRJ2;
+            if (string.Equals(plateCode, "rj3", StringComparison.OrdinalIgnoreCase))
+                return PlatePreviewRJ3;
+            if (string.Equals(plateCode, "cj", StringComparison.OrdinalIgnoreCase))
+                return PlatePreviewCJ;
+            return null;
+        }
+
+        public string GetPlatePreviewUrl(string plateCode)
+        {
+            var camera = GetPlatePreviewCamera(plateCode);
+            if (camera == null || !camera.Enabled || string.IsNullOrWhiteSpace(camera.Host))
+                return "";
+
+            var host = camera.Host.Trim();
+            if (host.IndexOf(':') >= 0 && !host.StartsWith("[", StringComparison.Ordinal))
+                host = "[" + host + "]";
+
+            var authority = "";
+            if (!string.IsNullOrEmpty(camera.Username) || !string.IsNullOrEmpty(camera.Password))
+            {
+                authority = Uri.EscapeDataString(camera.Username ?? "");
+                if (!string.IsNullOrEmpty(camera.Password))
+                    authority += ":" + Uri.EscapeDataString(camera.Password);
+                authority += "@";
+            }
+
+            return $"rtsp://{authority}{host}:{camera.Port}/Streaming/Channels/{camera.StreamChannel}";
         }
 
         /// <summary>

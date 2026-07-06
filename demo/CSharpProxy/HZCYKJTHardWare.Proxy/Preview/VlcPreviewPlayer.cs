@@ -16,6 +16,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private IntPtr _mediaPlayer;
         private bool _running;
         private IntPtr _currentParentHwnd;
+        private bool _ownsVideoHwnd;
+        private bool _directRenderTarget;
         private string _vlcDir;
         private const string RiskySftpPluginRelativePath = @"plugins\access\libsftp_plugin.dll";
         private static readonly object RiskyPluginCheckLock = new object();
@@ -42,6 +44,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private delegate void LibvlcMediaPlayerStop(IntPtr player);
         private delegate void LibvlcVideoSetAspectRatio(IntPtr player, IntPtr ratio);
         private delegate void LibvlcVideoSetScale(IntPtr player, float factor);
+        private delegate void LibvlcVideoSetInput(IntPtr player, uint enabled);
 
         private LibvlcNew _fnNew;
         private LibvlcRelease _fnRelease;
@@ -55,6 +58,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private LibvlcMediaPlayerStop _fnPlayerStop;
         private LibvlcVideoSetAspectRatio _fnVideoSetAspectRatio;
         private LibvlcVideoSetScale _fnVideoSetScale;
+        private LibvlcVideoSetInput _fnVideoSetMouseInput;
+        private LibvlcVideoSetInput _fnVideoSetKeyInput;
 
         public bool IsRunning => _running && _videoHwnd != IntPtr.Zero && IsWindow(_videoHwnd);
         public IntPtr RenderFormHandle => _videoHwnd;
@@ -171,6 +176,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnPlayerStop = GetDelegate<LibvlcMediaPlayerStop>("libvlc_media_player_stop");
                 _fnVideoSetAspectRatio = GetDelegate<LibvlcVideoSetAspectRatio>("libvlc_video_set_aspect_ratio");
                 _fnVideoSetScale = GetDelegate<LibvlcVideoSetScale>("libvlc_video_set_scale");
+                _fnVideoSetMouseInput = GetDelegate<LibvlcVideoSetInput>("libvlc_video_set_mouse_input");
+                _fnVideoSetKeyInput = GetDelegate<LibvlcVideoSetInput>("libvlc_video_set_key_input");
 
                 if (_fnNew == null || _fnPlayerPlay == null) { Unload(); return false; }
 
@@ -186,7 +193,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public bool Play(string rtspUrl, IntPtr parentHwnd, int networkCachingMs, int liveCachingMs,
             string rtspTransport = "", int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false,
-            bool visible = true)
+            bool visible = true, bool directRenderTarget = false)
         {
             if (_fnNew == null && !LoadVlc()) return false;
             if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd)) return false;
@@ -197,6 +204,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sourceWidth = sourceWidth;
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
+            _directRenderTarget = directRenderTarget;
             _lastHostW = _lastHostH = _lastSrcW = _lastSrcH = 0;
 
             try
@@ -217,7 +225,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var argvPtr = Marshal.AllocHGlobal(IntPtr.Size * args.Count);
                 Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
 
-                Logger.Info($"VLC启动步骤：创建实例，url={rtspUrl}");
+                var safeUrl = SanitizeUrlForLog(rtspUrl);
+                Logger.Info($"VLC启动步骤：创建实例，url={safeUrl}");
                 _vlcInstance = _fnNew(args.Count, argvPtr);
 
                 for (int i = 0; i < args.Count; i++)
@@ -232,7 +241,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 2) Create media with options
-                Logger.Info($"VLC启动步骤：创建媒体，url={rtspUrl}");
+                Logger.Info($"VLC启动步骤：创建媒体，url={safeUrl}");
                 var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
                 var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
                 Marshal.FreeHGlobal(mrlPtr);
@@ -273,7 +282,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 3) Create player
-                Logger.Info($"VLC启动步骤：创建播放器，url={rtspUrl}");
+                Logger.Info($"VLC启动步骤：创建播放器，url={safeUrl}");
                 _mediaPlayer = _fnPlayerNewFromMedia(media);
                 _fnMediaRelease(media);
 
@@ -284,28 +293,40 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return false;
                 }
 
-                // 4) Create child window (STATIC) for VLC — same as Delphi CreateWindowEx('STATIC', WS_CHILD)
-                Logger.Info($"VLC启动步骤：创建视频窗口，url={rtspUrl}，parent={parentHwnd}");
-                // The preview is display-only. Disabling the cross-process child prevents
-                // mouse clicks from moving input focus from the third-party host to Proxy.
-                var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
-                if (visible)
-                    windowStyle |= WS_VISIBLE;
-                _videoHwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_NOACTIVATE,
-                    "STATIC", "", windowStyle,
-                    0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
-                if (_videoHwnd == IntPtr.Zero)
+                // External plate preview binds libVLC directly to the caller-owned HWND.
+                // Local/debug sessions retain the Proxy-owned child window so their paint
+                // lifecycle remains isolated inside the Proxy process.
+                if (directRenderTarget)
                 {
-                    Logger.Error("Failed to create video child window");
-                    CleanupPartial();
-                    return false;
+                    Logger.Info($"VLC启动步骤：直接绑定目标窗口，url={safeUrl}，target={parentHwnd}");
+                    _videoHwnd = parentHwnd;
+                    _ownsVideoHwnd = false;
+                }
+                else
+                {
+                    Logger.Info($"VLC启动步骤：创建视频窗口，url={safeUrl}，parent={parentHwnd}");
+                    var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
+                    if (visible)
+                        windowStyle |= WS_VISIBLE;
+                    _videoHwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_NOACTIVATE,
+                        "STATIC", "", windowStyle,
+                        0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+                    _ownsVideoHwnd = _videoHwnd != IntPtr.Zero;
+                    if (_videoHwnd == IntPtr.Zero)
+                    {
+                        Logger.Error("Failed to create video child window");
+                        CleanupPartial();
+                        return false;
+                    }
                 }
 
                 // 5) Set VLC render target → child window
                 _fnPlayerSetHwnd(_mediaPlayer, _videoHwnd);
+                _fnVideoSetMouseInput?.Invoke(_mediaPlayer, 0);
+                _fnVideoSetKeyInput?.Invoke(_mediaPlayer, 0);
 
                 // 6) Play
-                Logger.Info($"VLC启动步骤：开始播放，url={rtspUrl}，videoHwnd={_videoHwnd}");
+                Logger.Info($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
                     Logger.Error("VLC play returned error");
@@ -320,14 +341,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 // 8) Apply cover layout AFTER play (same order as Delphi)
                 ApplyCoverLayout();
-                Logger.Info($"VLC播放参数：url={rtspUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}");
+                Logger.Info($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
-                Logger.Info($"VLC播放成功: {rtspUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
+                Logger.Info($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
                 return true;
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC播放异常: url={rtspUrl}, 错误={ex.Message}", ex);
+                Logger.Error($"VLC播放异常: url={SanitizeUrlForLog(rtspUrl)}, 错误={ex.Message}", ex);
                 CleanupPartial();
                 return false;
             }
@@ -339,9 +360,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
         /// </summary>
         private void CleanupPartial()
         {
+            if (_mediaPlayer != IntPtr.Zero) { try { _fnPlayerSetHwnd?.Invoke(_mediaPlayer, IntPtr.Zero); } catch { } }
             if (_mediaPlayer != IntPtr.Zero) { try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { } _mediaPlayer = IntPtr.Zero; }
             if (_vlcInstance != IntPtr.Zero) { try { _fnRelease?.Invoke(_vlcInstance); } catch { } _vlcInstance = IntPtr.Zero; }
-            if (_videoHwnd != IntPtr.Zero) { DestroyWindow(_videoHwnd); _videoHwnd = IntPtr.Zero; }
+            if (_ownsVideoHwnd && _videoHwnd != IntPtr.Zero) { DestroyWindow(_videoHwnd); }
+            _videoHwnd = IntPtr.Zero;
+            _ownsVideoHwnd = false;
+            _directRenderTarget = false;
             _running = false;
         }
 
@@ -353,6 +378,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             if (_mediaPlayer != IntPtr.Zero)
             {
+                try { _fnPlayerSetHwnd?.Invoke(_mediaPlayer, IntPtr.Zero); } catch { }
                 try { _fnPlayerStop?.Invoke(_mediaPlayer); } catch { }
                 try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { }
                 _mediaPlayer = IntPtr.Zero;
@@ -362,11 +388,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 try { _fnRelease?.Invoke(_vlcInstance); } catch { }
                 _vlcInstance = IntPtr.Zero;
             }
-            if (_videoHwnd != IntPtr.Zero)
+            if (_ownsVideoHwnd && _videoHwnd != IntPtr.Zero)
             {
                 DestroyWindow(_videoHwnd);
-                _videoHwnd = IntPtr.Zero;
             }
+            _videoHwnd = IntPtr.Zero;
+            _ownsVideoHwnd = false;
+            _directRenderTarget = false;
             _running = false;
             _currentParentHwnd = IntPtr.Zero;
         }
@@ -376,7 +404,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         /// </summary>
         public bool SetParentWindow(IntPtr newParentHwnd)
         {
-            if (_videoHwnd == IntPtr.Zero) return false;
+            if (_videoHwnd == IntPtr.Zero || _directRenderTarget) return false;
 
             try
             {
@@ -430,6 +458,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     displayW = srcH;
                     displayH = srcW;
+                }
+
+                if (_directRenderTarget)
+                {
+                    if (_fnVideoSetScale != null)
+                        _fnVideoSetScale(_mediaPlayer, 0.0f);
+                    return;
                 }
 
                 if (hostW == _lastHostW && hostH == _lastHostH &&
@@ -494,6 +529,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             // Stop and release VLC player (same order as Delphi)
             if (_mediaPlayer != IntPtr.Zero)
             {
+                try { _fnPlayerSetHwnd?.Invoke(_mediaPlayer, IntPtr.Zero); } catch { }
                 try { _fnPlayerStop?.Invoke(_mediaPlayer); } catch { }
                 try { _fnPlayerRelease?.Invoke(_mediaPlayer); } catch { }
                 _mediaPlayer = IntPtr.Zero;
@@ -505,11 +541,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             // Destroy child video window (same as Delphi DestroyWindow)
-            if (_videoHwnd != IntPtr.Zero)
+            if (_ownsVideoHwnd && _videoHwnd != IntPtr.Zero)
             {
                 DestroyWindow(_videoHwnd);
-                _videoHwnd = IntPtr.Zero;
             }
+            _videoHwnd = IntPtr.Zero;
+            _ownsVideoHwnd = false;
+            _directRenderTarget = false;
 
             _running = false;
             _currentParentHwnd = IntPtr.Zero;
@@ -526,6 +564,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _fnMediaRelease = null; _fnPlayerNewFromMedia = null; _fnPlayerRelease = null;
             _fnPlayerSetHwnd = null; _fnPlayerPlay = null; _fnPlayerStop = null;
             _fnVideoSetAspectRatio = null; _fnVideoSetScale = null;
+            _fnVideoSetMouseInput = null; _fnVideoSetKeyInput = null;
+        }
+
+        internal static string SanitizeUrlForLog(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value ?? "";
+            var schemeEnd = value.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd < 0) return value;
+            var authorityStart = schemeEnd + 3;
+            var at = value.IndexOf('@', authorityStart);
+            if (at <= authorityStart) return value;
+            return value.Substring(0, authorityStart) + "***:***@" + value.Substring(at + 1);
         }
 
         private static void DisableRiskySftpPlugin(string vlcDir)

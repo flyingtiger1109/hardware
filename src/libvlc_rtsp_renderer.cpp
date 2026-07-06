@@ -18,6 +18,21 @@ public:
 private:
     CRITICAL_SECTION* m_cs;
 };
+
+std::string SanitizeUrlForLog(const std::string& url) {
+    const size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos) return url;
+
+    const size_t authorityStart = schemeEnd + 3;
+    const size_t pathStart = url.find('/', authorityStart);
+    const size_t at = url.find('@', authorityStart);
+    if (at == std::string::npos ||
+        (pathStart != std::string::npos && at > pathStart)) {
+        return url;
+    }
+
+    return url.substr(0, authorityStart) + "***:***@" + url.substr(at + 1);
+}
 }
 
 static std::string FormatWindowsError(DWORD err) {
@@ -236,8 +251,9 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     typedef libvlc_media_t* (*media_new_location_t)(libvlc_instance_t*, const char*);
     m_media = ((media_new_location_t)m_libvlc_media_new_location)(m_vlcInstance, url.c_str());
     if (!m_media) {
-        LOG_ERROR("LibVlcRenderer", "启动 RTSP 失败：创建 media 失败，url=%s", url.c_str());
-        SetLastErrorMessage("创建 RTSP 媒体失败: " + url);
+        const std::string safeUrl = SanitizeUrlForLog(url);
+        LOG_ERROR("LibVlcRenderer", "启动 RTSP 失败：创建 media 失败，url=%s", safeUrl.c_str());
+        SetLastErrorMessage("创建 RTSP 媒体失败: " + safeUrl);
         ((void(*)(libvlc_instance_t*))m_libvlc_release)(m_vlcInstance);
         m_vlcInstance = nullptr;
         return HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED;
@@ -296,7 +312,8 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     int playRet = ((play_t)m_libvlc_media_player_play)(m_mediaPlayer);
     if (playRet != 0) {
         LOG_ERROR("LibVlcRenderer", "启动 RTSP 播放失败：ret=%d", playRet);
-        SetLastErrorMessage("启动 RTSP 播放失败，libVLC 返回: " + std::to_string(playRet) + ", URL: " + url);
+        SetLastErrorMessage("启动 RTSP 播放失败，libVLC 返回: " +
+            std::to_string(playRet) + ", URL: " + SanitizeUrlForLog(url));
         ((void(*)(libvlc_media_player_t*))m_libvlc_media_player_release)(m_mediaPlayer);
         m_mediaPlayer = nullptr;
         ((void(*)(libvlc_media_t*))m_libvlc_media_release)(m_media);
@@ -317,7 +334,8 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
     m_stopLayout = false;
     m_layoutThread = std::make_unique<std::thread>(&LibVlcRtspRenderer::LayoutLoop, this);
 
-    LOG_DEBUG("LibVlcRenderer", "RTSP 播放已启动：url=%s，hwnd=%p", url.c_str(), hwnd);
+    const std::string safeUrl = SanitizeUrlForLog(url);
+    LOG_DEBUG("LibVlcRenderer", "RTSP 播放已启动：url=%s，hwnd=%p", safeUrl.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 

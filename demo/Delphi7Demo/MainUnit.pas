@@ -151,7 +151,7 @@ end;
 
 procedure TFormMain.WMMinimizeAfterExternalPreview(var Msg: TMessage);
 begin
-  Log('[ÐÅÏ¢] [Ô¤ÀÀ] Íâ²¿Ô¤ÀÀÒÑ³É¹¦»Øµ÷µÚÈý·½£¬³ÌÐò×Ô¶¯×îÐ¡»¯µ½ÈÎÎñÀ¸¡£');
+  Log('[ï¿½ï¿½Ï¢] [Ô¤ï¿½ï¿½] ï¿½â²¿Ô¤ï¿½ï¿½ï¿½Ñ³É¹ï¿½ï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½');
   if WindowState <> wsMinimized then
     Application.Minimize;
 end;
@@ -177,7 +177,7 @@ begin
   MemoLog.Clear;
   FServer := nil;
   FSaveDir := '.\captures';
-  Log('[ÐÅÏ¢] [³ÌÐò] ³ÌÐòÒÑÆô¶¯£¬ÕýÔÚ×Ô¶¯Æô¶¯·þÎñ¡£');
+  Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½');
   PostMessage(Handle, WM_AUTO_START_SERVER, 0, 0);
 end;
 
@@ -195,27 +195,27 @@ procedure TFormMain.BtnStartServerClick(Sender: TObject);
 begin
   if FServer <> nil then
   begin
-    Log('[ÌáÊ¾] [·þÎñ] ·þÎñÒÑÔÚÔËÐÐ£¬ÎÞÐèÖØ¸´Æô¶¯¡£');
+    Log('[ï¿½ï¿½Ê¾] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½');
     Exit;
   end;
   FServer := TDelphiProxyServer.Create(PanelCamera, PanelFingerprint, PanelIris);
   FServer.SetLogProc(Log);
   FServer.SetExternalPreviewReadyProc(ExternalPreviewReady);
   FServer.Start;
-  Log('[ÐÅÏ¢] [·þÎñ] ÕýÔÚÆô¶¯·þÎñ£¬Êµ¼Ê¼àÌý½á¹ûÇë²é¿´ºóÐøÈÕÖ¾¡£');
+  Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½é¿´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾ï¿½ï¿½');
 end;
 
 procedure TFormMain.BtnStopServerClick(Sender: TObject);
 begin
   if FServer = nil then
   begin
-    Log('[ÌáÊ¾] [·þÎñ] ·þÎñÉÐÎ´Æô¶¯£¬ÎÞÐèÍ£Ö¹¡£');
+    Log('[ï¿½ï¿½Ê¾] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½');
     Exit;
   end;
   FServer.Stop;
   FServer.Free;
   FServer := nil;
-  Log('[ÐÅÏ¢] [·þÎñ] ·þÎñÒÑÍ£Ö¹¡£');
+  Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½');
 end;
 
 // ============================================================
@@ -224,25 +224,25 @@ end;
 
 procedure TFormMain.BtnStartProcessClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [Á÷³Ì] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.StartProcessDirect(FSaveDir);
 end;
 
 procedure TFormMain.BtnEndProcessClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [Á÷³Ì] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.EndProcessDirect;
 end;
 
 procedure TFormMain.BtnSwitchTerminal1Click(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ÖÕ¶ËÇÐ»»] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½Õ¶ï¿½ï¿½Ð»ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.SwitchTerminalDirect(1);
 end;
 
 procedure TFormMain.BtnSwitchTerminal2Click(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ÖÕ¶ËÇÐ»»] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½Õ¶ï¿½ï¿½Ð»ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.SwitchTerminalDirect(2);
 end;
 
@@ -250,116 +250,116 @@ procedure TFormMain.BtnFaceCaptureClick(Sender: TObject);
 var
   SavePath: string;
 begin
-  if FServer = nil then begin Log('[´íÎó] [ÈËÁ³×¥ÅÄ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½×¥ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   if FServer.CaptureFaceDirect(FSaveDir, SavePath) then
-    Log('[ÐÅÏ¢] [ÈËÁ³×¥ÅÄ] ×¥ÅÄ³É¹¦£¬±£´æÂ·¾¶=' + SavePath)
+    Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½×¥ï¿½ï¿½] ×¥ï¿½Ä³É¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½=' + SavePath)
   else
-    Log('[´íÎó] [ÈËÁ³×¥ÅÄ] ×¥ÅÄÊ§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½×¥ï¿½ï¿½] ×¥ï¿½ï¿½Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnFingerprintCaptureClick(Sender: TObject);
 var
   SavePath: string;
 begin
-  if FServer = nil then begin Log('[´íÎó] [Ö¸ÎÆ×¥ÅÄ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   if FServer.CaptureFingerprintDirect(FSaveDir, SavePath) then
-    Log('[ÐÅÏ¢] [Ö¸ÎÆ×¥ÅÄ] ×¥ÅÄ³É¹¦£¬±£´æÂ·¾¶=' + SavePath)
+    Log('[ï¿½ï¿½Ï¢] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] ×¥ï¿½Ä³É¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½=' + SavePath)
   else
-    Log('[´íÎó] [Ö¸ÎÆ×¥ÅÄ] ×¥ÅÄÊ§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½×¥ï¿½ï¿½] ×¥ï¿½ï¿½Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnOCRClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('[´íÎó] [OCRÊ¶±ð] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [OCRÊ¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   ReqId := FServer.RequestOCRDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[ÐÅÏ¢] [OCRÊ¶±ð] ÇëÇóÒÑÊÜÀí£¬request_id=' + ReqId)
+    Log('[ï¿½ï¿½Ï¢] [OCRÊ¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½request_id=' + ReqId)
   else
-    Log('[´íÎó] [OCRÊ¶±ð] ÇëÇóÌá½»Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [OCRÊ¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½á½»Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnNfcCardClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('[´íÎó] [IC¿¨Ê¶±ð] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ICï¿½ï¿½Ê¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   ReqId := FServer.RequestNfcDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[ÐÅÏ¢] [IC¿¨Ê¶±ð] ÇëÇóÒÑÊÜÀí£¬request_id=' + ReqId)
+    Log('[ï¿½ï¿½Ï¢] [ICï¿½ï¿½Ê¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½request_id=' + ReqId)
   else
-    Log('[´íÎó] [IC¿¨Ê¶±ð] ÇëÇóÌá½»Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [ICï¿½ï¿½Ê¶ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½á½»Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnIrisCaptureClick(Sender: TObject);
 var
   ReqId: string;
 begin
-  if FServer = nil then begin Log('[´íÎó] [ºçÄ¤×¥ÅÄ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½Ä¤×¥ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   ReqId := FServer.CaptureIrisDirect(FSaveDir);
   if ReqId <> '' then
-    Log('[ÐÅÏ¢] [ºçÄ¤×¥ÅÄ] ÇëÇóÒÑÊÜÀí£¬request_id=' + ReqId)
+    Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½Ä¤×¥ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½request_id=' + ReqId)
   else
-    Log('[´íÎó] [ºçÄ¤×¥ÅÄ] ÇëÇóÌá½»Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½Ä¤×¥ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½á½»Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnStartCameraPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ÉãÏñÍ·Ô¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½Í·Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   if FServer.StartCameraPreviewDirect then
-    Log('[ÐÅÏ¢] [ÉãÏñÍ·Ô¤ÀÀ] Ô¤ÀÀÒÑÆô¶¯¡£')
+    Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½Í·Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½')
   else
-    Log('[´íÎó] [ÉãÏñÍ·Ô¤ÀÀ] Ô¤ÀÀÆô¶¯Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½Í·Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnStopCameraPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ÉãÏñÍ·Ô¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½ï¿½ï¿½Í·Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.StopCameraPreviewDirect;
-  Log('[ÐÅÏ¢] [ÉãÏñÍ·Ô¤ÀÀ] Ô¤ÀÀÒÑÍ£Ö¹¡£');
+  Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½ï¿½ï¿½Í·Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½');
 end;
 
 procedure TFormMain.BtnStartFingerprintPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [Ö¸ÎÆÔ¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   if FServer.StartFingerprintPreviewDirect then
-    Log('[ÐÅÏ¢] [Ö¸ÎÆÔ¤ÀÀ] Ô¤ÀÀÒÑÆô¶¯¡£')
+    Log('[ï¿½ï¿½Ï¢] [Ö¸ï¿½ï¿½Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½')
   else
-    Log('[´íÎó] [Ö¸ÎÆÔ¤ÀÀ] Ô¤ÀÀÆô¶¯Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnStopFingerprintPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [Ö¸ÎÆÔ¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [Ö¸ï¿½ï¿½Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.StopFingerprintPreviewDirect;
-  Log('[ÐÅÏ¢] [Ö¸ÎÆÔ¤ÀÀ] Ô¤ÀÀÒÑÍ£Ö¹¡£');
+  Log('[ï¿½ï¿½Ï¢] [Ö¸ï¿½ï¿½Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½');
 end;
 
 procedure TFormMain.BtnStartIrisPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ºçÄ¤Ô¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½Ä¤Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   if FServer.StartIrisPreviewDirect then
-    Log('[ÐÅÏ¢] [ºçÄ¤Ô¤ÀÀ] Ô¤ÀÀÒÑÆô¶¯¡£')
+    Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½Ä¤Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½')
   else
-    Log('[´íÎó] [ºçÄ¤Ô¤ÀÀ] Ô¤ÀÀÆô¶¯Ê§°Ü¡£');
+    Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½Ä¤Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½');
 end;
 
 procedure TFormMain.BtnStopIrisPreviewClick(Sender: TObject);
 begin
-  if FServer = nil then begin Log('[´íÎó] [ºçÄ¤Ô¤ÀÀ] ²Ù×÷Ê§°Ü£¬ÇëÏÈÆô¶¯·þÎñ¡£'); Exit; end;
+  if FServer = nil then begin Log('[ï¿½ï¿½ï¿½ï¿½] [ï¿½ï¿½Ä¤Ô¤ï¿½ï¿½] ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½'); Exit; end;
   FServer.StopIrisPreviewDirect;
-  Log('[ÐÅÏ¢] [ºçÄ¤Ô¤ÀÀ] Ô¤ÀÀÒÑÍ£Ö¹¡£');
+  Log('[ï¿½ï¿½Ï¢] [ï¿½ï¿½Ä¤Ô¤ï¿½ï¿½] Ô¤ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½');
 end;
 
 procedure TFormMain.BtnStartPlatePreviewClick(Sender: TObject);
 begin
-  Log('[ÌáÊ¾] [³µÅÆÔ¤ÀÀ] µ±Ç°°æ±¾ÔÝ²»Ö§³Ö³µÅÆÔ¤ÀÀ¡£');
+  Log('[ï¿½ï¿½Ê¾] [ï¿½ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½] ï¿½ï¿½Ç°ï¿½æ±¾ï¿½Ý²ï¿½Ö§ï¿½Ö³ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½');
 end;
 
 procedure TFormMain.BtnStopPlatePreviewClick(Sender: TObject);
 begin
-  Log('[ÌáÊ¾] [³µÅÆÔ¤ÀÀ] µ±Ç°°æ±¾ÔÝ²»Ö§³Ö³µÅÆÔ¤ÀÀÍ£Ö¹²Ù×÷¡£');
+  Log('[ï¿½ï¿½Ê¾] [ï¿½ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½] ï¿½ï¿½Ç°ï¿½æ±¾ï¿½Ý²ï¿½Ö§ï¿½Ö³ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½');
 end;
 
 end.

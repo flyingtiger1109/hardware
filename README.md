@@ -69,11 +69,15 @@ InitSdk
 | 生命周期 | `HZCYKJTHardWare_InitSdk`、`HZCYKJTHardWare_ReleaseSdk` |
 | 事件回调 | `HZCYKJTHardWare_RegisterEventCallback` |
 | 终端和流程 | `HZCYKJTHardWare_SwitchTerminal`、`HZCYKJTHardWare_StartProcess`、`HZCYKJTHardWare_EndProcess` |
-| 预览 | `Start/StopCameraPreview`、`Start/StopFingerprintPreview`、`Start/StopIrisPreview`、`Start/StopPlatePreview` |
+| 预览 | `Start/StopCameraPreview`、`Start/StopFingerprintPreview`、`Start/StopIrisPreview`、`Start/StopPlatePreviewCJ`、`Start/StopPlatePreviewRJ2`、`Start/StopPlatePreviewRJ3` |
 | 图像采集 | `HZCYKJTHardWare_CaptureCameraImage`、`HZCYKJTHardWare_CaptureFingerprintImage`、`HZCYKJTHardWare_CaptureIrisImage` |
 | 异步识别 | `HZCYKJTHardWare_RequestOCR`、`HZCYKJTHardWare_RequestNfcCard`、`HZCYKJTHardWare_RequestAuthorize` |
 
 预览接口的 `hwnd` 必须是仍然有效的目标窗口句柄。调用方关闭窗口前应先停止对应预览，再释放 SDK。
+
+车牌 RTSP 由 C# Proxy 中的 libVLC 播放，CJ、RJ2、RJ3 分别绑定第三方提供的独立 HWND。Proxy 不判断业务方向：方向 1 调用方自行调用 CJ，方向 2 调用方自行组合调用 RJ2 和 RJ3。三路会话可独立启停，也可并发显示。
+
+三个镜头分别配置在 `preview.plate.cj`、`preview.plate.rj2`、`preview.plate.rj3`。每个节点独立包含 `enabled`、`host`、`port`、`username`、`password` 和 `stream_channel`。
 
 ## C# 调用示例
 

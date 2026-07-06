@@ -7,6 +7,63 @@
 
 namespace HZCYKJTHardWare {
 
+namespace {
+
+std::string EncodeRtspUserInfo(const std::string& value) {
+    static const char kHex[] = "0123456789ABCDEF";
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (unsigned char ch : value) {
+        const bool unreserved =
+            (ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') ||
+            ch == '-' || ch == '.' || ch == '_' || ch == '~';
+        if (unreserved) {
+            encoded.push_back(static_cast<char>(ch));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(kHex[(ch >> 4) & 0x0F]);
+            encoded.push_back(kHex[ch & 0x0F]);
+        }
+    }
+    return encoded;
+}
+
+std::string NormalizeRtspHost(const std::string& host) {
+    if (host.empty() || host.front() == '[' || host.find(':') == std::string::npos) {
+        return host;
+    }
+    return "[" + host + "]";
+}
+
+void ParsePlatePreviewCamera(const std::string& plateObj,
+                             const char* cameraKey,
+                             PlatePreviewCameraConfig& config) {
+    const std::string cameraObj = JsonHelper::GetJsonObject(plateObj, cameraKey);
+    if (cameraObj.empty()) return;
+
+    if (JsonHelper::HasKey(cameraObj, "enabled"))
+        config.enabled = JsonHelper::GetBool(cameraObj, "enabled", false);
+    if (JsonHelper::HasKey(cameraObj, "host"))
+        config.host = JsonHelper::GetString(cameraObj, "host");
+    if (JsonHelper::HasKey(cameraObj, "port"))
+        config.port = JsonHelper::GetInt(cameraObj, "port", 554);
+    if (JsonHelper::HasKey(cameraObj, "username"))
+        config.username = JsonHelper::GetString(cameraObj, "username");
+    if (JsonHelper::HasKey(cameraObj, "password"))
+        config.password = JsonHelper::GetString(cameraObj, "password");
+    if (JsonHelper::HasKey(cameraObj, "stream_channel"))
+        config.stream_channel = JsonHelper::GetInt(cameraObj, "stream_channel", 101);
+
+    if (config.port <= 0 || config.port > 65535)
+        config.port = 554;
+    if (config.stream_channel != 101 && config.stream_channel != 102)
+        config.stream_channel = 101;
+}
+
+} // namespace
+
 int ConfigManager::Load(const std::string& dllDir) {
     // 始终先填充默认值，后续由 JSON 文件中存在的字段覆盖
     ApplyDefaults();
@@ -254,6 +311,15 @@ int ConfigManager::ParseJson(const std::string& json) {
             m_rtspLiveCachingMs = JsonHelper::GetInt(previewObj, "rtsp_live_caching_ms");
         if (JsonHelper::HasKey(previewObj, "rtsp_transport"))
             m_rtspTransport = JsonHelper::GetString(previewObj, "rtsp_transport");
+
+        // Plate cameras are deliberately flat. Direction-to-camera composition belongs
+        // to the third-party caller, not to the DLL or C# Proxy.
+        std::string plateObj = JsonHelper::GetJsonObject(previewObj, "plate");
+        if (!plateObj.empty()) {
+            ParsePlatePreviewCamera(plateObj, "cj", m_platePreviewCJ);
+            ParsePlatePreviewCamera(plateObj, "rj2", m_platePreviewRJ2);
+            ParsePlatePreviewCamera(plateObj, "rj3", m_platePreviewRJ3);
+        }
     }
 
     // log 配置
@@ -317,6 +383,9 @@ void ConfigManager::ApplyDefaults() {
     m_rtspNetworkCachingMs = 150;
     m_rtspLiveCachingMs = 150;
     m_rtspTransport = "tcp";
+    m_platePreviewCJ = PlatePreviewCameraConfig{};
+    m_platePreviewRJ2 = PlatePreviewCameraConfig{};
+    m_platePreviewRJ3 = PlatePreviewCameraConfig{};
 
     m_logDir = "HZCYKJTHardWareDLL_Logs";
     m_logLevel = "info";
@@ -363,6 +432,34 @@ bool ConfigManager::GetStopPreviewOnEndProcess() const { return m_stopPreviewOnE
 int ConfigManager::GetRtspNetworkCachingMs() const { return m_rtspNetworkCachingMs; }
 int ConfigManager::GetRtspLiveCachingMs() const { return m_rtspLiveCachingMs; }
 const std::string& ConfigManager::GetRtspTransport() const { return m_rtspTransport; }
+const PlatePreviewCameraConfig& ConfigManager::GetPlatePreviewConfig(PlatePreviewChannel channel) const {
+    switch (channel) {
+        case PlatePreviewChannel::RJ2: return m_platePreviewRJ2;
+        case PlatePreviewChannel::RJ3: return m_platePreviewRJ3;
+        case PlatePreviewChannel::CJ:
+        default: return m_platePreviewCJ;
+    }
+}
+
+std::string ConfigManager::BuildPlatePreviewUrl(PlatePreviewChannel channel) const {
+    const PlatePreviewCameraConfig& config = GetPlatePreviewConfig(channel);
+    if (!config.enabled || config.host.empty()) {
+        return "";
+    }
+
+    std::string authority;
+    if (!config.username.empty() || !config.password.empty()) {
+        authority = EncodeRtspUserInfo(config.username);
+        if (!config.password.empty()) {
+            authority += ":" + EncodeRtspUserInfo(config.password);
+        }
+        authority += "@";
+    }
+
+    return "rtsp://" + authority + NormalizeRtspHost(config.host) + ":" +
+        std::to_string(config.port) + "/Streaming/Channels/" +
+        std::to_string(config.stream_channel);
+}
 const std::string& ConfigManager::GetLogDir() const { return m_logDir; }
 const std::string& ConfigManager::GetLogLevel() const { return m_logLevel; }
 bool ConfigManager::HasConfigFile() const { return m_hasConfigFile; }

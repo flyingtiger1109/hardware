@@ -664,3 +664,413 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 ## 回退方式
 
 - 从 MJPEG/VLC 子窗口样式中移除 `WS_DISABLED`，并恢复 `MainForm.SetMinimizeToTaskbar()` 与 `DllCommandHandler.MinimizeMainFormAsync()`；DLL 和第三方程序无需回退。
+
+# 外部预览跨宿主与 Proxy 重启恢复（方案 B，2026-07-02）
+
+## 当前阶段
+
+- [x] 修改前基线已提交并创建注释标签 `v1.2.6`，提交号 `d7b1fbb`。
+- [x] 基线提交未包含任何 `.ico` 文件。
+- [x] C# Demo/第三方宿主退出后的旧外部预览清理已实现。
+- [x] 第三方仅调用一次预览接口时，C# Proxy 重启后的自动重建请求已实现。
+- [x] DLL、Proxy、测试编译及无真实终端的租约恢复验证已完成。
+- [ ] 真实终端、真实 C# Demo 和第三方程序现场联调。
+
+## 本次修改内容
+
+1. C# Proxy 每次创建服务实例时生成唯一 `proxy_instance_id`，`GET /ping` 在保留 `status=ok` 的基础上返回该标识。
+2. DLL 在摄像头或指纹外部预览活动期间按 `check_hwnd_interval_ms` 轻量查询 Proxy 实例；检测到服务不可用后恢复、实例变化或同一进程内服务重建时，使用原 `request_id`、原 `HWND` 和回调地址重新提交预览。
+3. DLL 监控请求采用 `750ms` 有界超时；`ReleaseSdk` 先停止监控，再尽力通知 Proxy 停止摄像头和指纹预览，Proxy 不可用时不阻塞本地资源释放。
+4. Proxy 记录外部预览宿主的 `HWND + PID + 进程启动时间`，使用已有 `check_hwnd_interval_ms` 定时校验；宿主退出或 HWND 被其他进程复用时，串行停止并移除旧播放器和恢复信息。
+5. 显式新预览仍保持“后请求替换旧外部会话”的既有语义，终端切换继续由原 generation/route epoch 约束接管。
+6. 增加 Proxy 实例标识、外部宿主身份校验单元测试，以及 x86 DLL 假 Proxy 生命周期验证脚本。
+
+## 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/AppConfig.cs`：读取 `check_hwnd_interval_ms`。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`：外部宿主身份记录、周期校验和失效会话释放。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`：Proxy 实例标识和 `/ping` 响应。
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`：实例标识查询及有界预览恢复/停止请求。
+- `src/exports.cpp`：外部预览租约监控、Proxy 重启恢复和 `ReleaseSdk` 清理。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/ProxyInstanceIdentityTests.cs`：实例标识测试。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/ExternalPreviewHostIdentityTests.cs`：HWND 所有者与句柄销毁测试。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Integration/ProxyServerIntegrationTests.cs`：`/ping` 稳定实例标识断言及集成分类。
+- `scripts/verify_preview_lease.ps1`：x86 DLL 的 Proxy 中断、实例变化、自动重发和 Release 停止验证。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、`__stdcall`、结构体、回调签名和错误码均未改变。
+- 第三方仍只需调用原有 `StartCameraPreview` / `StartFingerprintPreview`；无需增加重连调用。
+- `/ping` 仅增加 `proxy_instance_id` 字段，原有 `status=ok` 保持不变。
+- C# Proxy 继续使用 `.NET Framework 4.6/x86`，DLL 继续生成 `Win32/x86`，未新增第三方依赖。
+- 虹膜预览继续使用 DLL 本地渲染链路，本次未改变。
+
+## 风险与注意事项
+
+1. Proxy 的预览启动响应仍是异步受理；租约恢复确认“请求已受理”，真实画面是否成功仍由现有预览回调和日志确认。
+2. 当前每种资源仍只有一个 External 会话，多个第三方进程同时启动同一资源时继续保持最后一次请求替换前一次请求。
+3. 第三方必须保持传入的预览 HWND 有效；控件主动重建 Handle 后仍应重新调用预览接口。
+4. Proxy 重启期间终端也不可用时，DLL 会保留租约并按周期重试；真实终端恢复时长需现场记录。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46`：通过，0 警告、0 错误。
+- [x] C# 测试程序集（临时隔离输出）`Release|x86|net46`：通过，0 警告、0 错误。
+- [x] VSTest 非集成回归：46/46 通过。
+- [x] DLL `Release|Win32`：通过，0 警告、0 错误。
+- [x] DLL 架构与导出表：PE32/x86，20/20 导出名称及 `__stdcall` 装饰保持不变。
+- [x] `verify_preview_lease.ps1`：`PASS ping=5 camera_start=2 camera_stop=1`，确认 Proxy 中断/实例变化后自动重发一次，并在 Release 时停止。
+- [x] `git diff --check`：通过，仅存在既有 LF/CRLF 提示。
+- [ ] 7 项 Proxy 集成测试：当前桌面测试宿主创建 `HttpListener` 报 `PlatformNotSupportedException`，需在正式 Windows 测试环境执行。
+- [ ] 真实 C# Demo 关闭后第三方立即接管摄像头/指纹预览：待验证。
+- [ ] 第三方保持运行，完全退出并重启 C# Proxy 后画面自动恢复：待验证。
+- [ ] 连续 20 次宿主/Proxy 重启、终端切换竞争及 2 小时/24 小时长稳：待验证。
+
+## 下一步计划
+
+- [ ] 部署最新 `Release/HZCYKJTHardWare.dll` 与 Proxy `Release|x86` 生成物。
+- [ ] 分别验证 C# Demo 正常关闭、强制结束以及第三方接管场景。
+- [ ] 第三方保持运行时退出并重启 Proxy，记录自动恢复时长和 DLL/Proxy 日志中的实例标识。
+- [ ] 执行连续重启、终端切换和长稳验证，观察线程数、句柄数、GDI 对象与内存趋势。
+
+## 回退方式
+
+- 以 `v1.2.6` 为修改前基线，恢复本节列出的 DLL/Proxy/测试文件并移除 `verify_preview_lease.ps1`；不需要恢复或修改任何 `.ico` 文件。
+
+# 通道级车牌 RTSP 预览（2026-07-02）
+
+## 当前阶段
+
+- [x] DLL 已启用既有车牌预览导出函数。
+- [x] 车牌 VLC 已迁移到 C# Proxy，外部会话直接绑定第三方 HWND。
+- [x] Proxy 本地调试预览与第三方预览可同时运行，双方独立启停。
+- [ ] 现场相机配置和真实 RTSP 播放待验证。
+
+## 本次修改内容
+
+1. `ConfigManager` 新增 `preview.plate` 配置读取和 RTSP URL 构建，默认 `/Streaming/Channels/101`，仅在配置为 `102` 时使用子码流。
+2. 用户名和密码执行 RTSP user-info 百分号编码，支持账号中存在特殊字符。
+3. DLL 新增 `/preview/plate/start`、`/preview/plate/stop` 转发和车牌预览租约；第三方进程不再加载或释放车牌 VLC。
+4. C# Proxy 的外部车牌会话调用 `libvlc_media_player_set_hwnd` 直接绑定第三方传入的专用 HWND，不再创建跨进程 `STATIC` 子窗口。
+5. Proxy 新增独立本地车牌调试会话和 Panel；调试预览默认不自动启动，可与外部会话同时播放，任一会话启停或失败不修改另一会话。
+6. 车牌外部/本地会话标记为通道级资源，终端1/2切换时不停止、不重启。
+7. DLL 监控 Proxy 实例变化，Proxy 重启后保留有效 HWND 租约并重建外部车牌预览；`ReleaseSdk` 主动通知 Proxy 停止。
+8. Proxy VLC 日志中的 RTSP 认证信息统一替换为 `***:***@`，避免账号密码落入日志。
+9. 根目录、Delphi ThirdParty Demo 和 Delphi 7 Demo 配置模板补充单镜头车牌配置。
+
+## 涉及文件
+
+- `src/config_manager.h`、`src/config_manager.cpp`：车牌配置、主/子码流和 URL 编码。
+- `src/hzsjkjt_context.h`、`src/hzsjkjt_context.cpp`：运行期车牌配置和外部预览租约。
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`：车牌预览 Proxy HTTP 路由封装。
+- `src/exports.cpp`：既有车牌导出接口改为 Proxy 转发、重启恢复和释放清理。
+- `src/event_dispatcher.cpp`：车牌预览成功/失败事件和失败租约清理。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/AppConfig.cs`：Proxy 读取同一份车牌 RTSP 配置。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`：外部/本地双会话及终端切换隔离。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewPlayer.cs`、`VlcPreviewController.cs`：外部 HWND 直绑、输入禁用和凭据脱敏。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`：独立车牌启动/停止路由。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/Coordinator/BizOperationHandler.cs`、`MainForm.cs`、`MainForm.Designer.cs`：本地车牌调试预览。
+- `src/libvlc_rtsp_renderer.cpp`：RTSP 凭据日志脱敏。
+- `HZCYKJTHardWare.json`、`demo/DelphiThirdPartyDemo/HZCYKJTHardWare.json`、`demo/Delphi7Demo/HZCYKJTHardWare.json`：部署配置模板。
+
+## 兼容性说明
+
+- DLL 导出名、参数、`__stdcall` 调用约定、错误码和事件结构体：未改变。
+- 车牌预览不绑定终端1/2，切换终端时外部和本地调试会话均保持当前播放。
+- `preview.plate.enabled=false` 时继续返回 `HZCYKJTHardWare_RET_UNSUPPORTED`。
+- 未新增第三方依赖，车牌 libVLC 仅由 x86 C# Proxy 进程加载。
+
+## 风险与注意事项
+
+1. 配置模板没有写入现场 IP、用户名和密码；启用前必须补齐并设置 `enabled=true`。
+2. 同时开启第三方和 Proxy 调试预览会建立两路 RTSP 连接并执行两路解码；调试会话默认关闭，现场需要确认相机连接数上限。
+3. 主码流码率和解码负载通常高于子码流，现场需要观察 Proxy x86 进程 CPU、Private Bytes 和 VLC 稳定性。
+4. 当前未连接真实车牌相机验证认证、编码格式、双路播放和断流行为。
+
+## 验证状态
+
+- [x] DLL `Release|Win32`：通过，0 警告、0 错误。
+- [x] C# Proxy `Release|x86`：通过，0 警告、0 错误。
+- [x] 车牌配置和日志脱敏单元测试：3/3 通过。
+- [!] Proxy 全量测试：49项通过；7项集成测试因当前测试宿主不支持 `HttpListener` 未执行成功，与车牌代码断言无关。
+- [x] 生成物：PE32/x86。
+- [x] DLL 导出表：20/20，`StartPlatePreview@4` 与 `StopPlatePreview@0` 保持不变。
+- [x] 四份配置 JSON（含 Release 输出）解析通过，默认端口554、主码流101。
+- [ ] TestTool：工作区中不存在原配置路径下的 `testdemo.vcxproj`，未执行。
+- [ ] 真实 RTSP 主码流、第三方 HWND 直绑、Proxy 同步调试、重复启停和 SDK 释放：待验证。
+
+## 下一步计划
+
+- [ ] 填入通道车牌相机 `host/username/password` 并设置 `enabled=true`。
+- [ ] 使用第三方传入的专用 Panel HWND 连续启停20次。
+- [ ] 同时开启第三方预览与 Proxy 本地调试预览，分别停止其中一路并确认另一路持续播放。
+- [ ] 验证终端1/2切换不影响车牌预览。
+- [ ] 验证断网恢复、错误密码、相机重启以及2小时/24小时长稳。
+
+## 回退方式
+
+- 设置 `preview.plate.enabled=false` 可立即关闭功能并恢复原“不支持”行为。
+- 代码回退时恢复本节列出的 C++、C# Proxy 和配置文件；DLL ABI 无需回退。
+
+# 车牌 CJ/RJ2/RJ3 平铺接口（2026-07-03）
+
+## 当前阶段
+
+- [x] DLL/Proxy 不感知方向，只提供 CJ、RJ2、RJ3 平铺接口。
+- [x] 三路外部预览与三路本地调试预览可分别建立会话。
+- [x] Native、C# Proxy、测试项目编译及车牌配置单元测试完成。
+- [ ] 真实车牌相机和第三方程序联调待执行。
+
+## 本次修改内容
+
+1. 删除旧 `StartPlatePreview/StopPlatePreview` DLL 导出，新增 `Start/StopPlatePreviewCJ`、`Start/StopPlatePreviewRJ2`、`Start/StopPlatePreviewRJ3`，保持 `__stdcall` 和 `HWND` 参数类型。
+2. DLL 将三路状态拆分为独立配置、`request_id`、HWND 和运行标记；Proxy 重启恢复、宿主失效清理及 `ReleaseSdk` 停止均逐路处理。
+3. Proxy 新增 `/preview/plate/cj|rj2|rj3/start|stop` 六个平铺路由，不读取、不推断 `Direction`。
+4. `PreviewManager` 使用 `PlateCJ`、`PlateRJ2`、`PlateRJ3` 三个资源键，避免启动或停止一路时覆盖其他车牌会话。
+5. `preview.plate` 改为 `cj`、`rj2`、`rj3` 三个独立配置节点；每个节点分别配置 RTSP 地址、认证和主/子码流。
+6. Proxy 管理界面增加三组独立启停按钮和三块预览区域；C# 第三方 Demo 的 P/Invoke 声明同步更新。
+7. 接口头文件、导出表、README 和两份第三方调用说明同步更新。
+
+## 涉及文件
+
+- `include/HZCYKJTHardWare.h`、`HZCYKJTHardWare.def`：六个新导出声明，移除两个旧符号。
+- `src/config_manager.*`、`src/hzsjkjt_context.*`：三路配置和运行状态。
+- `src/delphi_proxy.*`、`src/exports.cpp`、`src/event_dispatcher.cpp`：平铺路由、租约、回调和释放。
+- `Infrastructure/AppConfig.cs`、`Preview/PreviewManager.cs`、`Server/DllCommandHandler.cs`：三路 Proxy 配置、会话和 HTTP 路由。
+- `Server/Coordinator/BizOperationHandler.cs`、`MainForm.cs`、`MainForm.Designer.cs`：三路本地调试操作及界面。
+- `HZCYKJTHardWare.json`、两份 Demo JSON：三路配置模板。
+- `PlatePreviewConfigurationTests.cs`：三路配置隔离和 URL 测试。
+- `README.md`、两份第三方调用说明：新 ABI 和调用组合说明。
+
+## 兼容性说明
+
+- 外部接口：旧车牌导出符号按需求删除；第三方必须重新编译并切换到新接口。
+- 调用约定：新函数继续使用 Win32 `__stdcall`；Start 参数仍为一个稳定的专用 `HWND`。
+- 方向组合：方向 1 由第三方调用 CJ；方向 2 由第三方分别传入两个 HWND 调用 RJ2、RJ3。
+- 配置文件：旧单节点 `preview.plate.enabled/host/...` 不再读取，部署时必须迁移到三个子节点。
+- 回调和错误码：继续使用 `plate_image`、1901/1902/1903 及现有返回码；通过唯一 `request_id` 区分三路。
+- 平台和依赖：继续使用 DLL Win32/x86、C# Proxy .NET Framework 4.6/x86，未新增依赖。
+
+## 风险与注意事项
+
+1. RJ2、RJ3 同时预览会建立两路 RTSP 连接并增加 x86 Proxy 的 CPU、内存和 VLC 解码负载。
+2. 三个 Start 接口必须传入三个相互独立、生命周期稳定的 HWND；复用同一个 HWND 会产生渲染竞争。
+3. 旧 DLL 符号已删除，未升级的第三方程序会在加载或调用时失败。
+4. 当前只完成无真实相机验证；认证失败、断流、相机重启和并发释放仍需现场验证。
+
+## 验证状态
+
+- [x] DLL `Release|Win32`：通过，0 警告、0 错误。
+- [x] DLL 导出表：24 个符号；CJ/RJ2/RJ3 六个新符号存在，旧车牌符号不存在。
+- [x] C# Proxy/Test `Release|x86|net46` 独立输出：通过，0 警告、0 错误。
+- [x] C# 第三方 Demo `Release|x86|net46` 独立输出：通过，0 警告、0 错误。
+- [x] 车牌配置和 URL 单元测试：4/4 通过。
+- [!] 全量测试：50/57 通过；7 项集成测试因当前测试宿主不支持 `HttpListener` 未执行成功。
+- [x] `git diff --check`：通过（仅保留工作区既有 LF/CRLF 提示）。
+- [ ] Proxy 管理界面实际启动和三块 Panel 布局：待人工验证。
+- [ ] 真实 CJ 单路、RJ2+RJ3 双路、独立停止、Proxy 重启恢复和 SDK 释放：待验证。
+
+## 下一步计划
+
+- [ ] 填写三路相机配置并分别验证主码流/子码流及认证失败提示。
+- [ ] 方向 2 同时启动 RJ2、RJ3，分别停止其中一路并确认另一路持续播放。
+- [ ] 连续执行 20 次三路启停、第三方窗口关闭和 Proxy 重启。
+- [ ] 记录 2 小时/24 小时 CPU、Private Bytes、线程、句柄和相机连接数。
+
+## 回退方式
+
+- 代码回退时仅反向撤销本节列出的三路平铺修改，不覆盖工作区此前已有改动。
+- 配置回退时恢复旧单节点 `preview.plate`；如仅需现场禁用，分别设置 `cj/rj2/rj3.enabled=false`。
+- 回退到旧 DLL 时第三方程序也必须恢复调用旧 `StartPlatePreview/StopPlatePreview`，DLL 与调用方必须成套部署。
+
+# Proxy 车牌预览界面汉化与布局优化（2026-07-03）
+
+## 当前阶段
+
+- [x] 预览控制区域拥挤和英文函数名已处理。
+- [x] 车牌业务名称、占位提示及日志已汉化。
+- [x] C# Proxy 编译验证完成。
+- [ ] 真实窗口、高 DPI 和多分辨率视觉验证待执行。
+
+## 本次修改内容
+
+1. 将 `StartPlatePreviewCJ/RJ2/RJ3` 按钮文案改为“出境车牌预览”和“入境车牌预览 2/3”，不向管理用户暴露内部函数名。
+2. 车牌预览 Panel 占位提示和启停日志同步使用相同业务名称。
+3. 顶部三张控制卡片高度由 332 调整为 380，预览控制六行按钮获得更多垂直空间。
+4. 上下两排预览 Panel 增加间距，避免黑色预览区域视觉粘连。
+5. 相应下移预览区和日志区；窗口总尺寸及视频区域高度保持不变。
+
+## 涉及文件
+
+- `MainForm.cs`：按钮文案、业务名称映射、日志文案和 Panel 间距。
+- `MainForm.Designer.cs`：控制卡片高度、区域位置和占位提示。
+- `todo.md`、`PROGRESS.md`：记录修改与验证状态。
+
+## 兼容性说明
+
+- DLL 导出函数、`__stdcall`、错误码和回调结构：未改变。
+- Proxy HTTP 路由及 CJ/RJ2/RJ3 会话逻辑：未改变。
+- JSON 配置结构和部署方式：未改变。
+- C# Proxy 继续使用 `.NET Framework 4.6/x86`，未新增依赖。
+
+## 风险与注意事项
+
+1. 顶部控制区域增加 48 像素后，日志显示区相应减少 48 像素。
+2. 当前未替换正在运行的旧 Proxy，需启动新构建后确认现场 DPI 下的实际效果。
+3. 入境镜头通过数字 2/3 区分，内部接口名仍保持 RJ2/RJ3，不影响第三方调用。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46` 独立输出：通过，0 警告、0 错误。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 提示。
+- [ ] 预览控制按钮无重叠：待启动新 Proxy 人工确认。
+- [ ] 100%、125%、150%、200% DPI：待验证。
+
+## 下一步计划
+
+- [ ] 退出当前旧 Proxy，部署并启动新构建。
+- [ ] 核对六行预览控制按钮、三块车牌占位提示和实时日志区域。
+- [ ] 分别在常用 DPI 下调整窗口大小，确认文字不截断、不重叠。
+
+## 回退方式
+
+- 恢复 `MainForm.cs` 中旧按钮/日志文案及 Panel Margin。
+- 恢复 `MainForm.Designer.cs` 中顶部区域高度、位置和旧占位提示。
+- DLL、配置及第三方程序无需回退。
+
+# Proxy 长期运行 UI 日志无响应优化（2026-07-03）
+
+## 当前阶段
+
+- [x] 完成长时间日志量与 UI 刷新链路排查。
+- [x] 按最小改动方案完成 UI 日志汇总、批量插入、批量裁剪和 Undo 缓冲限制。
+- [x] 完成 x86 Release 编译、现有测试和 10 万行 UI 日志回放。
+- [ ] 现场 24～48 小时长稳验证待执行。
+
+## 本次修改内容
+
+1. 人脸和指纹“图片保存成功”明细继续完整写入磁盘日志，UI 改为每秒显示一条成功数量汇总。
+2. 同一批次且颜色相同的日志合并为一次 `RichTextBox` 写入，避免逐行执行 `Select/SelectedText`。
+3. 实时日志超过 3300 行后批量裁剪回 3000 行，避免达到上限后每次刷新都从文本头部删除少量行。
+4. 历史日志由逐行插入改为按颜色分组批量插入；返回实时模式时强制裁剪到 3000 行。
+5. 将 RichEdit Undo 上限设为 0，避免只读日志控件长期积累无用途的编辑历史。
+
+## 涉及文件
+
+- `MainForm.cs`：UI 日志汇总、批量格式化、批量裁剪和 Undo 设置。
+- `PROGRESS.md`：本次修改、兼容性、验证及回退记录。
+
+## 兼容性说明
+
+- DLL 导出名、参数、`__stdcall`、错误码和回调结构：未改变。
+- Proxy HTTP 请求/响应格式、终端通信和业务队列：未改变。
+- 磁盘日志：成功明细保持不变；仅管理界面改为按秒汇总显示。
+- 配置文件、部署方式、x86 和 `.NET Framework 4.6`：未改变。
+- 未新增第三方依赖。
+
+## 风险与注意事项
+
+1. 管理界面不再逐条显示人脸/指纹成功日志，排查单笔明细时应查看 EXE 磁盘日志。
+2. 实时日志窗口允许在两次批量裁剪之间短暂增长到 3300 行，这是为减少头部删除次数的预期行为。
+3. 本次压力回放验证了 UI 控件处理路径，但不能替代真实设备、预览解码和终端通信同时运行的现场长稳测试。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46`：通过，0 警告、0 错误。
+- [x] 测试项目 `Release|x86|net46`：通过，0 警告、0 错误。
+- [x] 非集成测试：50 项通过。
+- [!] 7 项集成测试：测试宿主构造 `HttpListener` 时抛出 `PlatformNotSupportedException`，与本次 UI 日志代码无关。
+- [x] UI 日志压力回放：100,000 行通过，复跑总耗时 71,072 ms，单批 100 行最大耗时 164 ms。
+- [x] 高频日志汇总：人脸 1000 条、指纹 1000 条正确生成汇总。
+- [x] 历史日志：500 行批量插入和返回实时模式通过。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 提示。
+- [ ] 真实业务按钮、自动滚动、错误着色和“仅错误”筛选：待人工界面验证。
+- [ ] 24～48 小时设备长稳及 UI 响应：待验证。
+
+## 下一步计划
+
+- [ ] 使用新构建运行真实人脸/指纹抓拍，确认 UI 每秒汇总且磁盘明细完整。
+- [ ] 压力期间反复点击流程、切换和预览按钮，记录最长 UI 响应时间。
+- [ ] 连续运行 24～48 小时，记录 CPU、Private Bytes、线程、Handle、GDI 对象和 UI 队列长度。
+
+## 回退方式
+
+- 仅反向撤销 `MainForm.cs` 中本节对应的日志汇总、批量插入、批量裁剪和 Undo 设置。
+- `Logger.cs`、DLL、配置和第三方程序均无需回退。
+
+# Proxy 日志字体与重绘一致性（2026-07-03）
+
+## 当前阶段
+
+- [x] 日志字体统一和同步重绘修改完成。
+- [x] C# Proxy x86 Release 编译完成。
+- [ ] 实际窗口和不同 DPI 视觉验证待执行。
+
+## 本次修改内容
+
+1. 日志字体由不包含中文字形的 `Consolas` 改为 `Microsoft YaHei 9F Regular`，避免中文回退到其他字体造成粗细不一致。
+2. `WM_SETREDRAW` 恢复后增加 `Update()`，立即完成 RichTextBox 重绘，减少快速刷新时的重绘残影。
+3. 设计器与运行时使用同一字体，避免控件创建和后续日志插入采用不同字体。
+
+## 涉及文件
+
+- `MainForm.cs`：运行时日志字体和同步重绘。
+- `MainForm.Designer.cs`：设计器日志字体。
+- `PROGRESS.md`：本次修改和验证记录。
+
+## 兼容性说明
+
+- DLL、Proxy HTTP、配置、磁盘日志、错误码和第三方调用行为：未改变。
+- 继续使用 `.NET Framework 4.6/x86`，未新增依赖。
+- `Microsoft YaHei` 已在当前构建环境解析为 `Regular 9F`；字体为非等宽字体，长路径不再按字符列严格对齐。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46`：通过，0 警告、0 错误。
+- [x] 字体解析：`Microsoft YaHei -> Microsoft YaHei, Regular, 9F`。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 提示。
+- [ ] 实际窗口中文、英文、数字粗细一致性：待人工验证。
+- [ ] 100%、125%、150%、200% DPI 和持续日志刷新：待验证。
+
+## 回退方式
+
+- 将 `MainForm.cs` 和 `MainForm.Designer.cs` 的日志字体恢复为 `Consolas 9F`。
+- 移除 `EndLogUpdate()` 中新增的 `memoLog.Update()`；其他日志性能优化不需要回退。
+
+# Proxy 历史日志插入错位修复（2026-07-03）
+
+## 当前阶段
+
+- [x] `[2[2026...` / `026-07-03...` 日志拆分问题已复现并修复。
+- [x] 针对性 UI 回归测试通过。
+- [ ] 新版本部署和现场界面确认待执行。
+
+## 本次修改内容
+
+1. 确认问题发生在历史日志按颜色分组插入时：字符串换行长度与 RichEdit 选择索引不属于同一坐标体系，黄色警告日志被插入到下一条实时日志的第 2 个字符之后。
+2. 每个颜色分组插入完成后，改用 `SelectionStart` 获取 RichEdit 的真实插入终点，作为下一分组的插入位置。
+3. 新增回归测试：先写入实时日志，再向头部插入两条普通历史日志和一条黄色警告日志，验证四条日志的内容和顺序完全一致。
+
+## 涉及文件
+
+- `MainForm.cs`：修正批量格式化日志的插入位置计算。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：新增日志顺序回归测试。
+- `PROGRESS.md`：本次修复和验证记录。
+
+## 兼容性说明
+
+- 磁盘日志、DLL、Proxy HTTP、配置、颜色规则和第三方调用行为：未改变。
+- 仅修正管理界面历史日志与实时日志混合显示时的字符位置。
+- 未新增依赖，继续使用 `.NET Framework 4.6/x86`。
+
+## 验证状态
+
+- [x] Proxy `Release|x86|net46` Compile：通过，0 警告、0 错误。
+- [x] 定向回归测试 `PrependHistoryLines_WithColorChange_DoesNotSplitActiveLine`：1/1 通过。
+- [x] 回归测试修复前精确复现：警告行前出现 `[2`，下一实时行从 `026-07-03` 开始。
+- [x] 修复后日志内容、顺序和时间戳均完整。
+- [ ] 正在运行的旧 Proxy 未替换；重启新构建后待人工确认。
+
+## 回退方式
+
+- 恢复 `InsertFormattedLines()` 原插入位置累计方式，并删除对应 UI 回归测试；其他日志性能和字体修改无需回退。

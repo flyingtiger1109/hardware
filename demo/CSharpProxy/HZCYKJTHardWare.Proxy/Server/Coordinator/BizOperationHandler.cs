@@ -210,10 +210,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         {
             if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
                 return (false, "");
-            return await CaptureFingerprintAsync(saveDir, routeEpoch).ConfigureAwait(false);
+            return await CaptureFingerprintAsync(saveDir, null, routeEpoch).ConfigureAwait(false);
         }
 
-        internal async Task<(bool ok, string path)> CaptureFingerprintAsync(string saveDir,
+        internal async Task<(bool ok, string path)> CaptureFingerprintAsync(string saveDir, string saveDirHk,
             TerminalRouteEpochSnapshot routeEpoch)
         {
             if (routeEpoch == null || routeEpoch.IsCancellationRequested)
@@ -251,7 +251,34 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 _log("[指纹抓拍] 图片保存成功");
             else
                 _log("[指纹抓拍] 抓拍失败：未获取有效图片或终端请求失败");
+
+            // 无畸变图保存（独立于主图，失败不影响主流程）
+            if (!string.IsNullOrEmpty(saveDirHk))
+                SaveUndistortedFingerprintImage(response, saveDirHk, requestId);
+
             return (!string.IsNullOrEmpty(savePath), savePath);
+        }
+
+        private void SaveUndistortedFingerprintImage(string terminalJson, string saveDirHk, string requestId)
+        {
+            try
+            {
+                var undistortedB64 = JsonHelper.ExtractString(terminalJson, "undistorted_image_base64");
+                if (string.IsNullOrEmpty(undistortedB64))
+                {
+                    Logger.Debug("[无畸变] 终端响应中无 undistorted_image_base64 字段");
+                    return;
+                }
+                var path = FileSaver.SaveRawGrayscaleAsBmp(undistortedB64, saveDirHk, requestId, 544, 352);
+                if (!string.IsNullOrEmpty(path))
+                    _log("[无畸变] 图片保存成功: " + path);
+                else
+                    _log("[无畸变] 图片保存失败");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("[无畸变] 图片保存异常", ex);
+            }
         }
 
         // ====== Async Resources ======
@@ -400,8 +427,37 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         // ====== Previews ======
 
+        private static bool TryResolvePlatePreview(string resourceType,
+            out PreviewResourceType previewType, out string plateCode)
+        {
+            switch (resourceType)
+            {
+                case "plate_cj": previewType = PreviewResourceType.PlateCJ; plateCode = "cj"; return true;
+                case "plate_rj2": previewType = PreviewResourceType.PlateRJ2; plateCode = "rj2"; return true;
+                case "plate_rj3": previewType = PreviewResourceType.PlateRJ3; plateCode = "rj3"; return true;
+                default: previewType = default(PreviewResourceType); plateCode = ""; return false;
+            }
+        }
+
         internal async Task<bool> StartLocalPreviewAsync(string resourceType, Control panel)
         {
+            PreviewResourceType platePreviewType;
+            string plateCode;
+            if (TryResolvePlatePreview(resourceType, out platePreviewType, out plateCode))
+            {
+                var previewUrl = AppConfig.Instance.GetPlatePreviewUrl(plateCode);
+                if (string.IsNullOrWhiteSpace(previewUrl))
+                {
+                    _log("[车牌预览] preview.plate 未启用或配置不完整");
+                    return false;
+                }
+
+                return await _previewManager.StartPreview(platePreviewType,
+                    PreviewSessionType.Local, IntPtr.Zero, "", panel,
+                    explicitPreviewUrl: previewUrl, terminalBound: false,
+                    directRenderTarget: false).ConfigureAwait(false);
+            }
+
             if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
                 return false;
             PreviewResourceType resType;
@@ -420,6 +476,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal void StopLocalPreview(string resourceType)
         {
+            PreviewResourceType platePreviewType;
+            string plateCode;
+            if (TryResolvePlatePreview(resourceType, out platePreviewType, out plateCode))
+            {
+                _previewManager.StopPreview(platePreviewType, PreviewSessionType.Local);
+                return;
+            }
+
             PreviewResourceType resType;
             switch (resourceType)
             {

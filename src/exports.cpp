@@ -21,6 +21,11 @@
 // Export function implementations use small body helpers so SEH wrappers do not
 // span C++ object lifetimes.
 
+using HZCYKJTHardWare::HzsjkjtContext;
+using HZCYKJTHardWare::PlatePreviewCameraConfig;
+using HZCYKJTHardWare::PlatePreviewChannel;
+using HZCYKJTHardWare::PlatePreviewState;
+
 // (BusyGuard removed — C# Proxy Scheduler handles concurrency)
 
 struct SwitchPendingScope {
@@ -442,6 +447,366 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
     return false;
 }
 
+static const char* PlatePreviewCode(PlatePreviewChannel channel) {
+    switch (channel) {
+        case PlatePreviewChannel::RJ2: return "rj2";
+        case PlatePreviewChannel::RJ3: return "rj3";
+        case PlatePreviewChannel::CJ:
+        default: return "cj";
+    }
+}
+
+static const char* PlatePreviewDisplayName(PlatePreviewChannel channel) {
+    switch (channel) {
+        case PlatePreviewChannel::RJ2: return "RJ2";
+        case PlatePreviewChannel::RJ3: return "RJ3";
+        case PlatePreviewChannel::CJ:
+        default: return "CJ";
+    }
+}
+
+static PlatePreviewState& GetPlatePreviewState(HzsjkjtContext& ctx,
+                                               PlatePreviewChannel channel) {
+    switch (channel) {
+        case PlatePreviewChannel::RJ2: return ctx.plate_preview_rj2;
+        case PlatePreviewChannel::RJ3: return ctx.plate_preview_rj3;
+        case PlatePreviewChannel::CJ:
+        default: return ctx.plate_preview_cj;
+    }
+}
+
+struct ExternalPreviewLeaseSnapshot {
+    bool cameraActive = false;
+    bool fingerprintActive = false;
+    bool plateCJActive = false;
+    bool plateRJ2Active = false;
+    bool plateRJ3Active = false;
+    std::string cameraRequestId;
+    std::string fingerprintRequestId;
+    std::string plateCJRequestId;
+    std::string plateRJ2RequestId;
+    std::string plateRJ3RequestId;
+    intptr_t cameraHwnd = 0;
+    intptr_t fingerprintHwnd = 0;
+    intptr_t plateCJHwnd = 0;
+    intptr_t plateRJ2Hwnd = 0;
+    intptr_t plateRJ3Hwnd = 0;
+    std::string callbackUrl;
+};
+
+static ExternalPreviewLeaseSnapshot CaptureExternalPreviewLeases() {
+    using namespace HZCYKJTHardWare;
+
+    ExternalPreviewLeaseSnapshot snapshot;
+    std::string invalidCameraRequestId;
+    std::string invalidFingerprintRequestId;
+    std::string invalidPlateCJRequestId;
+    std::string invalidPlateRJ2RequestId;
+    std::string invalidPlateRJ3RequestId;
+    {
+        auto lock = ReadLock();
+        auto& ctx = HzsjkjtContext::Instance();
+        if (!ctx.initialized || ctx.switch_pending.load()) {
+            return snapshot;
+        }
+
+        snapshot.callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+        if (ctx.camera_preview_running) {
+            HWND hwnd = reinterpret_cast<HWND>(ctx.camera_preview_third_party_hwnd);
+            if (hwnd && IsWindow(hwnd)) {
+                snapshot.cameraActive = true;
+                snapshot.cameraRequestId = ctx.camera_preview_request_id;
+                snapshot.cameraHwnd = ctx.camera_preview_third_party_hwnd;
+            } else {
+                invalidCameraRequestId = ctx.camera_preview_request_id;
+            }
+        }
+        if (ctx.fingerprint_preview_running) {
+            HWND hwnd = reinterpret_cast<HWND>(ctx.fingerprint_preview_third_party_hwnd);
+            if (hwnd && IsWindow(hwnd)) {
+                snapshot.fingerprintActive = true;
+                snapshot.fingerprintRequestId = ctx.fingerprint_preview_request_id;
+                snapshot.fingerprintHwnd = ctx.fingerprint_preview_third_party_hwnd;
+            } else {
+                invalidFingerprintRequestId = ctx.fingerprint_preview_request_id;
+            }
+        }
+        auto capturePlate = [](const PlatePreviewState& state,
+                               bool& active,
+                               std::string& requestId,
+                               intptr_t& targetHwnd,
+                               std::string& invalidRequestId) {
+            if (!state.running) return;
+            HWND hwnd = reinterpret_cast<HWND>(state.third_party_hwnd);
+            if (hwnd && IsWindow(hwnd)) {
+                active = true;
+                requestId = state.request_id;
+                targetHwnd = state.third_party_hwnd;
+            } else {
+                invalidRequestId = state.request_id;
+            }
+        };
+        capturePlate(ctx.plate_preview_cj, snapshot.plateCJActive,
+            snapshot.plateCJRequestId, snapshot.plateCJHwnd, invalidPlateCJRequestId);
+        capturePlate(ctx.plate_preview_rj2, snapshot.plateRJ2Active,
+            snapshot.plateRJ2RequestId, snapshot.plateRJ2Hwnd, invalidPlateRJ2RequestId);
+        capturePlate(ctx.plate_preview_rj3, snapshot.plateRJ3Active,
+            snapshot.plateRJ3RequestId, snapshot.plateRJ3Hwnd, invalidPlateRJ3RequestId);
+    }
+
+    if (!invalidCameraRequestId.empty() || !invalidFingerprintRequestId.empty() ||
+        !invalidPlateCJRequestId.empty() || !invalidPlateRJ2RequestId.empty() ||
+        !invalidPlateRJ3RequestId.empty()) {
+        auto lock = WriteLock();
+        auto& ctx = HzsjkjtContext::Instance();
+        if (!invalidCameraRequestId.empty() &&
+            ctx.camera_preview_request_id == invalidCameraRequestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+            LOG_WARN("预览租约", "摄像头预览宿主HWND已失效，已清理DLL租约：request_id=%s",
+                     invalidCameraRequestId.c_str());
+        }
+        if (!invalidFingerprintRequestId.empty() &&
+            ctx.fingerprint_preview_request_id == invalidFingerprintRequestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+            LOG_WARN("预览租约", "指纹预览宿主HWND已失效，已清理DLL租约：request_id=%s",
+                     invalidFingerprintRequestId.c_str());
+        }
+        auto clearInvalidPlate = [](PlatePreviewState& state,
+                                    const std::string& invalidRequestId,
+                                    const char* plateCode) {
+            if (invalidRequestId.empty() || state.request_id != invalidRequestId) return;
+            state.running = false;
+            state.request_id.clear();
+            state.third_party_hwnd = 0;
+            LOG_WARN("预览租约", "车牌%s预览宿主HWND已失效，已清理DLL租约：request_id=%s",
+                     plateCode, invalidRequestId.c_str());
+        };
+        clearInvalidPlate(ctx.plate_preview_cj, invalidPlateCJRequestId, "CJ");
+        clearInvalidPlate(ctx.plate_preview_rj2, invalidPlateRJ2RequestId, "RJ2");
+        clearInvalidPlate(ctx.plate_preview_rj3, invalidPlateRJ3RequestId, "RJ3");
+    }
+    return snapshot;
+}
+
+class ExternalPreviewLeaseMonitor {
+public:
+    static ExternalPreviewLeaseMonitor& Instance() {
+        // Deliberately process-lifetime: joining a worker from CRT teardown while
+        // the Windows loader lock is held can deadlock. ReleaseSdk stops it explicitly.
+        static ExternalPreviewLeaseMonitor* monitor = new ExternalPreviewLeaseMonitor();
+        return *monitor;
+    }
+
+    void Start(const std::string& proxyUrl,
+               const std::string& initialInstanceId,
+               int checkIntervalMs) {
+        Stop();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            proxyUrl_ = proxyUrl;
+            initialInstanceId_ = initialInstanceId;
+            intervalMs_ = checkIntervalMs < 250 ? 250 : checkIntervalMs;
+            stopping_ = false;
+            stateChanged_ = true;
+            running_ = true;
+            thread_ = std::thread([this]() { Run(); });
+        }
+        cv_.notify_one();
+    }
+
+    void NotifyStateChanged() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!running_) return;
+            stateChanged_ = true;
+        }
+        cv_.notify_one();
+    }
+
+    void Stop() {
+        std::thread worker;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!running_) return;
+            stopping_ = true;
+            stateChanged_ = true;
+            worker = std::move(thread_);
+        }
+        cv_.notify_one();
+        if (worker.joinable()) worker.join();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            running_ = false;
+            stopping_ = false;
+            stateChanged_ = false;
+            proxyUrl_.clear();
+            initialInstanceId_.clear();
+        }
+    }
+
+private:
+    static constexpr int kMonitorRequestTimeoutMs = 750;
+
+    ExternalPreviewLeaseMonitor() = default;
+    ~ExternalPreviewLeaseMonitor() = default;
+    ExternalPreviewLeaseMonitor(const ExternalPreviewLeaseMonitor&) = delete;
+    ExternalPreviewLeaseMonitor& operator=(const ExternalPreviewLeaseMonitor&) = delete;
+
+    void Run() {
+        std::string proxyUrl;
+        std::string lastInstanceId;
+        int intervalMs = 500;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            proxyUrl = proxyUrl_;
+            lastInstanceId = initialInstanceId_;
+            intervalMs = intervalMs_;
+        }
+
+        bool proxyWasUnavailable = false;
+        bool recoveryPending = false;
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this]() {
+                    return stopping_ || stateChanged_;
+                });
+                if (stopping_) return;
+                stateChanged_ = false;
+            }
+
+            ExternalPreviewLeaseSnapshot snapshot = CaptureExternalPreviewLeases();
+            if (!snapshot.cameraActive && !snapshot.fingerprintActive &&
+                !snapshot.plateCJActive && !snapshot.plateRJ2Active &&
+                !snapshot.plateRJ3Active) {
+                recoveryPending = false;
+                continue;
+            }
+
+            HZCYKJTHardWare::DelphiProxy proxy(proxyUrl);
+            std::string currentInstanceId;
+            if (!proxy.GetInstanceId(currentInstanceId, kMonitorRequestTimeoutMs)) {
+                if (!proxyWasUnavailable) {
+                    LOG_WARN("预览租约", "C# Proxy实例暂不可用，保留外部预览租约等待恢复");
+                }
+                proxyWasUnavailable = true;
+                continue;
+            }
+
+            if (lastInstanceId.empty()) {
+                lastInstanceId = currentInstanceId;
+                proxyWasUnavailable = false;
+                continue;
+            }
+
+            if (!proxyWasUnavailable && !recoveryPending &&
+                currentInstanceId == lastInstanceId) {
+                continue;
+            }
+
+            LOG_INFO("预览租约", "检测到C# Proxy实例恢复或变更，正在重建外部预览：old=%s，new=%s",
+                     lastInstanceId.c_str(), currentInstanceId.c_str());
+            bool restored = true;
+            if (snapshot.cameraActive) {
+                restored = proxy.StartCameraPreview(snapshot.cameraRequestId,
+                    snapshot.cameraHwnd, snapshot.callbackUrl,
+                    kMonitorRequestTimeoutMs) && restored;
+            }
+            if (snapshot.fingerprintActive) {
+                restored = proxy.StartFingerprintPreview(snapshot.fingerprintRequestId,
+                    snapshot.fingerprintHwnd, snapshot.callbackUrl,
+                    kMonitorRequestTimeoutMs) && restored;
+            }
+            if (snapshot.plateCJActive) {
+                restored = proxy.StartPlatePreview("cj", snapshot.plateCJRequestId,
+                    snapshot.plateCJHwnd, snapshot.callbackUrl,
+                    kMonitorRequestTimeoutMs) && restored;
+            }
+            if (snapshot.plateRJ2Active) {
+                restored = proxy.StartPlatePreview("rj2", snapshot.plateRJ2RequestId,
+                    snapshot.plateRJ2Hwnd, snapshot.callbackUrl,
+                    kMonitorRequestTimeoutMs) && restored;
+            }
+            if (snapshot.plateRJ3Active) {
+                restored = proxy.StartPlatePreview("rj3", snapshot.plateRJ3RequestId,
+                    snapshot.plateRJ3Hwnd, snapshot.callbackUrl,
+                    kMonitorRequestTimeoutMs) && restored;
+            }
+
+            proxyWasUnavailable = false;
+            recoveryPending = !restored;
+            if (restored) {
+                lastInstanceId = currentInstanceId;
+                LOG_INFO("预览租约", "C# Proxy重启后的外部预览重建请求已受理");
+            } else {
+                LOG_WARN("预览租约", "外部预览重建请求未全部受理，将继续重试");
+            }
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::thread thread_;
+    bool running_ = false;
+    bool stopping_ = false;
+    bool stateChanged_ = false;
+    int intervalMs_ = 500;
+    std::string proxyUrl_;
+    std::string initialInstanceId_;
+};
+
+static void StopProxyExternalPreviewsOnRelease() {
+    using namespace HZCYKJTHardWare;
+
+    std::string proxyUrl;
+    std::string cameraRequestId;
+    std::string fingerprintRequestId;
+    std::string plateCJRequestId;
+    std::string plateRJ2RequestId;
+    std::string plateRJ3RequestId;
+    {
+        auto lock = ReadLock();
+        auto& ctx = HzsjkjtContext::Instance();
+        proxyUrl = ctx.delphi_server_url;
+        if (ctx.camera_preview_running)
+            cameraRequestId = ctx.camera_preview_request_id;
+        if (ctx.fingerprint_preview_running)
+            fingerprintRequestId = ctx.fingerprint_preview_request_id;
+        if (ctx.plate_preview_cj.running)
+            plateCJRequestId = ctx.plate_preview_cj.request_id;
+        if (ctx.plate_preview_rj2.running)
+            plateRJ2RequestId = ctx.plate_preview_rj2.request_id;
+        if (ctx.plate_preview_rj3.running)
+            plateRJ3RequestId = ctx.plate_preview_rj3.request_id;
+    }
+
+    if (proxyUrl.empty()) return;
+    DelphiProxy proxy(proxyUrl);
+    if (!cameraRequestId.empty() &&
+        !proxy.StopCameraPreview(cameraRequestId, 750)) {
+        LOG_WARN("预览租约", "ReleaseSdk停止Proxy摄像头预览失败，继续执行本地释放：request_id=%s",
+                 cameraRequestId.c_str());
+    }
+    if (!fingerprintRequestId.empty() &&
+        !proxy.StopFingerprintPreview(fingerprintRequestId, 750)) {
+        LOG_WARN("预览租约", "ReleaseSdk停止Proxy指纹预览失败，继续执行本地释放：request_id=%s",
+                 fingerprintRequestId.c_str());
+    }
+    auto stopPlate = [&proxy](const char* plateCode,
+                              const std::string& requestId) {
+        if (requestId.empty() || proxy.StopPlatePreview(plateCode, requestId, 750)) return;
+        LOG_WARN("预览租约", "ReleaseSdk停止Proxy车牌%s预览失败，继续执行本地释放：request_id=%s",
+                 plateCode, requestId.c_str());
+    };
+    stopPlate("cj", plateCJRequestId);
+    stopPlate("rj2", plateRJ2RequestId);
+    stopPlate("rj3", plateRJ3RequestId);
+}
+
 static int InitSdkBody() {
     using namespace HZCYKJTHardWare;
 
@@ -528,7 +893,28 @@ static int InitSdkBody() {
         ctx.rtsp_live_caching_ms = cfg.GetRtspLiveCachingMs();
         ctx.rtsp_transport = cfg.GetRtspTransport();
         ctx.preview_check_hwnd_interval_ms = cfg.GetCheckHwndIntervalMs();
+        auto loadPlateConfig = [&cfg](PlatePreviewState& state,
+                                      PlatePreviewChannel channel) {
+            const PlatePreviewCameraConfig& config = cfg.GetPlatePreviewConfig(channel);
+            state.enabled = config.enabled;
+            state.rtsp_url = cfg.BuildPlatePreviewUrl(channel);
+            state.stream_channel = config.stream_channel;
+        };
+        loadPlateConfig(ctx.plate_preview_cj, PlatePreviewChannel::CJ);
+        loadPlateConfig(ctx.plate_preview_rj2, PlatePreviewChannel::RJ2);
+        loadPlateConfig(ctx.plate_preview_rj3, PlatePreviewChannel::RJ3);
     }
+
+    auto warnInvalidPlateConfig = [&cfg](PlatePreviewChannel channel) {
+        const PlatePreviewCameraConfig& config = cfg.GetPlatePreviewConfig(channel);
+        if (config.enabled && cfg.BuildPlatePreviewUrl(channel).empty()) {
+            LOG_WARN("配置管理", "车牌%s预览已启用但相机host为空，启动接口将返回RTSP_URL_EMPTY",
+                     PlatePreviewDisplayName(channel));
+        }
+    };
+    warnInvalidPlateConfig(PlatePreviewChannel::CJ);
+    warnInvalidPlateConfig(PlatePreviewChannel::RJ2);
+    warnInvalidPlateConfig(PlatePreviewChannel::RJ3);
 
     std::string callbackHost = cfg.GetCallbackServerHost();
     if (callbackHost.empty()) {
@@ -585,6 +971,13 @@ static int InitSdkBody() {
         ctx.initialized = true;
     }
 
+    std::string proxyInstanceId;
+    if (!proxy.GetInstanceId(proxyInstanceId, 1000)) {
+        LOG_WARN("预览租约", "C# Proxy未返回实例标识，当前版本仍可使用，但Proxy重启自动恢复暂不可用");
+    }
+    ExternalPreviewLeaseMonitor::Instance().Start(delphiServerUrl,
+        proxyInstanceId, cfg.GetCheckHwndIntervalMs());
+
     LOG_INFO("接口", "初始化DLL成功");
 
     return HZCYKJTHardWare_RET_OK;
@@ -612,6 +1005,8 @@ static int ReleaseSdkBody() {
         LOG_ERROR("接口", "释放SDK失败：第三方事件回调线程未能在1000ms内退出");
         return HZCYKJTHardWare_RET_FAILED;
     }
+    ExternalPreviewLeaseMonitor::Instance().Stop();
+    StopProxyExternalPreviewsOnRelease();
     EventDispatcher::Instance().SetCallback(nullptr);
 
     PreviewManager::Instance().StopAllRenderers();
@@ -915,6 +1310,7 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
     LOG_INFO("接口", "摄像头预览已启动");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -952,6 +1348,7 @@ static int StopCameraPreviewBody() {
         }
     }
 
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
     LOG_INFO("接口", "摄像头预览已停止");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1016,6 +1413,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
     LOG_INFO("接口", "指纹预览已启动");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1053,6 +1451,7 @@ static int StopFingerprintPreviewBody() {
         }
     }
 
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
     LOG_INFO("接口", "指纹预览已停止");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1164,20 +1563,113 @@ static int StopIrisPreviewBody() {
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int StartPlatePreviewBody(void* hwnd) {
+static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     using namespace HZCYKJTHardWare;
     LOG_INFO("接口", "开始车牌预览");
-    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("接口", "代理模式暂不支持车牌预览：未定义HTTP端点，已拒绝调用");
-    return HZCYKJTHardWare_RET_UNSUPPORTED;
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+    if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
+        LOG_ERROR("接口", "启动车牌预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        return HZCYKJTHardWare_RET_INVALID_HWND;
+    }
+
+    const char* plateCode = PlatePreviewCode(channel);
+    const char* plateName = PlatePreviewDisplayName(channel);
+    const std::string requestPrefix =
+        std::string("HZCYKJTHardWare_PLATE_PREVIEW_") + plateName;
+    std::string requestId = GenerateSyncRequestId(requestPrefix.c_str());
+    std::string proxyUrl;
+    std::string callbackUrl;
+    int streamChannel = 101;
+    intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
+    {
+        auto lock = WriteLock();
+        PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
+        if (plateState.running) {
+            LOG_WARN("接口", "启动车牌预览失败：预览已运行，request_id=%s",
+                     plateState.request_id.c_str());
+            return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
+        }
+        if (!plateState.enabled) {
+            LOG_WARN("接口", "启动车牌%s预览失败：preview.plate.%s.enabled=false",
+                     plateName, plateCode);
+            return HZCYKJTHardWare_RET_UNSUPPORTED;
+        }
+        if (plateState.rtsp_url.empty()) {
+            LOG_ERROR("接口", "启动车牌%s预览失败：车牌相机RTSP配置不完整", plateName);
+            return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
+        }
+
+        proxyUrl = ctx.delphi_server_url;
+        callbackUrl = BuildCallbackUrl(ctx, "/preview-ready");
+        streamChannel = plateState.stream_channel;
+        plateState.running = true;
+        plateState.request_id = requestId;
+        plateState.third_party_hwnd = thirdPartyHwnd;
+    }
+
+    DelphiProxy proxy(proxyUrl);
+    if (!proxy.StartPlatePreview(plateCode, requestId, thirdPartyHwnd, callbackUrl)) {
+        LOG_ERROR("接口", "启动车牌预览失败：向C# Proxy下发外部渲染请求失败，request_id=%s，stream_channel=%d",
+                  requestId.c_str(), streamChannel);
+        auto lock = WriteLock();
+        PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
+        if (plateState.request_id == requestId) {
+            plateState.running = false;
+            plateState.request_id.clear();
+            plateState.third_party_hwnd = 0;
+        }
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
+    LOG_INFO("接口", "车牌预览请求已由C# Proxy受理：request_id=%s，stream_channel=%d，hwnd=%p",
+             requestId.c_str(), streamChannel, hwnd);
+    return HZCYKJTHardWare_RET_OK;
 }
 
-static int StopPlatePreviewBody() {
+static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     using namespace HZCYKJTHardWare;
     LOG_INFO("接口", "停止车牌预览");
-    if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("接口", "代理模式暂不支持停止车牌预览：未定义HTTP端点，已拒绝调用");
-    return HZCYKJTHardWare_RET_UNSUPPORTED;
+    auto& ctx = HzsjkjtContext::Instance();
+    if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
+
+    std::string requestId;
+    std::string proxyUrl;
+    const char* plateCode = PlatePreviewCode(channel);
+    {
+        auto lock = ReadLock();
+        const PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
+        if (!plateState.running) {
+            return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
+        }
+        requestId = plateState.request_id;
+        proxyUrl = ctx.delphi_server_url;
+    }
+
+    DelphiProxy proxy(proxyUrl);
+    if (!proxy.StopPlatePreview(plateCode, requestId)) {
+        LOG_ERROR("接口", "停止车牌预览失败：向C# Proxy下发停止请求失败，request_id=%s",
+                  requestId.c_str());
+        return HZCYKJTHardWare_RET_HTTP_FAILED;
+    }
+
+    {
+        auto lock = WriteLock();
+        PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
+        if (plateState.request_id == requestId) {
+            plateState.running = false;
+            plateState.request_id.clear();
+            plateState.third_party_hwnd = 0;
+        }
+    }
+
+    ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
+    PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_PLATE_IMAGE,
+        HZCYKJTHardWare_EVENT_PLATE_PREVIEW_STOPPED,
+        HZCYKJTHardWare_RET_OK, "", "plate preview stopped");
+    LOG_INFO("接口", "车牌预览已停止");
+    return HZCYKJTHardWare_RET_OK;
 }
 
 // ---- 鎶撴媿 ----
@@ -1221,7 +1713,7 @@ static int CaptureCameraImageBody(const char* saveDir) {
     return CaptureCameraImageDirect(saveDir);
 }
 
-static int CaptureFingerprintImageDirect(const char* saveDir) {
+static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDirHk) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "指纹抓拍");
     auto& ctx = HzsjkjtContext::Instance();
@@ -1236,7 +1728,14 @@ static int CaptureFingerprintImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
-    if (!proxy.CaptureFingerprint(requestId, saveRoot, savePath)) {
+    bool ok;
+    if (saveDirHk != nullptr && saveDirHk[0] != '\0') {
+        std::string saveDirHkRoot = ResolveCaptureTargetPath(saveDirHk, false);
+        ok = proxy.CaptureFingerprint(requestId, saveRoot, saveDirHkRoot, savePath);
+    } else {
+        ok = proxy.CaptureFingerprint(requestId, saveRoot, "", savePath);
+    }
+    if (!ok) {
         LOG_ERROR("接口", "指纹抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
@@ -1249,14 +1748,6 @@ static int CaptureFingerprintImageDirect(const char* saveDir) {
 
     LOG_INFO("接口", "指纹抓拍成功");
     return HZCYKJTHardWare_RET_OK;
-}
-
-static int CaptureFingerprintImageBody(const char* saveDir) {
-    if (IsSwitchPending()) {
-        LOG_WARN("接口", "指纹抓拍被终端切换拦截");
-        return HZCYKJTHardWare_RET_DEVICE_BUSY;
-    }
-    return CaptureFingerprintImageDirect(saveDir);
 }
 
 static int CaptureIrisImageDirect(const char* saveDir) {
@@ -1446,6 +1937,7 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
     int timeoutMs = ctx.authorize_timeout_ms;
+    int httpTimeoutMs = 5000;  // HTTP request to proxy (fast accept, not full signing time)
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
 
@@ -1474,7 +1966,8 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
                                 XB ? XB : "",
                                 CSRQ ? CSRQ : "",
                                 KADM ? KADM : "",
-                                callbackUrl)) {
+                                callbackUrl,
+                                httpTimeoutMs)) {
         LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
@@ -1611,20 +2104,44 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopIrisPreview(v
     HZCY_GUARDED_EXPORT(StopIrisPreviewBody());
 }
 
-extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreview(void* hwnd) {
-    HZCY_GUARDED_EXPORT(StartPlatePreviewBody(hwnd));
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewCJ(void* hwnd) {
+    HZCY_GUARDED_EXPORT(StartPlatePreviewBody(PlatePreviewChannel::CJ, hwnd));
 }
 
-extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreview(void) {
-    HZCY_GUARDED_EXPORT(StopPlatePreviewBody());
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewCJ(void) {
+    HZCY_GUARDED_EXPORT(StopPlatePreviewBody(PlatePreviewChannel::CJ));
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ2(void* hwnd) {
+    HZCY_GUARDED_EXPORT(StartPlatePreviewBody(PlatePreviewChannel::RJ2, hwnd));
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ2(void) {
+    HZCY_GUARDED_EXPORT(StopPlatePreviewBody(PlatePreviewChannel::RJ2));
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ3(void* hwnd) {
+    HZCY_GUARDED_EXPORT(StartPlatePreviewBody(PlatePreviewChannel::RJ3, hwnd));
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ3(void) {
+    HZCY_GUARDED_EXPORT(StopPlatePreviewBody(PlatePreviewChannel::RJ3));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureCameraImage(const char* saveDir) {
     HZCY_GUARDED_EXPORT(CaptureCameraImageBody(saveDir));
 }
 
-extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir) {
-    HZCY_GUARDED_EXPORT(CaptureFingerprintImageBody(saveDir));
+static int CaptureFingerprintImageBody(const char* saveDir, const char* saveDirHk) {
+    if (IsSwitchPending()) {
+        LOG_WARN("接口", "指纹抓拍被终端切换拦截");
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    }
+    return CaptureFingerprintImageDirect(saveDir, saveDirHk);
+}
+
+extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir, const char* saveDirHk) {
+    HZCY_GUARDED_EXPORT(CaptureFingerprintImageBody(saveDir, saveDirHk));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureIrisImage(const char* saveDir) {

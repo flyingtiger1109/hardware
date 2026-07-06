@@ -57,6 +57,12 @@ namespace HZCYKJTHardWare.Proxy
             this.lblFingerprintPlaceholder = new System.Windows.Forms.Label();
             this.panelIris = new System.Windows.Forms.Panel();
             this.lblIrisPlaceholder = new System.Windows.Forms.Label();
+            this.panelPlateCJ = new System.Windows.Forms.Panel();
+            this.lblPlateCJPlaceholder = new System.Windows.Forms.Label();
+            this.panelPlateRJ2 = new System.Windows.Forms.Panel();
+            this.lblPlateRJ2Placeholder = new System.Windows.Forms.Label();
+            this.panelPlateRJ3 = new System.Windows.Forms.Panel();
+            this.lblPlateRJ3Placeholder = new System.Windows.Forms.Label();
             this.splitter2 = new System.Windows.Forms.Splitter();
             this.splitter1 = new System.Windows.Forms.Splitter();
             this.panelLog = new System.Windows.Forms.Panel();
@@ -84,8 +90,12 @@ namespace HZCYKJTHardWare.Proxy
             this.btnStopFingerprintPreview = new System.Windows.Forms.Button();
             this.btnStartIrisPreview = new System.Windows.Forms.Button();
             this.btnStopIrisPreview = new System.Windows.Forms.Button();
-            this.btnStartPlatePreview = new System.Windows.Forms.Button();
-            this.btnStopPlatePreview = new System.Windows.Forms.Button();
+            this.btnStartPlatePreviewCJ = new System.Windows.Forms.Button();
+            this.btnStopPlatePreviewCJ = new System.Windows.Forms.Button();
+            this.btnStartPlatePreviewRJ2 = new System.Windows.Forms.Button();
+            this.btnStopPlatePreviewRJ2 = new System.Windows.Forms.Button();
+            this.btnStartPlatePreviewRJ3 = new System.Windows.Forms.Button();
+            this.btnStopPlatePreviewRJ3 = new System.Windows.Forms.Button();
             this.btnAuthorize = new System.Windows.Forms.Button();
             this.panelHeader.SuspendLayout();
             this.headerLayout.SuspendLayout();
@@ -103,6 +113,9 @@ namespace HZCYKJTHardWare.Proxy
             this.panelCamera.SuspendLayout();
             this.panelFingerprint.SuspendLayout();
             this.panelIris.SuspendLayout();
+            this.panelPlateCJ.SuspendLayout();
+            this.panelPlateRJ2.SuspendLayout();
+            this.panelPlateRJ3.SuspendLayout();
             this.panelLog.SuspendLayout();
             this.panelLogToolbar.SuspendLayout();
             this.SuspendLayout();
@@ -331,7 +344,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelTop.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.panelTop.Name = "panelTop";
             this.panelTop.Padding = new System.Windows.Forms.Padding(40, 20, 40, 20);
-            this.panelTop.Size = new System.Drawing.Size(2360, 372);
+            this.panelTop.Size = new System.Drawing.Size(2360, 420);
             this.panelTop.TabIndex = 2;
             // 
             // cardLayout
@@ -349,7 +362,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardLayout.Name = "cardLayout";
             this.cardLayout.RowCount = 1;
             this.cardLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
-            this.cardLayout.Size = new System.Drawing.Size(2280, 332);
+            this.cardLayout.Size = new System.Drawing.Size(2280, 380);
             this.cardLayout.TabIndex = 0;
             // 
             // cardService
@@ -363,7 +376,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardService.Margin = new System.Windows.Forms.Padding(0, 0, 24, 0);
             this.cardService.Name = "cardService";
             this.cardService.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardService.Size = new System.Drawing.Size(735, 332);
+            this.cardService.Size = new System.Drawing.Size(735, 380);
             this.cardService.TabIndex = 0;
             // 
             // tlpService
@@ -399,7 +412,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardOperation.Margin = new System.Windows.Forms.Padding(0, 0, 24, 0);
             this.cardOperation.Name = "cardOperation";
             this.cardOperation.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardOperation.Size = new System.Drawing.Size(735, 332);
+            this.cardOperation.Size = new System.Drawing.Size(735, 380);
             this.cardOperation.TabIndex = 1;
             // 
             // tlpOperation
@@ -435,7 +448,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardPreviewControl.Margin = new System.Windows.Forms.Padding(0);
             this.cardPreviewControl.Name = "cardPreviewControl";
             this.cardPreviewControl.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardPreviewControl.Size = new System.Drawing.Size(762, 332);
+            this.cardPreviewControl.Size = new System.Drawing.Size(762, 380);
             this.cardPreviewControl.TabIndex = 2;
             // 
             // tlpPreviewControl
@@ -467,11 +480,11 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPreview.Controls.Add(this.splitter2);
             this.panelPreview.Controls.Add(this.splitter1);
             this.panelPreview.Dock = System.Windows.Forms.DockStyle.Top;
-            this.panelPreview.Location = new System.Drawing.Point(0, 600);
+            this.panelPreview.Location = new System.Drawing.Point(0, 648);
             this.panelPreview.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.panelPreview.Name = "panelPreview";
             this.panelPreview.Padding = new System.Windows.Forms.Padding(40, 0, 40, 16);
-            this.panelPreview.Size = new System.Drawing.Size(2360, 440);
+            this.panelPreview.Size = new System.Drawing.Size(2360, 520);
             this.panelPreview.TabIndex = 1;
             // 
             // previewLayout
@@ -487,13 +500,17 @@ namespace HZCYKJTHardWare.Proxy
             this.previewLayout.Controls.Add(this.panelCamera, 1, 0);
             this.previewLayout.Controls.Add(this.panelFingerprint, 3, 0);
             this.previewLayout.Controls.Add(this.panelIris, 5, 0);
+            this.previewLayout.Controls.Add(this.panelPlateCJ, 1, 1);
+            this.previewLayout.Controls.Add(this.panelPlateRJ2, 3, 1);
+            this.previewLayout.Controls.Add(this.panelPlateRJ3, 5, 1);
             this.previewLayout.Dock = System.Windows.Forms.DockStyle.Top;
             this.previewLayout.Location = new System.Drawing.Point(56, 0);
             this.previewLayout.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.previewLayout.Name = "previewLayout";
-            this.previewLayout.RowCount = 1;
-            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 420F));
-            this.previewLayout.Size = new System.Drawing.Size(2264, 420);
+            this.previewLayout.RowCount = 2;
+            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 250F));
+            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 250F));
+            this.previewLayout.Size = new System.Drawing.Size(2264, 500);
             this.previewLayout.TabIndex = 0;
             // 
             // panelCamera
@@ -507,7 +524,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelCamera.Location = new System.Drawing.Point(328, 0);
             this.panelCamera.Margin = new System.Windows.Forms.Padding(0);
             this.panelCamera.Name = "panelCamera";
-            this.panelCamera.Size = new System.Drawing.Size(520, 420);
+            this.panelCamera.Size = new System.Drawing.Size(520, 250);
             this.panelCamera.TabIndex = 0;
             this.panelCamera.Text = "摄像头预览";
             // 
@@ -520,7 +537,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCameraPlaceholder.Location = new System.Drawing.Point(0, 0);
             this.lblCameraPlaceholder.Margin = new System.Windows.Forms.Padding(6, 0, 6, 0);
             this.lblCameraPlaceholder.Name = "lblCameraPlaceholder";
-            this.lblCameraPlaceholder.Size = new System.Drawing.Size(518, 418);
+            this.lblCameraPlaceholder.Size = new System.Drawing.Size(518, 248);
             this.lblCameraPlaceholder.TabIndex = 0;
             this.lblCameraPlaceholder.Text = "摄像头未开启";
             this.lblCameraPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
@@ -536,7 +553,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelFingerprint.Location = new System.Drawing.Point(872, 0);
             this.panelFingerprint.Margin = new System.Windows.Forms.Padding(0);
             this.panelFingerprint.Name = "panelFingerprint";
-            this.panelFingerprint.Size = new System.Drawing.Size(520, 420);
+            this.panelFingerprint.Size = new System.Drawing.Size(520, 250);
             this.panelFingerprint.TabIndex = 1;
             this.panelFingerprint.Text = "指纹预览";
             // 
@@ -549,7 +566,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblFingerprintPlaceholder.Location = new System.Drawing.Point(0, 0);
             this.lblFingerprintPlaceholder.Margin = new System.Windows.Forms.Padding(6, 0, 6, 0);
             this.lblFingerprintPlaceholder.Name = "lblFingerprintPlaceholder";
-            this.lblFingerprintPlaceholder.Size = new System.Drawing.Size(518, 418);
+            this.lblFingerprintPlaceholder.Size = new System.Drawing.Size(518, 248);
             this.lblFingerprintPlaceholder.TabIndex = 0;
             this.lblFingerprintPlaceholder.Text = "指纹未开启";
             this.lblFingerprintPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
@@ -565,7 +582,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelIris.Location = new System.Drawing.Point(1416, 0);
             this.panelIris.Margin = new System.Windows.Forms.Padding(0);
             this.panelIris.Name = "panelIris";
-            this.panelIris.Size = new System.Drawing.Size(520, 420);
+            this.panelIris.Size = new System.Drawing.Size(520, 250);
             this.panelIris.TabIndex = 2;
             this.panelIris.Text = "虹膜预览";
             // 
@@ -578,17 +595,102 @@ namespace HZCYKJTHardWare.Proxy
             this.lblIrisPlaceholder.Location = new System.Drawing.Point(0, 0);
             this.lblIrisPlaceholder.Margin = new System.Windows.Forms.Padding(6, 0, 6, 0);
             this.lblIrisPlaceholder.Name = "lblIrisPlaceholder";
-            this.lblIrisPlaceholder.Size = new System.Drawing.Size(518, 418);
+            this.lblIrisPlaceholder.Size = new System.Drawing.Size(518, 248);
             this.lblIrisPlaceholder.TabIndex = 0;
             this.lblIrisPlaceholder.Text = "虹膜未开启";
             this.lblIrisPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            //
+            // panelPlateCJ
+            //
+            this.panelPlateCJ.BackColor = System.Drawing.Color.Black;
+            this.panelPlateCJ.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.panelPlateCJ.Controls.Add(this.lblPlateCJPlaceholder);
+            this.panelPlateCJ.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.panelPlateCJ.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.panelPlateCJ.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(209)))), ((int)(((byte)(213)))), ((int)(((byte)(219)))));
+            this.panelPlateCJ.Location = new System.Drawing.Point(328, 250);
+            this.panelPlateCJ.Margin = new System.Windows.Forms.Padding(0);
+            this.panelPlateCJ.Name = "panelPlateCJ";
+            this.panelPlateCJ.Size = new System.Drawing.Size(520, 250);
+            this.panelPlateCJ.TabIndex = 3;
+            this.panelPlateCJ.Text = "出境车牌预览";
+            //
+            // lblPlateCJPlaceholder
+            //
+            this.lblPlateCJPlaceholder.BackColor = System.Drawing.Color.Black;
+            this.lblPlateCJPlaceholder.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblPlateCJPlaceholder.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.lblPlateCJPlaceholder.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(107)))), ((int)(((byte)(114)))), ((int)(((byte)(128)))));
+            this.lblPlateCJPlaceholder.Location = new System.Drawing.Point(0, 0);
+            this.lblPlateCJPlaceholder.Margin = new System.Windows.Forms.Padding(6, 0, 6, 0);
+            this.lblPlateCJPlaceholder.Name = "lblPlateCJPlaceholder";
+            this.lblPlateCJPlaceholder.Size = new System.Drawing.Size(518, 248);
+            this.lblPlateCJPlaceholder.TabIndex = 0;
+            this.lblPlateCJPlaceholder.Text = "出境车牌预览未开启";
+            this.lblPlateCJPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            //
+            // panelPlateRJ2
+            //
+            this.panelPlateRJ2.BackColor = System.Drawing.Color.Black;
+            this.panelPlateRJ2.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.panelPlateRJ2.Controls.Add(this.lblPlateRJ2Placeholder);
+            this.panelPlateRJ2.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.panelPlateRJ2.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.panelPlateRJ2.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(209)))), ((int)(((byte)(213)))), ((int)(((byte)(219)))));
+            this.panelPlateRJ2.Location = new System.Drawing.Point(872, 250);
+            this.panelPlateRJ2.Margin = new System.Windows.Forms.Padding(0);
+            this.panelPlateRJ2.Name = "panelPlateRJ2";
+            this.panelPlateRJ2.Size = new System.Drawing.Size(520, 250);
+            this.panelPlateRJ2.TabIndex = 4;
+            this.panelPlateRJ2.Text = "入境车牌预览 2";
+            //
+            // lblPlateRJ2Placeholder
+            //
+            this.lblPlateRJ2Placeholder.BackColor = System.Drawing.Color.Black;
+            this.lblPlateRJ2Placeholder.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblPlateRJ2Placeholder.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.lblPlateRJ2Placeholder.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(107)))), ((int)(((byte)(114)))), ((int)(((byte)(128)))));
+            this.lblPlateRJ2Placeholder.Location = new System.Drawing.Point(0, 0);
+            this.lblPlateRJ2Placeholder.Name = "lblPlateRJ2Placeholder";
+            this.lblPlateRJ2Placeholder.Size = new System.Drawing.Size(518, 248);
+            this.lblPlateRJ2Placeholder.TabIndex = 0;
+            this.lblPlateRJ2Placeholder.Text = "入境车牌预览 2 未开启";
+            this.lblPlateRJ2Placeholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            //
+            // panelPlateRJ3
+            //
+            this.panelPlateRJ3.BackColor = System.Drawing.Color.Black;
+            this.panelPlateRJ3.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.panelPlateRJ3.Controls.Add(this.lblPlateRJ3Placeholder);
+            this.panelPlateRJ3.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.panelPlateRJ3.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.panelPlateRJ3.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(209)))), ((int)(((byte)(213)))), ((int)(((byte)(219)))));
+            this.panelPlateRJ3.Location = new System.Drawing.Point(1416, 250);
+            this.panelPlateRJ3.Margin = new System.Windows.Forms.Padding(0);
+            this.panelPlateRJ3.Name = "panelPlateRJ3";
+            this.panelPlateRJ3.Size = new System.Drawing.Size(520, 250);
+            this.panelPlateRJ3.TabIndex = 5;
+            this.panelPlateRJ3.Text = "入境车牌预览 3";
+            //
+            // lblPlateRJ3Placeholder
+            //
+            this.lblPlateRJ3Placeholder.BackColor = System.Drawing.Color.Black;
+            this.lblPlateRJ3Placeholder.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.lblPlateRJ3Placeholder.Font = new System.Drawing.Font("微软雅黑", 10F);
+            this.lblPlateRJ3Placeholder.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(107)))), ((int)(((byte)(114)))), ((int)(((byte)(128)))));
+            this.lblPlateRJ3Placeholder.Location = new System.Drawing.Point(0, 0);
+            this.lblPlateRJ3Placeholder.Name = "lblPlateRJ3Placeholder";
+            this.lblPlateRJ3Placeholder.Size = new System.Drawing.Size(518, 248);
+            this.lblPlateRJ3Placeholder.TabIndex = 0;
+            this.lblPlateRJ3Placeholder.Text = "入境车牌预览 3 未开启";
+            this.lblPlateRJ3Placeholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // splitter2
             // 
             this.splitter2.Location = new System.Drawing.Point(48, 0);
             this.splitter2.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.splitter2.Name = "splitter2";
-            this.splitter2.Size = new System.Drawing.Size(8, 424);
+            this.splitter2.Size = new System.Drawing.Size(8, 504);
             this.splitter2.TabIndex = 1;
             this.splitter2.TabStop = false;
             this.splitter2.Visible = false;
@@ -598,7 +700,7 @@ namespace HZCYKJTHardWare.Proxy
             this.splitter1.Location = new System.Drawing.Point(40, 0);
             this.splitter1.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.splitter1.Name = "splitter1";
-            this.splitter1.Size = new System.Drawing.Size(8, 424);
+            this.splitter1.Size = new System.Drawing.Size(8, 504);
             this.splitter1.TabIndex = 2;
             this.splitter1.TabStop = false;
             this.splitter1.Visible = false;
@@ -610,11 +712,11 @@ namespace HZCYKJTHardWare.Proxy
             this.panelLog.Controls.Add(this.panelLogToolbar);
             this.panelLog.Controls.Add(this.lblLogTitle);
             this.panelLog.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panelLog.Location = new System.Drawing.Point(0, 1040);
+            this.panelLog.Location = new System.Drawing.Point(0, 1168);
             this.panelLog.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.panelLog.Name = "panelLog";
             this.panelLog.Padding = new System.Windows.Forms.Padding(40, 0, 40, 40);
-            this.panelLog.Size = new System.Drawing.Size(2360, 480);
+            this.panelLog.Size = new System.Drawing.Size(2360, 352);
             this.panelLog.TabIndex = 0;
             // 
             // memoLog
@@ -622,7 +724,7 @@ namespace HZCYKJTHardWare.Proxy
             this.memoLog.AutoScroll = true;
             this.memoLog.DetectUrls = false;
             this.memoLog.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.memoLog.Font = new System.Drawing.Font("Consolas", 9F);
+            this.memoLog.Font = new System.Drawing.Font("Microsoft YaHei", 9F);
             this.memoLog.Location = new System.Drawing.Point(40, 136);
             this.memoLog.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.memoLog.Name = "memoLog";
@@ -834,20 +936,48 @@ namespace HZCYKJTHardWare.Proxy
             this.btnStopIrisPreview.Name = "btnStopIrisPreview";
             this.btnStopIrisPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStopIrisPreview.TabIndex = 0;
-            // 
-            // btnStartPlatePreview
-            // 
-            this.btnStartPlatePreview.Location = new System.Drawing.Point(0, 0);
-            this.btnStartPlatePreview.Name = "btnStartPlatePreview";
-            this.btnStartPlatePreview.Size = new System.Drawing.Size(75, 23);
-            this.btnStartPlatePreview.TabIndex = 0;
-            // 
-            // btnStopPlatePreview
-            // 
-            this.btnStopPlatePreview.Location = new System.Drawing.Point(0, 0);
-            this.btnStopPlatePreview.Name = "btnStopPlatePreview";
-            this.btnStopPlatePreview.Size = new System.Drawing.Size(75, 23);
-            this.btnStopPlatePreview.TabIndex = 0;
+            //
+            // btnStartPlatePreviewCJ
+            //
+            this.btnStartPlatePreviewCJ.Location = new System.Drawing.Point(0, 0);
+            this.btnStartPlatePreviewCJ.Name = "btnStartPlatePreviewCJ";
+            this.btnStartPlatePreviewCJ.Size = new System.Drawing.Size(75, 23);
+            this.btnStartPlatePreviewCJ.TabIndex = 0;
+            //
+            // btnStopPlatePreviewCJ
+            //
+            this.btnStopPlatePreviewCJ.Location = new System.Drawing.Point(0, 0);
+            this.btnStopPlatePreviewCJ.Name = "btnStopPlatePreviewCJ";
+            this.btnStopPlatePreviewCJ.Size = new System.Drawing.Size(75, 23);
+            this.btnStopPlatePreviewCJ.TabIndex = 0;
+            //
+            // btnStartPlatePreviewRJ2
+            //
+            this.btnStartPlatePreviewRJ2.Location = new System.Drawing.Point(0, 0);
+            this.btnStartPlatePreviewRJ2.Name = "btnStartPlatePreviewRJ2";
+            this.btnStartPlatePreviewRJ2.Size = new System.Drawing.Size(75, 23);
+            this.btnStartPlatePreviewRJ2.TabIndex = 0;
+            //
+            // btnStopPlatePreviewRJ2
+            //
+            this.btnStopPlatePreviewRJ2.Location = new System.Drawing.Point(0, 0);
+            this.btnStopPlatePreviewRJ2.Name = "btnStopPlatePreviewRJ2";
+            this.btnStopPlatePreviewRJ2.Size = new System.Drawing.Size(75, 23);
+            this.btnStopPlatePreviewRJ2.TabIndex = 0;
+            //
+            // btnStartPlatePreviewRJ3
+            //
+            this.btnStartPlatePreviewRJ3.Location = new System.Drawing.Point(0, 0);
+            this.btnStartPlatePreviewRJ3.Name = "btnStartPlatePreviewRJ3";
+            this.btnStartPlatePreviewRJ3.Size = new System.Drawing.Size(75, 23);
+            this.btnStartPlatePreviewRJ3.TabIndex = 0;
+            //
+            // btnStopPlatePreviewRJ3
+            //
+            this.btnStopPlatePreviewRJ3.Location = new System.Drawing.Point(0, 0);
+            this.btnStopPlatePreviewRJ3.Name = "btnStopPlatePreviewRJ3";
+            this.btnStopPlatePreviewRJ3.Size = new System.Drawing.Size(75, 23);
+            this.btnStopPlatePreviewRJ3.TabIndex = 0;
             // 
             // btnAuthorize
             // 
@@ -891,6 +1021,9 @@ namespace HZCYKJTHardWare.Proxy
             this.panelCamera.ResumeLayout(false);
             this.panelFingerprint.ResumeLayout(false);
             this.panelIris.ResumeLayout(false);
+            this.panelPlateCJ.ResumeLayout(false);
+            this.panelPlateRJ2.ResumeLayout(false);
+            this.panelPlateRJ3.ResumeLayout(false);
             this.panelLog.ResumeLayout(false);
             this.panelLogToolbar.ResumeLayout(false);
             this.panelLogToolbar.PerformLayout();
@@ -961,6 +1094,9 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Label lblCameraPlaceholder;
         private System.Windows.Forms.Label lblFingerprintPlaceholder;
         private System.Windows.Forms.Label lblIrisPlaceholder;
+        private System.Windows.Forms.Label lblPlateCJPlaceholder;
+        private System.Windows.Forms.Label lblPlateRJ2Placeholder;
+        private System.Windows.Forms.Label lblPlateRJ3Placeholder;
 
         private System.Windows.Forms.Button btnStartServer;
         private System.Windows.Forms.Button btnStopServer;
@@ -979,8 +1115,12 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Button btnStopFingerprintPreview;
         private System.Windows.Forms.Button btnStartIrisPreview;
         private System.Windows.Forms.Button btnStopIrisPreview;
-        private System.Windows.Forms.Button btnStartPlatePreview;
-        private System.Windows.Forms.Button btnStopPlatePreview;
+        private System.Windows.Forms.Button btnStartPlatePreviewCJ;
+        private System.Windows.Forms.Button btnStopPlatePreviewCJ;
+        private System.Windows.Forms.Button btnStartPlatePreviewRJ2;
+        private System.Windows.Forms.Button btnStopPlatePreviewRJ2;
+        private System.Windows.Forms.Button btnStartPlatePreviewRJ3;
+        private System.Windows.Forms.Button btnStopPlatePreviewRJ3;
         private System.Windows.Forms.Button btnAuthorize;
 
         private System.Windows.Forms.Panel panelCamera;
@@ -988,5 +1128,8 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Panel panelFingerprint;
         private System.Windows.Forms.Splitter splitter2;
         private System.Windows.Forms.Panel panelIris;
+        private System.Windows.Forms.Panel panelPlateCJ;
+        private System.Windows.Forms.Panel panelPlateRJ2;
+        private System.Windows.Forms.Panel panelPlateRJ3;
     }
 }

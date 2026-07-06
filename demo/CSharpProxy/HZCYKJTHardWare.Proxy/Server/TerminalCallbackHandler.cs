@@ -36,7 +36,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         public async Task<string> HandleAsync(string bodyUtf8,
-            IPAddress sourceAddress = null)
+            IPAddress sourceAddress = null, string callbackPath = null)
         {
             try
             {
@@ -73,10 +73,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                             .ConfigureAwait(false);
                         break;
                     default:
-                        // Fallback: detect 2.22 protocol callback by characteristic fields (status=yes/no + id_no)
+                        // Fallback: detect callbacks without resource_type by characteristic fields.
+                        // 2.22 protocol callback body: {"request_id":"...","status":"yes|no"}
+                        // (terminal may not echo back all fields like id_no/name)
                         var cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
-                        var cbIdNo = JsonHelper.ExtractString(bodyUtf8, "id_no");
-                        if ((cbStatus == "yes" || cbStatus == "no") && !string.IsNullOrEmpty(cbIdNo))
+                        var cbRequestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+                        if ((string.Equals(cbStatus, "yes", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(cbStatus, "no", StringComparison.OrdinalIgnoreCase)) &&
+                            !string.IsNullOrEmpty(cbRequestId))
                         {
                             _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
                             await HandleProtocolAsync(bodyUtf8, sourceAddress)
@@ -84,7 +88,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                         }
                         else
                         {
-                            _log($"[终端回调] 未知资源类型: {resourceType}");
+                            // Log body snippet to help diagnose unknown callback types
+                            var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
+                            _log($"[终端回调] 未知资源类型: path={callbackPath}, body={snippet}");
                         }
                         break;
                 }

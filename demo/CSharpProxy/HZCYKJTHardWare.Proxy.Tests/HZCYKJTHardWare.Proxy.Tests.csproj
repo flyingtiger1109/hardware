@@ -31,6 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.csproj" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
 </Project>

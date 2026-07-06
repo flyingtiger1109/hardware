@@ -792,6 +792,49 @@
 详细修改、兼容性、风险和回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
 
+## Proxy 车牌预览界面汉化与布局优化（2026-07-03）
+
+- [x] 预览控制按钮移除内部函数名，统一改为中文业务名称。
+- [x] CJ 显示为“出境车牌预览”，RJ2/RJ3 显示为“入境车牌预览 2/3”。
+- [x] 占位提示和操作日志同步使用入境/出境中文名称。
+- [x] 增加顶部控制卡片高度，并为上下两排预览画面增加间距。
+- [x] C# Proxy `Release|x86|net46` 独立输出编译通过，0 警告、0 错误。
+- [ ] 启动新 Proxy，在现场 DPI 和分辨率下确认按钮无重叠、日志区域高度可接受。
+
+本次仅修改 Proxy 管理界面，不改变 DLL 导出函数、HTTP 路由、配置结构和第三方调用行为。
+
+## 车牌 CJ/RJ2/RJ3 平铺接口（2026-07-03）
+
+- [x] Proxy 不引入 `Direction`，由第三方调用方选择 CJ 或组合调用 RJ2、RJ3。
+- [x] 删除旧 `StartPlatePreview/StopPlatePreview` 导出，新增 CJ、RJ2、RJ3 三组独立 `Start/Stop`。
+- [x] 三路使用独立配置、RTSP URL、DLL 租约、Proxy 会话和 HWND，可分别启停。
+- [x] Proxy 管理界面增加三组测试按钮和三块独立预览区域。
+- [x] `preview.plate` 调整为 `cj`、`rj2`、`rj3` 三个平铺节点。
+- [x] DLL `Release|Win32` 编译通过，导出表确认 24 个符号且旧车牌符号不存在。
+- [x] C# Proxy/Test `Release|x86|net46` 独立输出编译通过；车牌配置测试 4/4 通过。
+- [x] C# 第三方 Demo `Release|x86|net46` 编译通过，六个新 P/Invoke 声明有效。
+- [ ] 使用三台真实相机验证 CJ 单路、RJ2+RJ3 双路并发、分别停止及 Proxy 重启恢复。
+- [ ] 第三方程序同步改用新接口后执行完整回归和 2 小时/24 小时长稳测试。
+
+详细修改、兼容性、风险、验证与回退方式见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## 通道级车牌 RTSP 预览（2026-07-02）
+
+- [x] 保持现有 `StartPlatePreview(HWND)` / `StopPlatePreview()` DLL ABI 不变。
+- [x] 车牌 VLC 由 C# Proxy 加载，Proxy 直接将 libVLC 输出绑定到第三方传入的专用 HWND。
+- [x] 车牌镜头按通道单实例管理，不绑定终端1/2，不参与终端切换。
+- [x] Proxy 新增独立本地车牌调试预览，可与第三方预览同时运行并分别启停。
+- [x] DLL 新增车牌 Proxy 路由、外部预览租约、Proxy 重启恢复和 ReleaseSdk 停止流程。
+- [x] 新增 `preview.plate` 配置，默认主码流 `101`，可显式切换子码流 `102`。
+- [x] 用户名和密码按 RTSP user-info 百分号编码，日志中的认证信息统一脱敏。
+- [x] SDK 释放时通知 Proxy 停止外部车牌会话；Proxy 负责释放 VLC 资源。
+- [x] DLL `Release|Win32` 编译通过，0 警告、0 错误，PE32/x86 与 20/20 导出保持不变。
+- [ ] 配置现场车牌相机 IP、用户名、密码并将 `enabled` 设置为 `true`。
+- [ ] 使用真实第三方 HWND 验证启动、停止、重复启动、窗口销毁和 SDK 释放。
+- [ ] 使用真实相机验证第三方与 Proxy 调试双路预览、单路停止隔离及相机连接数上限。
+- [ ] 使用真实主码流执行 2 小时/24 小时稳定性验证。
+
 ## DLL 回调响应与 INFO 日志（2026-07-01）
 
 ### 当前阶段
@@ -857,3 +900,20 @@
 - [x] C# Proxy/Test `Release|x86` 编译通过，非集成单元测试 26/26 通过。
 - [ ] 真实终端验证断流恢复、HTTP 服务恢复、主动停止和终端切换竞争。
 - [ ] 记录恢复黑屏时长并执行 2 小时/24 小时长稳测试。
+
+## 外部预览跨宿主与 Proxy 重启恢复（方案 B，2026-07-02）
+
+- [x] 修改前提交当前 DLL、C# Proxy、测试和进度文件，创建 `v1.2.6` 标签（`d7b1fbb`），未包含 `.ico`。
+- [x] Proxy `/ping` 增加服务实例标识，保持 `status=ok` 兼容。
+- [x] Proxy 按 `HWND + PID + 进程启动时间` 清理退出宿主的旧外部预览。
+- [x] DLL 在摄像头/指纹预览活动时检测 Proxy 中断和实例变化，并自动重发原预览请求。
+- [x] `ReleaseSdk` 有界停止租约监控，并尽力停止 Proxy 端摄像头/指纹预览。
+- [x] Proxy/Test `Release|x86|net46` 编译通过，非集成测试 46/46 通过。
+- [x] DLL `Release|Win32` 编译通过，导出表 20/20、PE32/x86 保持不变。
+- [x] 假 Proxy 生命周期验证通过：中断恢复后启动请求总数 2，Release 停止请求 1。
+- [ ] 正式 Windows 环境执行 7 项 `HttpListener` 集成测试。
+- [ ] 真实终端验证 Demo 关闭后第三方接管、Proxy 重启自动恢复和终端切换竞争。
+- [ ] 执行连续 20 次重启以及 2 小时/24 小时长稳测试。
+
+详细修改、兼容性、风险、验证与回退方式见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。

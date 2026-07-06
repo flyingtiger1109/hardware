@@ -178,6 +178,6 @@ begin
   finally
     SL.Free;
   end;
-end;
+end.
 
 end.

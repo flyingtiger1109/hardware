@@ -18,6 +18,21 @@ struct TerminalDeviceConfig {
     int host_suffix = 0;
 };
 
+enum class PlatePreviewChannel {
+    CJ,
+    RJ2,
+    RJ3
+};
+
+struct PlatePreviewCameraConfig {
+    bool enabled = false;
+    std::string host;
+    int port = 554;
+    std::string username;
+    std::string password;
+    int stream_channel = 101;
+};
+
 // 配置管理器
 class ConfigManager {
 public:
@@ -72,6 +87,8 @@ public:
     int GetRtspNetworkCachingMs() const;
     int GetRtspLiveCachingMs() const;
     const std::string& GetRtspTransport() const;
+    const PlatePreviewCameraConfig& GetPlatePreviewConfig(PlatePreviewChannel channel) const;
+    std::string BuildPlatePreviewUrl(PlatePreviewChannel channel) const;
 
     const std::string& GetLogDir() const;
     const std::string& GetLogLevel() const;
@@ -126,6 +143,9 @@ private:
     int m_rtspNetworkCachingMs = 150;
     int m_rtspLiveCachingMs = 150;
     std::string m_rtspTransport = "tcp";
+    PlatePreviewCameraConfig m_platePreviewCJ;
+    PlatePreviewCameraConfig m_platePreviewRJ2;
+    PlatePreviewCameraConfig m_platePreviewRJ3;
 
     std::string m_logDir = "HZCYKJTHardWareDLL_Logs";
     std::string m_logLevel = "info";

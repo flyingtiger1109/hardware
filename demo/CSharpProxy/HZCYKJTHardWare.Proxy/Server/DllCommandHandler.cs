@@ -31,6 +31,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ActiveTasksTracker _taskTracker;
         private readonly SwitchCoordinator _switchCoordinator;
         private readonly Action<bool> _onProcessStateChanged;
+        private readonly string _proxyInstanceId = CreateProxyInstanceId();
         private const string TerminalSwitchingResult =
             "{\"error\":true,\"code\":\"terminal_switching\"}";
 
@@ -68,7 +69,22 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             // /ping — fast path, no queuing
             if (path == "/ping")
-                return "{\"status\":\"ok\"}";
+                return BuildPingResponse(_proxyInstanceId);
+
+            // Flat plate-camera routing: Proxy never interprets Direction. Each route owns
+            // one camera/session, and the third-party caller chooses CJ or RJ2+RJ3.
+            if (path == "/preview/plate/cj/start")
+                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateCJ, "cj");
+            if (path == "/preview/plate/cj/stop")
+                return HandlePreviewStop(PreviewResourceType.PlateCJ);
+            if (path == "/preview/plate/rj2/start")
+                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateRJ2, "rj2");
+            if (path == "/preview/plate/rj2/stop")
+                return HandlePreviewStop(PreviewResourceType.PlateRJ2);
+            if (path == "/preview/plate/rj3/start")
+                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateRJ3, "rj3");
+            if (path == "/preview/plate/rj3/stop")
+                return HandlePreviewStop(PreviewResourceType.PlateRJ3);
 
             // Fast reject during terminal switch
             if (_queueManager.SwitchingTerminal)
@@ -96,7 +112,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return await EnqueueCapture(_queueManager.FaceCaptureQueue, routeEpoch, saveDir);
 
                 case "/capture/fingerprint":
-                    return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch, saveDir);
+                    {
+                        var saveDirHk = JsonHelper.ExtractString(bodyUtf8, "save_dir_hk");
+                        return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch, saveDir, saveDirHk);
+                    }
 
                 // === Async operations (return "accepted" immediately after terminal forwards) ===
                 case "/ocr":
@@ -153,13 +172,14 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// If saveDir has a file extension, it's used directly as the save path.
         /// </summary>
         private async Task<string> EnqueueCapture(WorkerQueue<object> queue,
-            TerminalRouteEpochSnapshot routeEpoch, string saveDir)
+            TerminalRouteEpochSnapshot routeEpoch, string saveDir, string saveDirHk = null)
         {
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var data = new CaptureTaskData
             {
                 Tcs = tcs,
                 SaveDir = saveDir,
+                SaveDirHk = saveDirHk,
                 RouteEpoch = routeEpoch
             };
             using (routeEpoch.CancellationToken.Register(
@@ -179,6 +199,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return timeoutResult;
                 return await tcs.Task;
             }
+        }
+
+        internal static string CreateProxyInstanceId()
+        {
+            return Guid.NewGuid().ToString("N");
+        }
+
+        internal static string BuildPingResponse(string proxyInstanceId)
+        {
+            return "{\"status\":\"ok\",\"proxy_instance_id\":\"" +
+                JsonHelper.EscapeString(proxyInstanceId ?? "") + "\"}";
         }
 
         /// <summary>
@@ -577,6 +608,69 @@ namespace HZCYKJTHardWare.Proxy.Server
             return "{\"status\":\"ok\"}";
         }
 
+        private string HandlePlatePreviewStart(string bodyUtf8,
+            PreviewResourceType resourceType, string plateCode)
+        {
+            var hwndValue = JsonHelper.ExtractInt(bodyUtf8, "hwnd");
+            var hwnd = new IntPtr(hwndValue);
+            var callbackUrl = JsonHelper.ExtractString(bodyUtf8, "callback_url");
+            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+            var previewUrl = AppConfig.Instance.GetPlatePreviewUrl(plateCode);
+
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+                return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
+            if (string.IsNullOrWhiteSpace(previewUrl))
+                return "{\"error\":true,\"code\":\"plate_preview_not_configured\"}";
+
+            var taskAccepted = _taskTracker.TryRun(async () =>
+            {
+                try
+                {
+                    Func<bool> shouldContinue = () => IsWindow(hwnd);
+                    var ok = await _previewManager.StartPreview(resourceType,
+                        PreviewSessionType.External, hwnd, "", shouldContinue: shouldContinue,
+                        explicitPreviewUrl: previewUrl, terminalBound: false,
+                        directRenderTarget: true).ConfigureAwait(false);
+
+                    if (ok && shouldContinue())
+                    {
+                        if (!string.IsNullOrEmpty(callbackUrl))
+                            await _dllCallback.SendPreviewReady(requestId, "plate_image", hwnd,
+                                IntPtr.Zero).ConfigureAwait(false);
+                        _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览已直接绑定目标HWND: hwnd={hwnd}");
+                        return;
+                    }
+
+                    if (ok)
+                        _previewManager.StopPreview(resourceType, PreviewSessionType.External);
+
+                    if (!string.IsNullOrEmpty(callbackUrl))
+                    {
+                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                            "\",\"resource_type\":\"plate_image\",\"render_hwnd\":" + hwndValue +
+                            ",\"error\":true,\"code\":\"preview_failed\"}";
+                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
+                    }
+                    _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览启动失败: hwnd={hwnd}");
+                }
+                catch (Exception ex)
+                {
+                    _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览启动异常: {ex.Message}");
+                    if (!string.IsNullOrEmpty(callbackUrl))
+                    {
+                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                            "\",\"resource_type\":\"plate_image\",\"render_hwnd\":" + hwndValue +
+                            ",\"error\":true,\"code\":\"preview_exception\"}";
+                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
+                    }
+                }
+            }, "preview_start_plate_" + plateCode + "_external");
+
+            return taskAccepted
+                ? "{\"accepted\":true}"
+                : "{\"error\":true,\"code\":\"service_busy\"}";
+        }
+
         private async Task<string> HandlePreviewUrl(PreviewResourceType resType,
             TerminalRouteEpochSnapshot routeEpoch)
         {
@@ -657,6 +751,7 @@ namespace HZCYKJTHardWare.Proxy.Server
     {
         public TaskCompletionSource<string> Tcs { get; set; }
         public string SaveDir { get; set; }
+        public string SaveDirHk { get; set; }
         public TerminalRouteEpochSnapshot RouteEpoch { get; set; }
         public bool IsQueueResultCompleted => Tcs == null || Tcs.Task.IsCompleted;
 

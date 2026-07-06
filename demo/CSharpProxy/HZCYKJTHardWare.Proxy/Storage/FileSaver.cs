@@ -154,5 +154,89 @@ namespace HZCYKJTHardWare.Proxy.Storage
                 catch { }
             }
         }
+
+        /// <summary>
+        /// 将 Base64 编码的 8 位灰度 raw 像素数据（无 BMP 头）解码并写入标准 BMP 文件。
+        /// </summary>
+        public static string SaveRawGrayscaleAsBmp(string base64Str, string saveDir,
+            string requestId, int width, int height)
+        {
+            if (string.IsNullOrEmpty(base64Str)) return "";
+
+            try
+            {
+                var decoded = Convert.FromBase64String(base64Str);
+                var expectedLen = width * height;
+                if (decoded.Length != expectedLen)
+                {
+                    Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decoded.Length}");
+                }
+
+                var filePath = PathHelper.ResolveExactSaveFile(saveDir, requestId,
+                    "fingerprint_undistorted", ".bmp");
+                var dir = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write,
+                    FileShare.None, 64 * 1024, FileOptions.SequentialScan))
+                using (var bw = new BinaryWriter(fs))
+                {
+                    int rowSize = ((width * 8 + 31) / 32) * 4;
+                    int pixelDataSize = rowSize * height;
+                    int paletteSize = 256 * 4;
+                    int headerSize = 14 + 40 + paletteSize;
+                    int fileSize = headerSize + pixelDataSize;
+
+                    // BITMAPFILEHEADER (14 bytes)
+                    bw.Write((short)0x4D42);
+                    bw.Write(fileSize);
+                    bw.Write((short)0);
+                    bw.Write((short)0);
+                    bw.Write(headerSize);
+
+                    // BITMAPINFOHEADER (40 bytes)
+                    bw.Write(40);
+                    bw.Write(width);
+                    bw.Write(height);
+                    bw.Write((short)1);
+                    bw.Write((short)8);
+                    bw.Write(0);
+                    bw.Write(pixelDataSize);
+                    bw.Write(0);
+                    bw.Write(0);
+                    bw.Write(256);
+                    bw.Write(0);
+
+                    // Grayscale palette: 256 entries (B, G, R, 0)
+                    for (int i = 0; i < 256; i++)
+                    {
+                        bw.Write((byte)i);
+                        bw.Write((byte)i);
+                        bw.Write((byte)i);
+                        bw.Write((byte)0);
+                    }
+
+                    // Pixel data (bottom-up)
+                    for (int y = height - 1; y >= 0; y--)
+                    {
+                        int srcOffset = y * width;
+                        int copyLen = Math.Min(width, decoded.Length - srcOffset);
+                        if (copyLen > 0)
+                            bw.Write(decoded, srcOffset, copyLen);
+                        for (int p = copyLen; p < rowSize; p++)
+                            bw.Write((byte)0);
+                    }
+                }
+
+                Logger.Debug($"已保存无畸变BMP: {filePath}");
+                return filePath;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("保存无畸变BMP图片失败", ex);
+                return "";
+            }
+        }
     }
 }

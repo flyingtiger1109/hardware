@@ -62,7 +62,8 @@ private:
                     std::unique_ptr<IRtspRenderer>& renderer,
                     HWND& storedHwnd,
                     int stoppedEvent,
-                    bool clearStoredHwnd);
+                    bool clearStoredHwnd,
+                    const char* resourceType = nullptr);
     int StartRendererFromUrl(HWND hwnd, const std::string& rtspUrl,
                              std::atomic<bool>& runningFlag,
                              std::unique_ptr<IRtspRenderer>& renderer,
@@ -85,6 +86,7 @@ private:
     std::atomic<bool> m_irisRunning{false};
     std::unique_ptr<IRtspRenderer> m_irisRenderer;
     HWND m_irisHwnd = nullptr;
+
 };
 
 } // namespace HZCYKJTHardWare

@@ -4,6 +4,15 @@
 
 namespace HZCYKJTHardWare {
 
+struct PlatePreviewState {
+    bool running = false;
+    std::string request_id;
+    intptr_t third_party_hwnd = 0;
+    bool enabled = false;
+    std::string rtsp_url;
+    int stream_channel = 101;
+};
+
 // 全局单例上下文，管理 DLL 运行时状态
 class HzsjkjtContext {
 public:
@@ -60,6 +69,9 @@ public:
     int rtsp_live_caching_ms = 150;
     std::string rtsp_transport = "tcp";
     int preview_check_hwnd_interval_ms = 500;
+    PlatePreviewState plate_preview_cj;
+    PlatePreviewState plate_preview_rj2;
+    PlatePreviewState plate_preview_rj3;
 
     // 流程状态
     bool process_active = false;

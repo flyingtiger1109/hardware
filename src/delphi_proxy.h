@@ -10,6 +10,7 @@ public:
     explicit DelphiProxy(const std::string& baseUrl);
 
     bool Ping();
+    bool GetInstanceId(std::string& outInstanceId, int timeoutMs = 1000);
 
     bool ProcessStart(const std::string& requestId, const std::string& saveDir, const std::string& callbacksJson = "{}");
     bool ProcessEnd();
@@ -22,6 +23,7 @@ public:
 
     bool CaptureFingerprint(const std::string& requestId,
                             const std::string& saveDir,
+                            const std::string& saveDirHk,
                             std::string& outSavePath);
 
     bool CaptureIrisAsync(const std::string& requestId,
@@ -43,21 +45,33 @@ public:
     // Legacy server-rendered preview endpoints retained for mixed-version deployment.
     bool StartCameraPreview(const std::string& requestId,
                             intptr_t thirdPartyHwnd,
-                            const std::string& callbackUrl);
+                            const std::string& callbackUrl,
+                            int timeoutMs = -1);
 
-    bool StopCameraPreview(const std::string& requestId);
+    bool StopCameraPreview(const std::string& requestId, int timeoutMs = -1);
 
     bool StartFingerprintPreview(const std::string& requestId,
                                   intptr_t thirdPartyHwnd,
-                                  const std::string& callbackUrl);
+                                  const std::string& callbackUrl,
+                                  int timeoutMs = -1);
 
-    bool StopFingerprintPreview(const std::string& requestId);
+    bool StopFingerprintPreview(const std::string& requestId, int timeoutMs = -1);
 
     bool StartIrisPreview(const std::string& requestId,
                            intptr_t thirdPartyHwnd,
                            const std::string& callbackUrl);
 
     bool StopIrisPreview(const std::string& requestId);
+
+    bool StartPlatePreview(const std::string& plateCode,
+                           const std::string& requestId,
+                           intptr_t thirdPartyHwnd,
+                           const std::string& callbackUrl,
+                           int timeoutMs = -1);
+
+    bool StopPlatePreview(const std::string& plateCode,
+                          const std::string& requestId,
+                          int timeoutMs = -1);
 
     bool RequestAuthorize(const std::string& requestId,
                           const std::string& ZJHM,
@@ -67,15 +81,20 @@ public:
                           const std::string& XB,
                           const std::string& CSRQ,
                           const std::string& KADM,
-                          const std::string& callbackUrl);
+                          const std::string& callbackUrl,
+                          int timeoutMs = 0);
 
 private:
     std::string baseUrl_;
 
-    bool Get(const std::string& path, std::string& response);
+    bool Get(const std::string& path,
+             std::string& response,
+             int timeoutMs = -1,
+             bool quiet = false);
     bool PostJson(const std::string& path,
-                  const std::string& body,
-                  std::string& response);
+                   const std::string& body,
+                   std::string& response,
+                   int timeoutMs = -1);
 
     bool IsOkResponse(const std::string& response);
     bool IsAcceptedResponse(const std::string& response);

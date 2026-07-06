@@ -1,0 +1,50 @@
+﻿{
+  "request_id": "PROCESS_20260612093008239",
+  "mrz_lines": [],
+  "person_info": [
+    {
+      "Country": "CHN",
+      "MRZ1": "POCHNYAN<<QINGLONG<<<<<<<<<<<<<<<<<<<<<<<<<<",
+      "MRZ2": "E110595643CHN8609133M2301239NBNFMHOFMBPKA996",
+      "authority": "MPS Exit & Entry Administratio",
+      "birthday": "1986-09-13",
+      "cardId": "E11059564",
+      "countryCode": "CHN",
+      "dataType": 0,
+      "dateOfexpiry": "2020-01-23",
+      "dateOfissue": "2013-01-24",
+      "languageType": 1,
+      "mrzCount": 2,
+      "name": "YAN, QINGLON",
+      "nameFirst": "YAN, QINGLON",
+      "nationality": "CHINESE",
+      "placeOfbirth": "JIANGXI",
+      "placeOfissue": "JIANGXI",
+      "portraitHeight": 0,
+      "portraitWidth": 0,
+      "portraitX": 0,
+      "portraitY": 0,
+      "sex": "M",
+      "subType": "P",
+      "valid": 1
+    },
+    {
+      "MRZ1": "POCHNYAN<<QINGLONG<<<<<<<<<<<<<<<<<<<<<<<<<<",
+      "MRZ2": "E110595643CHN8609133M2301239NBNFMHOFMBPKA996",
+      "authority": "公安部出入境管理局",
+      "dataType": 0,
+      "languageType": 0,
+      "mrzCount": 2,
+      "name": "颜清龙",
+      "nameFirst": "颜清龙",
+      "nationality": "中国",
+      "placeOfbirth": "江西",
+      "placeOfissue": "江西",
+      "portraitHeight": 0,
+      "portraitWidth": 0,
+      "portraitX": 0,
+      "portraitY": 0,
+      "valid": 1
+    }
+  ]
+}

@@ -23,6 +23,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly int _sourceHeight;
         private readonly bool _swapDimensions;
         private readonly bool _visible;
+        private readonly bool _directRenderTarget;
 
         private volatile bool _abandoned;
         private volatile bool _disposed;
@@ -32,7 +33,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private VlcPreviewController(string description, string rtspUrl, IntPtr parentHwnd,
             int networkCachingMs, int liveCachingMs, string rtspTransport,
-            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible)
+            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible,
+            bool directRenderTarget)
         {
             _description = description;
             _rtspUrl = rtspUrl;
@@ -44,6 +46,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
             _visible = visible;
+            _directRenderTarget = directRenderTarget;
 
             _thread = new Thread(ThreadMain)
             {
@@ -57,10 +60,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public static async Task<VlcPreviewController> StartAsync(string description, string rtspUrl,
             IntPtr parentHwnd, int networkCachingMs, int liveCachingMs, string rtspTransport,
-            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible, int timeoutMs)
+            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible, int timeoutMs,
+            bool directRenderTarget = false)
         {
             var controller = new VlcPreviewController(description, rtspUrl, parentHwnd, networkCachingMs,
-                liveCachingMs, rtspTransport, sourceWidth, sourceHeight, swapDimensions, visible);
+                liveCachingMs, rtspTransport, sourceWidth, sourceHeight, swapDimensions, visible,
+                directRenderTarget);
 
             controller._thread.Start();
 
@@ -68,7 +73,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed != controller._startTcs.Task)
             {
                 controller._abandoned = true;
-                Logger.Error($"VLC预览启动超时：{description}，timeout={timeoutMs}ms，url={rtspUrl}。本次预览已放弃，终端切换继续完成。");
+                Logger.Error($"VLC预览启动超时：{description}，timeout={timeoutMs}ms，url={VlcPreviewPlayer.SanitizeUrlForLog(rtspUrl)}。本次预览已放弃，终端切换继续完成。");
                 return null;
             }
 
@@ -149,7 +154,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 _player = new VlcPreviewPlayer();
                 var ok = _player.Play(_rtspUrl, _parentHwnd, _networkCachingMs, _liveCachingMs,
-                    _rtspTransport, _sourceWidth, _sourceHeight, _swapDimensions, _visible);
+                    _rtspTransport, _sourceWidth, _sourceHeight, _swapDimensions, _visible,
+                    _directRenderTarget);
 
                 _running = ok && _player.IsRunning;
                 _startTcs.TrySetResult(ok);

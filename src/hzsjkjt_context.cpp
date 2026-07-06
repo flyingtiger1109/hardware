@@ -48,6 +48,9 @@ void HzsjkjtContext::Reset() {
     rtsp_live_caching_ms = 150;
     rtsp_transport = "tcp";
     preview_check_hwnd_interval_ms = 500;
+    plate_preview_cj = PlatePreviewState{};
+    plate_preview_rj2 = PlatePreviewState{};
+    plate_preview_rj3 = PlatePreviewState{};
     process_active = false;
     http_busy.store(false);
     switch_pending.store(false);

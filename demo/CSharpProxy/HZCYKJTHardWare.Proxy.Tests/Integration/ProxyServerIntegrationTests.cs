@@ -15,6 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
     /// Verifies the full request/response pipeline without real hardware.
     /// </summary>
     [TestClass]
+    [TestCategory("Integration")]
     public class ProxyServerIntegrationTests
     {
         private static string _testDir;
@@ -121,9 +122,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
         [TestMethod]
         public void Ping_Returns_Ok()
         {
-            string result = SendDllRequest("/ping", "{}");
-            Assert.IsTrue(result.Contains("\"status\":\"ok\""),
-                $"Ping should return ok, got: {result}");
+            string firstResult = SendDllRequest("/ping", "{}");
+            string secondResult = SendDllRequest("/ping", "{}");
+            Assert.IsTrue(firstResult.Contains("\"status\":\"ok\""),
+                $"Ping should return ok, got: {firstResult}");
+
+            var firstInstanceId = JsonHelper.ExtractString(firstResult, "proxy_instance_id");
+            var secondInstanceId = JsonHelper.ExtractString(secondResult, "proxy_instance_id");
+            Assert.AreEqual(32, firstInstanceId.Length,
+                "Ping should expose a 32-character proxy instance id");
+            Assert.AreEqual(firstInstanceId, secondInstanceId,
+                "Instance id should remain stable for one ProxyServer session");
         }
 
         [TestMethod]

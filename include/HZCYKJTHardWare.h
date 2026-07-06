@@ -40,12 +40,18 @@ extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopFingerprintPrevie
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartIrisPreview(void* hwnd);
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopIrisPreview(void);
 
-extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreview(void* hwnd);
-extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreview(void);
+/* Plate cameras are exposed as independent flat APIs. The caller selects the
+ * business combination; the DLL/Proxy do not interpret Direction. */
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewCJ(void* hwnd);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewCJ(void);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ2(void* hwnd);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ2(void);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ3(void* hwnd);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ3(void);
 
 /* Capture [sync: face/fingerprint] [async: iris] */
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureCameraImage(const char* saveDir);
-extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir);
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir, const char* saveDirHk);
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureIrisImage(const char* saveDir);
 
 /* OCR and IC card [async] */

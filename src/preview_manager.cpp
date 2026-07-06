@@ -311,7 +311,8 @@ int PreviewManager::StopPreview(std::atomic<bool>& runningFlag,
                                  std::unique_ptr<IRtspRenderer>& renderer,
                                  HWND& storedHwnd,
                                  int stoppedEvent,
-                                 bool clearStoredHwnd) {
+                                 bool clearStoredHwnd,
+                                 const char* resourceType) {
     CriticalSectionGuard guard(&m_cs);
 
     if (!runningFlag) {
@@ -335,6 +336,7 @@ int PreviewManager::StopPreview(std::atomic<bool>& runningFlag,
     memset(&event, 0, sizeof(event));
     event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
     event.event_type = stoppedEvent;
+    event.resource_type = resourceType;
     event.status = HZCYKJTHardWare_RET_OK;
     EventDispatcher::Instance().PostEvent(event);
 

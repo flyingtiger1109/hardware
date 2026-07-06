@@ -5,12 +5,14 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Server;
+using HZCYKJTHardWare.Proxy.Terminal;
 
 namespace HZCYKJTHardWare.Proxy
 {
@@ -23,17 +25,22 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Timer _uiLogTimer;
         private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
         private int _pendingUiLogCount;
+        private int _pendingFaceCaptureSuccessCount;
+        private int _pendingFingerprintCaptureSuccessCount;
+        private DateTime _lastCaptureSummaryUtc = DateTime.UtcNow;
         private bool _exitRequested;
         private int _headerTerminalIndex = 1;
 
         private System.Windows.Forms.Timer _monitorTimer;
+        private System.Threading.Timer _midnightClearTimer;
+        private string _lastClearDate;
         private DateTime _processStartTime = DateTime.Now;
         private TimeSpan _lastCpuTime;
         private DateTime _lastCpuSample;
 
         private string _historyCurrentFile;
         private int _historyLoading;
-        private readonly Font _logFont = new Font("Consolas", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        private readonly Font _logFont = new Font("Microsoft YaHei", 9F, FontStyle.Regular, GraphicsUnit.Point);
         private readonly LinkedList<LogLine> _historyLines = new LinkedList<LogLine>();
         private readonly LinkedList<LogLine> _activeLines = new LinkedList<LogLine>();
         private bool _historyMode;
@@ -49,6 +56,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             InitializeComponent();
             memoLog.Font = _logFont;
+            DisableLogUndoBuffer();
 
             // 1. 设置工具栏安全高度 (稍微加大到 60，给高 DPI 留足垂直空间)
             panelLogToolbar.Height = 60;
@@ -125,11 +133,25 @@ namespace HZCYKJTHardWare.Proxy
             btnClearLog.Location = new Point(pnlError.Right + gap, alignY);
             btnExportLog.Location = new Point(btnClearLog.Right + gap, alignY);
 
+            // 硬件状态标签
+            var lblHardwareStatus = new Label
+            {
+                AutoSize = true,
+                Text = "硬件状态：等待检测",
+                ForeColor = Color.Gray,
+                Font = new Font("Microsoft YaHei", 9F),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Parent = panelLogToolbar
+            };
+            lblHardwareStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            lblHardwareStatus.Location = new Point(btnExportLog.Right + gap, alignY);
+
             InitCardLayouts();
             ApplyUIPolish();
             InitializeTrayIcon();
             InitializeUiLogTimer();
             InitializeMonitorTimer();
+            InitializeMidnightClearTimer();
             UpdateMonitorInfo();
         }
 
@@ -151,15 +173,19 @@ namespace HZCYKJTHardWare.Proxy
             AddToGrid(tlpOperation, 0, 2, btnIrisCapture, "虹膜抓拍", btnIrisCapture_Click);
             AddToGrid(tlpOperation, 1, 2, btnAuthorize, "授权测试", btnAuthorize_Click);
 
-            SetupGrid2x4(tlpPreviewControl);
+            SetupGrid2x6(tlpPreviewControl);
             AddToGrid(tlpPreviewControl, 0, 0, btnStartCameraPreview, "开始摄像头预览", btnStartCameraPreview_Click);
             AddToGrid(tlpPreviewControl, 1, 0, btnStopCameraPreview, "停止摄像头预览", btnStopCameraPreview_Click);
             AddToGrid(tlpPreviewControl, 0, 1, btnStartFingerprintPreview, "开始指纹预览", btnStartFingerprintPreview_Click);
             AddToGrid(tlpPreviewControl, 1, 1, btnStopFingerprintPreview, "停止指纹预览", btnStopFingerprintPreview_Click);
             AddToGrid(tlpPreviewControl, 0, 2, btnStartIrisPreview, "开始虹膜预览", btnStartIrisPreview_Click);
             AddToGrid(tlpPreviewControl, 1, 2, btnStopIrisPreview, "停止虹膜预览", btnStopIrisPreview_Click);
-            AddToGrid(tlpPreviewControl, 0, 3, btnStartPlatePreview, "开始车牌预览", btnStartPlatePreview_Click);
-            AddToGrid(tlpPreviewControl, 1, 3, btnStopPlatePreview, "停止车牌预览", btnStopPlatePreview_Click);
+            AddToGrid(tlpPreviewControl, 0, 3, btnStartPlatePreviewCJ, "开始出境车牌预览", btnStartPlatePreviewCJ_Click);
+            AddToGrid(tlpPreviewControl, 1, 3, btnStopPlatePreviewCJ, "停止出境车牌预览", btnStopPlatePreviewCJ_Click);
+            AddToGrid(tlpPreviewControl, 0, 4, btnStartPlatePreviewRJ2, "开始入境车牌预览 2", btnStartPlatePreviewRJ2_Click);
+            AddToGrid(tlpPreviewControl, 1, 4, btnStopPlatePreviewRJ2, "停止入境车牌预览 2", btnStopPlatePreviewRJ2_Click);
+            AddToGrid(tlpPreviewControl, 0, 5, btnStartPlatePreviewRJ3, "开始入境车牌预览 3", btnStartPlatePreviewRJ3_Click);
+            AddToGrid(tlpPreviewControl, 1, 5, btnStopPlatePreviewRJ3, "停止入境车牌预览 3", btnStopPlatePreviewRJ3_Click);
         }
 
         private void ApplyUIPolish()
@@ -172,11 +198,18 @@ namespace HZCYKJTHardWare.Proxy
             // 2. Force 50/50 columns + percent row heights
             ResetGridStyles(tlpService, 3);
             ResetGridStyles(tlpOperation, 3);
-            ResetGridStyles(tlpPreviewControl, 4);
+            ResetGridStyles(tlpPreviewControl, 6);
+            tlpPreviewControl.Padding = new Padding(0, 2, 0, 2);
 
             // 3. Video container
             panelPreview.BackColor = Color.FromArgb(249, 250, 251);
             panelPreview.Padding = new Padding(12, 8, 12, 12);
+            panelCamera.Margin = new Padding(0, 0, 0, 6);
+            panelFingerprint.Margin = new Padding(0, 0, 0, 6);
+            panelIris.Margin = new Padding(0, 0, 0, 6);
+            panelPlateCJ.Margin = new Padding(0, 6, 0, 0);
+            panelPlateRJ2.Margin = new Padding(0, 6, 0, 0);
+            panelPlateRJ3.Margin = new Padding(0, 6, 0, 0);
         }
 
         private static void AddSeparator(Control parent)
@@ -359,16 +392,14 @@ namespace HZCYKJTHardWare.Proxy
             tlp.Dock = DockStyle.Fill;
         }
 
-        private void SetupGrid2x4(TableLayoutPanel tlp)
+        private void SetupGrid2x6(TableLayoutPanel tlp)
         {
             tlp.ColumnCount = 2;
             tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            tlp.RowCount = 4;
-            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            tlp.RowCount = 6;
+            for (var row = 0; row < 6; row++)
+                tlp.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 6F));
             tlp.Dock = DockStyle.Fill;
         }
 
@@ -466,12 +497,42 @@ namespace HZCYKJTHardWare.Proxy
             _monitorTimer.Start();
         }
 
+        private void InitializeMidnightClearTimer()
+        {
+            _lastClearDate = DateTime.Now.ToString("yyyyMMdd");
+            _midnightClearTimer = new System.Threading.Timer(MidnightCheckCallback, null,
+                30_000, 30_000);
+        }
+
+        private void MidnightCheckCallback(object state)
+        {
+            try
+            {
+                var today = DateTime.Now.ToString("yyyyMMdd");
+                if (_lastClearDate == today) return;
+                _lastClearDate = today;
+
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (IsDisposed) return;
+                        ClearLog();
+                        Logger.Info("[日志管理] 每日0点自动清空UI日志区");
+                    }
+                    catch { }
+                }));
+            }
+            catch { }
+        }
+
         private void btnStartServer_Click(object sender, EventArgs e)
         {
             if (_server != null) return;
             try
             {
-                _server = new ProxyServer(AppendLog, OnProcessStateChanged, OnTerminalChanged);
+                _server = new ProxyServer(AppendLog, OnProcessStateChanged, OnTerminalChanged, OnHealthChanged);
                 _server.Start();
                 btnStartServer.Enabled = true;
                 btnStopServer.Enabled = true;
@@ -591,6 +652,50 @@ namespace HZCYKJTHardWare.Proxy
             UpdateHeaderStatus();
         }
 
+        private void OnHealthChanged(HealthStatus status)
+        {
+            if (InvokeRequired)
+            {
+                if (!IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new Action<HealthStatus>(OnHealthChanged), status);
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+                return;
+            }
+
+            try
+            {
+                var label = FindHardwareStatusLabel();
+                if (label == null) return;
+
+                if (status.IsHealthy)
+                {
+                    label.Text = "硬件状态：正常";
+                    label.ForeColor = Color.FromArgb(22, 163, 74);
+                }
+                else
+                {
+                    var count = status.Devices.Count(d => !d.IsOnline);
+                    label.Text = $"硬件状态：{count} 项异常";
+                    label.ForeColor = Color.FromArgb(220, 38, 38);
+                }
+            }
+            catch { }
+        }
+
+        private Label FindHardwareStatusLabel()
+        {
+            foreach (Control c in panelLogToolbar.Controls)
+            {
+                if (c is Label l && l.Text != null && l.Text.StartsWith("硬件状态"))
+                    return l;
+            }
+            return null;
+        }
+
         private void SetPersistentButtonStyle(Button button, bool active)
         {
             button.FlatStyle = FlatStyle.Flat;
@@ -620,6 +725,9 @@ namespace HZCYKJTHardWare.Proxy
             SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
             SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
             SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
+            SetPreviewButtonState(btnStartPlatePreviewCJ, btnStopPlatePreviewCJ, false);
+            SetPreviewButtonState(btnStartPlatePreviewRJ2, btnStopPlatePreviewRJ2, false);
+            SetPreviewButtonState(btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3, false);
         }
 
         private void SetBusinessButtonsEnabled(bool enabled)
@@ -640,8 +748,12 @@ namespace HZCYKJTHardWare.Proxy
             btnStopFingerprintPreview.Enabled = enabled;
             btnStartIrisPreview.Enabled = enabled;
             btnStopIrisPreview.Enabled = enabled;
-            btnStartPlatePreview.Enabled = enabled;
-            btnStopPlatePreview.Enabled = enabled;
+            btnStartPlatePreviewCJ.Enabled = enabled;
+            btnStopPlatePreviewCJ.Enabled = enabled;
+            btnStartPlatePreviewRJ2.Enabled = enabled;
+            btnStopPlatePreviewRJ2.Enabled = enabled;
+            btnStartPlatePreviewRJ3.Enabled = enabled;
+            btnStopPlatePreviewRJ3.Enabled = enabled;
         }
 
         private void UpdateMonitorInfo()
@@ -836,15 +948,63 @@ namespace HZCYKJTHardWare.Proxy
             AppendLog("虹膜预览已停止");
         }
 
-        private void btnStartPlatePreview_Click(object sender, EventArgs e)
+        private static string GetPlatePreviewDisplayName(string plateCode)
         {
-            AppendLog("当前版本暂不支持车牌预览");
+            switch (plateCode)
+            {
+                case "cj": return "出境车牌";
+                case "rj2": return "入境车牌 2";
+                case "rj3": return "入境车牌 3";
+                default: return "车牌";
+            }
         }
 
-        private void btnStopPlatePreview_Click(object sender, EventArgs e)
+        private async Task StartLocalPlatePreviewAsync(string plateCode, Panel panel,
+            Label placeholder, Button startButton, Button stopButton)
         {
-            AppendLog("当前版本暂不支持车牌预览");
+            if (_server == null) return;
+            var displayName = GetPlatePreviewDisplayName(plateCode);
+            startButton.Enabled = false;
+            var ok = await _server.StartLocalPreviewAsync("plate_" + plateCode, panel);
+            startButton.Enabled = true;
+            SetPreviewButtonState(startButton, stopButton, ok);
+            placeholder.Visible = !ok;
+            AppendLog(ok ? $"{displayName}预览已启动" : $"{displayName}预览启动失败");
         }
+
+        private void StopLocalPlatePreview(string plateCode, Label placeholder,
+            Button startButton, Button stopButton)
+        {
+            if (_server == null) return;
+            _server.StopLocalPreview("plate_" + plateCode);
+            SetPreviewButtonState(startButton, stopButton, false);
+            placeholder.Visible = true;
+            AppendLog($"{GetPlatePreviewDisplayName(plateCode)}预览已停止");
+        }
+
+        private async void btnStartPlatePreviewCJ_Click(object sender, EventArgs e) =>
+            await StartLocalPlatePreviewAsync("cj", panelPlateCJ, lblPlateCJPlaceholder,
+                btnStartPlatePreviewCJ, btnStopPlatePreviewCJ);
+
+        private void btnStopPlatePreviewCJ_Click(object sender, EventArgs e) =>
+            StopLocalPlatePreview("cj", lblPlateCJPlaceholder,
+                btnStartPlatePreviewCJ, btnStopPlatePreviewCJ);
+
+        private async void btnStartPlatePreviewRJ2_Click(object sender, EventArgs e) =>
+            await StartLocalPlatePreviewAsync("rj2", panelPlateRJ2, lblPlateRJ2Placeholder,
+                btnStartPlatePreviewRJ2, btnStopPlatePreviewRJ2);
+
+        private void btnStopPlatePreviewRJ2_Click(object sender, EventArgs e) =>
+            StopLocalPlatePreview("rj2", lblPlateRJ2Placeholder,
+                btnStartPlatePreviewRJ2, btnStopPlatePreviewRJ2);
+
+        private async void btnStartPlatePreviewRJ3_Click(object sender, EventArgs e) =>
+            await StartLocalPlatePreviewAsync("rj3", panelPlateRJ3, lblPlateRJ3Placeholder,
+                btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3);
+
+        private void btnStopPlatePreviewRJ3_Click(object sender, EventArgs e) =>
+            StopLocalPlatePreview("rj3", lblPlateRJ3Placeholder,
+                btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3);
 
         private async void btnAuthorize_Click(object sender, EventArgs e)
         {
@@ -861,13 +1021,53 @@ namespace HZCYKJTHardWare.Proxy
 
         private void AppendLog(string message)
         {
+            Logger.Info(message);
+
+            if (TryAggregateCaptureSuccess(message))
+                return;
+
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
             EnqueueUiLog(line);
-            Logger.Info(message);
         }
 
         private const int MaxPendingUiLogLines = 5000;
         private const int MaxUiLogFlushBatch = 300;
+        private const int CaptureSummaryIntervalMs = 1000;
+        private const string FaceCaptureSuccessMessage = "[人脸抓拍] 图片保存成功";
+        private const string FingerprintCaptureSuccessMessage = "[指纹抓拍] 图片保存成功";
+
+        private bool TryAggregateCaptureSuccess(string message)
+        {
+            if (string.Equals(message, FaceCaptureSuccessMessage, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _pendingFaceCaptureSuccessCount);
+                return true;
+            }
+
+            if (string.Equals(message, FingerprintCaptureSuccessMessage, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _pendingFingerprintCaptureSuccessCount);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void EnqueueCaptureSuccessSummaryIfDue()
+        {
+            var nowUtc = DateTime.UtcNow;
+            if ((nowUtc - _lastCaptureSummaryUtc).TotalMilliseconds < CaptureSummaryIntervalMs)
+                return;
+
+            _lastCaptureSummaryUtc = nowUtc;
+            var faceCount = Interlocked.Exchange(ref _pendingFaceCaptureSuccessCount, 0);
+            var fingerprintCount = Interlocked.Exchange(ref _pendingFingerprintCaptureSuccessCount, 0);
+            if (faceCount == 0 && fingerprintCount == 0)
+                return;
+
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [抓拍汇总] 1秒内成功：人脸={faceCount}，指纹={fingerprintCount}";
+            EnqueueUiLog(line);
+        }
 
         private void EnqueueUiLog(string line)
         {
@@ -892,6 +1092,8 @@ namespace HZCYKJTHardWare.Proxy
                 return;
             }
 
+            EnqueueCaptureSuccessSummaryIfDue();
+
             var sb = new StringBuilder();
             var count = 0;
             while (count < MaxUiLogFlushBatch && _pendingUiLogs.TryDequeue(out var line))
@@ -906,6 +1108,7 @@ namespace HZCYKJTHardWare.Proxy
         }
 
         private const int MaxActiveLogLines = 3000;  // Realtime window size.
+        private const int TrimActiveLogLinesBatch = 300;
         private const int MaxHistoryLogLines = 5000; // Prevent unbounded history prepend memory growth.
 
         private void AppendLogToMemo(string text)
@@ -988,22 +1191,35 @@ namespace HZCYKJTHardWare.Proxy
         private void AppendActiveLines(IList<LogLine> lines)
         {
             foreach (var line in lines)
-            {
                 _activeLines.AddLast(line);
-                InsertFormattedLine(memoLog.TextLength, line);
+
+            InsertFormattedLines(memoLog.TextLength, lines);
+        }
+
+        private int InsertFormattedLines(int index, IList<LogLine> lines)
+        {
+            var insertedLength = 0;
+            var lineIndex = 0;
+            while (lineIndex < lines.Count)
+            {
+                var color = lines[lineIndex].ForeColor;
+                var text = new StringBuilder();
+                while (lineIndex < lines.Count &&
+                    lines[lineIndex].ForeColor.ToArgb() == color.ToArgb())
+                {
+                    text.AppendLine(lines[lineIndex].Text);
+                    lineIndex++;
+                }
+
+                var chunk = text.ToString();
+                memoLog.Select(index + insertedLength, 0);
+                ApplyLogSelectionStyle(color);
+                memoLog.SelectedText = chunk;
+                insertedLength = memoLog.SelectionStart - index;
             }
 
             ResetLogSelectionStyle();
-        }
-
-        private int InsertFormattedLine(int index, LogLine line)
-        {
-            var text = line.Text + Environment.NewLine;
-            memoLog.Select(index, 0);
-            ApplyLogSelectionStyle(line.ForeColor);
-            memoLog.SelectedText = text;
-            ResetLogSelectionStyle();
-            return text.Length;
+            return insertedLength;
         }
 
         private void ApplyLogSelectionStyle(Color foreColor)
@@ -1031,10 +1247,10 @@ namespace HZCYKJTHardWare.Proxy
             return memoLog.ForeColor;
         }
 
-        private void TrimExcessActiveLines()
+        private void TrimExcessActiveLines(bool force = false)
         {
             int excess = _activeLines.Count - MaxActiveLogLines;
-            if (excess <= 0)
+            if (excess <= 0 || (!force && excess <= TrimActiveLogLinesBatch))
                 return;
 
             if (!RemoveLineRangeFromUi(_historyLines.Count, excess))
@@ -1042,6 +1258,18 @@ namespace HZCYKJTHardWare.Proxy
 
             for (int i = 0; i < excess && _activeLines.Count > 0; i++)
                 _activeLines.RemoveFirst();
+        }
+
+        private void DisableLogUndoBuffer()
+        {
+            try
+            {
+                SendMessage(memoLog.Handle, EM_SETUNDOLIMIT, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch
+            {
+                // Undo is not used by the read-only log view; failure is non-fatal.
+            }
         }
 
         private bool RemoveLineRangeFromUi(int startLine, int lineCount)
@@ -1076,6 +1304,7 @@ namespace HZCYKJTHardWare.Proxy
             {
                 SendMessage(memoLog.Handle, WM_SETREDRAW, true, 0);
                 memoLog.Invalidate();
+                memoLog.Update();
             }
             finally
             {
@@ -1112,15 +1341,25 @@ namespace HZCYKJTHardWare.Proxy
                 _monitorTimer.Dispose();
                 _monitorTimer = null;
             }
+            if (_midnightClearTimer != null)
+            {
+                _midnightClearTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _midnightClearTimer.Dispose();
+                _midnightClearTimer = null;
+            }
         }
 
         // --- History loading from log file ---
 
         private const int HistoryLoadBatch = 500;
         private const int WM_SETREDRAW = 0x000B;
+        private const int EM_SETUNDOLIMIT = 0x0452;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, bool wParam, int lParam);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         private void OnLogScrolledToTop(object sender, EventArgs e)
         {
@@ -1258,16 +1497,10 @@ namespace HZCYKJTHardWare.Proxy
                 BeginLogUpdate();
                 try
                 {
-                    int insertPos = 0;
                     for (int i = entries.Count - 1; i >= 0; i--)
                         _historyLines.AddFirst(entries[i]);
 
-                    foreach (var line in entries)
-                    {
-                        var length = InsertFormattedLine(insertPos, line);
-                        insertedLength += length;
-                        insertPos += length;
-                    }
+                    insertedLength = InsertFormattedLines(0, entries);
 
                     _historyMode = true;
                     memoLog.Select(Math.Min(oldFirstVisibleChar + insertedLength, memoLog.TextLength), 0);
@@ -1294,7 +1527,7 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (!_historyMode && _historyLines.Count == 0)
             {
-                TrimExcessActiveLines();
+                TrimExcessActiveLines(true);
                 memoLog.ScrollToBottomProgrammatically();
                 return;
             }
@@ -1305,7 +1538,7 @@ namespace HZCYKJTHardWare.Proxy
                 RemoveHistoryFromUi();
                 _historyLines.Clear();
                 _historyMode = false;
-                TrimExcessActiveLines();
+                TrimExcessActiveLines(true);
             }
             finally
             {
