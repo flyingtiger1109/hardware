@@ -13,6 +13,7 @@ using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Server;
 using HZCYKJTHardWare.Proxy.Terminal;
+using HZCYKJTHardWare.Proxy.UI;
 
 namespace HZCYKJTHardWare.Proxy
 {
@@ -30,6 +31,15 @@ namespace HZCYKJTHardWare.Proxy
         private DateTime _lastCaptureSummaryUtc = DateTime.UtcNow;
         private bool _exitRequested;
         private int _headerTerminalIndex = 1;
+        private HardwareHealthPanel _hardwareHealthPanel;
+        private ComboBox _previewDeviceComboBox;
+        private Button _btnStartSelectedPreview;
+        private Button _btnStopSelectedPreview;
+        private Label _lblPreviewControlHint;
+        private List<PreviewDeviceOption> _previewDeviceOptions;
+        private readonly HashSet<string> _activeLocalPreviews =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private int _previewControlBusy;
 
         private System.Windows.Forms.Timer _monitorTimer;
         private System.Threading.Timer _midnightClearTimer;
@@ -45,6 +55,32 @@ namespace HZCYKJTHardWare.Proxy
         private readonly LinkedList<LogLine> _activeLines = new LinkedList<LogLine>();
         private bool _historyMode;
 
+        private sealed class PreviewDeviceOption
+        {
+            public PreviewDeviceOption(string resourceType, string displayName,
+                Panel hostPanel, Label placeholder, Button startButton, Button stopButton)
+            {
+                ResourceType = resourceType;
+                DisplayName = displayName;
+                HostPanel = hostPanel;
+                Placeholder = placeholder;
+                StartButton = startButton;
+                StopButton = stopButton;
+            }
+
+            public string ResourceType { get; }
+            public string DisplayName { get; }
+            public Panel HostPanel { get; }
+            public Label Placeholder { get; }
+            public Button StartButton { get; }
+            public Button StopButton { get; }
+
+            public override string ToString()
+            {
+                return DisplayName;
+            }
+        }
+
         private sealed class LogLine
         {
             public DateTime Timestamp;
@@ -55,6 +91,7 @@ namespace HZCYKJTHardWare.Proxy
         public MainForm()
         {
             InitializeComponent();
+            InitializeHardwareHealthPanel();
             memoLog.Font = _logFont;
             DisableLogUndoBuffer();
 
@@ -133,19 +170,6 @@ namespace HZCYKJTHardWare.Proxy
             btnClearLog.Location = new Point(pnlError.Right + gap, alignY);
             btnExportLog.Location = new Point(btnClearLog.Right + gap, alignY);
 
-            // 硬件状态标签
-            var lblHardwareStatus = new Label
-            {
-                AutoSize = true,
-                Text = "硬件状态：等待检测",
-                ForeColor = Color.Gray,
-                Font = new Font("Microsoft YaHei", 9F),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Parent = panelLogToolbar
-            };
-            lblHardwareStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-            lblHardwareStatus.Location = new Point(btnExportLog.Right + gap, alignY);
-
             InitCardLayouts();
             ApplyUIPolish();
             InitializeTrayIcon();
@@ -153,6 +177,41 @@ namespace HZCYKJTHardWare.Proxy
             InitializeMonitorTimer();
             InitializeMidnightClearTimer();
             UpdateMonitorInfo();
+        }
+
+        private void InitializeHardwareHealthPanel()
+        {
+            var headerHeightBeforeHealthPanel = panelHeader.Height;
+            _hardwareHealthPanel = new HardwareHealthPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = HardwareHealthPanel.DefaultHeight,
+                Margin = Padding.Empty
+            };
+            _hardwareHealthPanel.RefreshRequested += HardwareHealthPanel_RefreshRequested;
+            _hardwareHealthPanel.SetRefreshEnabled(false);
+            panelHeader.Controls.Add(_hardwareHealthPanel);
+            panelHeader.Controls.SetChildIndex(
+                _hardwareHealthPanel, panelHeader.Controls.Count - 1);
+            EnsureHeaderHasHealthPanelSpace(headerHeightBeforeHealthPanel);
+        }
+
+        private void EnsureHeaderHasHealthPanelSpace(int headerHeightBeforeHealthPanel)
+        {
+            if (_hardwareHealthPanel == null)
+                return;
+
+            var requiredHeaderHeight =
+                headerHeightBeforeHealthPanel + _hardwareHealthPanel.Height;
+            if (panelHeader.Height < requiredHeaderHeight)
+                panelHeader.Height = requiredHeaderHeight;
+
+            panelHeader.MinimumSize = new Size(
+                panelHeader.MinimumSize.Width,
+                Math.Max(panelHeader.MinimumSize.Height, requiredHeaderHeight));
+            headerLayout.MinimumSize = new Size(
+                headerLayout.MinimumSize.Width,
+                Math.Max(0, headerHeightBeforeHealthPanel - panelHeader.Padding.Vertical));
         }
 
         private void InitCardLayouts()
@@ -173,19 +232,7 @@ namespace HZCYKJTHardWare.Proxy
             AddToGrid(tlpOperation, 0, 2, btnIrisCapture, "虹膜抓拍", btnIrisCapture_Click);
             AddToGrid(tlpOperation, 1, 2, btnAuthorize, "授权测试", btnAuthorize_Click);
 
-            SetupGrid2x6(tlpPreviewControl);
-            AddToGrid(tlpPreviewControl, 0, 0, btnStartCameraPreview, "开始摄像头预览", btnStartCameraPreview_Click);
-            AddToGrid(tlpPreviewControl, 1, 0, btnStopCameraPreview, "停止摄像头预览", btnStopCameraPreview_Click);
-            AddToGrid(tlpPreviewControl, 0, 1, btnStartFingerprintPreview, "开始指纹预览", btnStartFingerprintPreview_Click);
-            AddToGrid(tlpPreviewControl, 1, 1, btnStopFingerprintPreview, "停止指纹预览", btnStopFingerprintPreview_Click);
-            AddToGrid(tlpPreviewControl, 0, 2, btnStartIrisPreview, "开始虹膜预览", btnStartIrisPreview_Click);
-            AddToGrid(tlpPreviewControl, 1, 2, btnStopIrisPreview, "停止虹膜预览", btnStopIrisPreview_Click);
-            AddToGrid(tlpPreviewControl, 0, 3, btnStartPlatePreviewCJ, "开始出境车牌预览", btnStartPlatePreviewCJ_Click);
-            AddToGrid(tlpPreviewControl, 1, 3, btnStopPlatePreviewCJ, "停止出境车牌预览", btnStopPlatePreviewCJ_Click);
-            AddToGrid(tlpPreviewControl, 0, 4, btnStartPlatePreviewRJ2, "开始入境车牌预览 2", btnStartPlatePreviewRJ2_Click);
-            AddToGrid(tlpPreviewControl, 1, 4, btnStopPlatePreviewRJ2, "停止入境车牌预览 2", btnStopPlatePreviewRJ2_Click);
-            AddToGrid(tlpPreviewControl, 0, 5, btnStartPlatePreviewRJ3, "开始入境车牌预览 3", btnStartPlatePreviewRJ3_Click);
-            AddToGrid(tlpPreviewControl, 1, 5, btnStopPlatePreviewRJ3, "停止入境车牌预览 3", btnStopPlatePreviewRJ3_Click);
+            InitializePreviewSelectorControls();
         }
 
         private void ApplyUIPolish()
@@ -198,8 +245,7 @@ namespace HZCYKJTHardWare.Proxy
             // 2. Force 50/50 columns + percent row heights
             ResetGridStyles(tlpService, 3);
             ResetGridStyles(tlpOperation, 3);
-            ResetGridStyles(tlpPreviewControl, 6);
-            tlpPreviewControl.Padding = new Padding(0, 2, 0, 2);
+            tlpPreviewControl.Padding = new Padding(8, 6, 8, 8);
 
             // 3. Video container
             panelPreview.BackColor = Color.FromArgb(249, 250, 251);
@@ -230,6 +276,197 @@ namespace HZCYKJTHardWare.Proxy
             float pct = 100f / rowCount;
             for (int i = 0; i < rowCount; i++)
                 tlp.RowStyles.Add(new RowStyle(SizeType.Percent, pct));
+        }
+
+        private void InitializePreviewSelectorControls()
+        {
+            _previewDeviceOptions = new List<PreviewDeviceOption>
+            {
+                new PreviewDeviceOption("camera", "摄像头", panelCamera,
+                    lblCameraPlaceholder, btnStartCameraPreview, btnStopCameraPreview),
+                new PreviewDeviceOption("fingerprint", "指纹", panelFingerprint,
+                    lblFingerprintPlaceholder, btnStartFingerprintPreview, btnStopFingerprintPreview),
+                new PreviewDeviceOption("iris", "虹膜", panelIris,
+                    lblIrisPlaceholder, btnStartIrisPreview, btnStopIrisPreview),
+                new PreviewDeviceOption("plate_cj", "出境车牌", panelPlateCJ,
+                    lblPlateCJPlaceholder, btnStartPlatePreviewCJ, btnStopPlatePreviewCJ),
+                new PreviewDeviceOption("plate_rj2", "入境车牌 2", panelPlateRJ2,
+                    lblPlateRJ2Placeholder, btnStartPlatePreviewRJ2, btnStopPlatePreviewRJ2),
+                new PreviewDeviceOption("plate_rj3", "入境车牌 3", panelPlateRJ3,
+                    lblPlateRJ3Placeholder, btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3)
+            };
+
+            tlpPreviewControl.SuspendLayout();
+            try
+            {
+                tlpPreviewControl.Controls.Clear();
+                tlpPreviewControl.ColumnStyles.Clear();
+                tlpPreviewControl.RowStyles.Clear();
+                tlpPreviewControl.ColumnCount = 2;
+                tlpPreviewControl.RowCount = 3;
+                tlpPreviewControl.Dock = DockStyle.Fill;
+                tlpPreviewControl.Padding = new Padding(8, 6, 8, 8);
+                tlpPreviewControl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                tlpPreviewControl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                tlpPreviewControl.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
+                tlpPreviewControl.RowStyles.Add(new RowStyle(SizeType.Percent, 58F));
+                tlpPreviewControl.RowStyles.Add(new RowStyle(SizeType.Percent, 42F));
+
+                var previewComboHost = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle,
+                    Margin = new Padding(4, 4, 4, 8),
+                    Padding = new Padding(10, 4, 8, 0)
+                };
+
+                _previewDeviceComboBox = new ComboBox
+                {
+                    Dock = DockStyle.Top,
+                    DropDownStyle = ComboBoxStyle.DropDownList,
+                    DrawMode = DrawMode.OwnerDrawFixed,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Microsoft YaHei", 9F),
+                    ForeColor = Color.FromArgb(31, 41, 55),
+                    BackColor = Color.White,
+                    Margin = Padding.Empty,
+                    IntegralHeight = false,
+                    Height = 34,
+                    ItemHeight = 28,
+                    MaxDropDownItems = 8
+                };
+                foreach (var option in _previewDeviceOptions)
+                    _previewDeviceComboBox.Items.Add(option);
+                _previewDeviceComboBox.DrawItem += PreviewDeviceComboBox_DrawItem;
+                _previewDeviceComboBox.SelectedIndexChanged += (s, e) =>
+                    UpdatePreviewSelectorButtonState();
+                _previewDeviceComboBox.DropDownClosed += (s, e) =>
+                    _previewDeviceComboBox.Invalidate();
+                if (_previewDeviceComboBox.Items.Count > 0)
+                    _previewDeviceComboBox.SelectedIndex = 0;
+                previewComboHost.Controls.Add(_previewDeviceComboBox);
+
+                _btnStartSelectedPreview = new Button();
+                StylePreviewActionButton(_btnStartSelectedPreview, "开始预览");
+                _btnStartSelectedPreview.Click += btnStartSelectedPreview_Click;
+
+                _btnStopSelectedPreview = new Button();
+                StylePreviewActionButton(_btnStopSelectedPreview, "停止预览");
+                _btnStopSelectedPreview.Click += btnStopSelectedPreview_Click;
+
+                _lblPreviewControlHint = new Label
+                {
+                    Dock = DockStyle.Fill,
+                    Font = new Font("Microsoft YaHei", 8.5F),
+                    ForeColor = Color.FromArgb(100, 116, 139),
+                    Text = "选择设备后点击开始/停止，预览画面显示在下方对应窗口。",
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    AutoEllipsis = true,
+                    Margin = new Padding(4, 2, 4, 0)
+                };
+
+                tlpPreviewControl.Controls.Add(previewComboHost, 0, 0);
+                tlpPreviewControl.SetColumnSpan(previewComboHost, 2);
+                tlpPreviewControl.Controls.Add(_btnStartSelectedPreview, 0, 1);
+                tlpPreviewControl.Controls.Add(_btnStopSelectedPreview, 1, 1);
+                tlpPreviewControl.Controls.Add(_lblPreviewControlHint, 0, 2);
+                tlpPreviewControl.SetColumnSpan(_lblPreviewControlHint, 2);
+
+                UpdatePreviewSelectorButtonState();
+            }
+            finally
+            {
+                tlpPreviewControl.ResumeLayout(true);
+            }
+        }
+
+        private void PreviewDeviceComboBox_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0)
+                return;
+
+            var comboBox = sender as ComboBox;
+            var item = comboBox?.Items[e.Index];
+            var option = item as PreviewDeviceOption;
+            var text = option?.DisplayName ?? item?.ToString() ?? "";
+            var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+            var backColor = selected && comboBox != null && comboBox.DroppedDown
+                ? Color.FromArgb(248, 250, 252)
+                : Color.White;
+            var foreColor = Color.FromArgb(31, 41, 55);
+
+            using (var background = new SolidBrush(backColor))
+                e.Graphics.FillRectangle(background, e.Bounds);
+
+            var textBounds = new Rectangle(
+                e.Bounds.Left + 8,
+                e.Bounds.Top,
+                Math.Max(0, e.Bounds.Width - 16),
+                e.Bounds.Height);
+            TextRenderer.DrawText(e.Graphics, text, e.Font, textBounds, foreColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.EndEllipsis);
+
+            if (selected && comboBox != null && comboBox.DroppedDown)
+                e.DrawFocusRectangle();
+        }
+
+        private static void StylePreviewActionButton(Button button, string text)
+        {
+            button.BackColor = Color.White;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(219, 229, 254);
+            button.Font = new Font("Microsoft YaHei", 9F);
+            button.ForeColor = Color.FromArgb(13, 110, 253);
+            button.Text = text;
+            button.UseVisualStyleBackColor = false;
+            button.Dock = DockStyle.Fill;
+            button.Margin = new Padding(4);
+        }
+
+        private PreviewDeviceOption GetSelectedPreviewOption()
+        {
+            return _previewDeviceComboBox?.SelectedItem as PreviewDeviceOption;
+        }
+
+        private void UpdatePreviewSelectorButtonState()
+        {
+            var option = GetSelectedPreviewOption();
+            var hasServer = _server != null;
+            var busy = Volatile.Read(ref _previewControlBusy) != 0;
+            var isPreviewing = option != null &&
+                _activeLocalPreviews.Contains(option.ResourceType);
+
+            if (_previewDeviceComboBox != null)
+                _previewDeviceComboBox.Enabled = hasServer && !busy;
+
+            if (_btnStartSelectedPreview != null)
+            {
+                _btnStartSelectedPreview.Text = isPreviewing ? "预览中" : "开始预览";
+                _btnStartSelectedPreview.Enabled = hasServer && !busy &&
+                    option != null && !isPreviewing;
+                SetPersistentButtonStyle(_btnStartSelectedPreview, isPreviewing);
+            }
+
+            if (_btnStopSelectedPreview != null)
+            {
+                _btnStopSelectedPreview.Enabled = hasServer && !busy &&
+                    option != null && isPreviewing;
+                SetPersistentButtonStyle(_btnStopSelectedPreview, false);
+            }
+
+            if (_lblPreviewControlHint != null)
+            {
+                _lblPreviewControlHint.Text = option == null
+                    ? "请选择需要预览的设备。"
+                    : isPreviewing
+                        ? option.DisplayName + "预览中，可点击停止预览。"
+                        : "选择设备后点击开始/停止，预览画面显示在下方对应窗口。";
+            }
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -543,6 +780,7 @@ namespace HZCYKJTHardWare.Proxy
             {
                 try { _server?.Dispose(); } catch { }
                 _server = null;
+                _hardwareHealthPanel?.ShowServiceStopped();
                 UpdateHeaderStatus();
                 AppendLog("启动服务失败: " + ex.Message);
             }
@@ -566,6 +804,7 @@ namespace HZCYKJTHardWare.Proxy
                 UpdateHeaderStatus();
                 ResetPreviewButtonStates();
                 SetPersistentButtonStyle(btnStartProcess, false);
+                _hardwareHealthPanel?.ShowServiceStopped();
                 AppendLog("服务已停止");
             }
             catch (Exception ex)
@@ -585,6 +824,7 @@ namespace HZCYKJTHardWare.Proxy
             SetPersistentButtonStyle(btnStartServer, isRunning);
             SetPersistentButtonStyle(btnSwitchTerminal1, _headerTerminalIndex == 1);
             SetPersistentButtonStyle(btnSwitchTerminal2, _headerTerminalIndex == 2);
+            _hardwareHealthPanel?.SetRefreshEnabled(isRunning);
             SetBusinessButtonsEnabled(isRunning);
 
             try
@@ -668,32 +908,23 @@ namespace HZCYKJTHardWare.Proxy
 
             try
             {
-                var label = FindHardwareStatusLabel();
-                if (label == null) return;
-
-                if (status.IsHealthy)
-                {
-                    label.Text = "硬件状态：正常";
-                    label.ForeColor = Color.FromArgb(22, 163, 74);
-                }
-                else
-                {
-                    var count = status.Devices.Count(d => !d.IsOnline);
-                    label.Text = $"硬件状态：{count} 项异常";
-                    label.ForeColor = Color.FromArgb(220, 38, 38);
-                }
+                _hardwareHealthPanel?.UpdateHealth(status);
             }
             catch { }
         }
 
-        private Label FindHardwareStatusLabel()
+        private void HardwareHealthPanel_RefreshRequested(object sender, EventArgs e)
         {
-            foreach (Control c in panelLogToolbar.Controls)
+            if (_server == null)
             {
-                if (c is Label l && l.Text != null && l.Text.StartsWith("硬件状态"))
-                    return l;
+                _hardwareHealthPanel?.ShowServiceStopped();
+                AppendLog("[健康检测] 服务未启动，无法手动刷新");
+                return;
             }
-            return null;
+
+            _hardwareHealthPanel?.ShowRefreshPending();
+            _server.RequestHealthCheck();
+            AppendLog("[健康检测] 已手动触发一次刷新");
         }
 
         private void SetPersistentButtonStyle(Button button, bool active)
@@ -722,12 +953,14 @@ namespace HZCYKJTHardWare.Proxy
 
         private void ResetPreviewButtonStates()
         {
+            _activeLocalPreviews.Clear();
             SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
             SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
             SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
             SetPreviewButtonState(btnStartPlatePreviewCJ, btnStopPlatePreviewCJ, false);
             SetPreviewButtonState(btnStartPlatePreviewRJ2, btnStopPlatePreviewRJ2, false);
             SetPreviewButtonState(btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3, false);
+            UpdatePreviewSelectorButtonState();
         }
 
         private void SetBusinessButtonsEnabled(bool enabled)
@@ -754,6 +987,9 @@ namespace HZCYKJTHardWare.Proxy
             btnStopPlatePreviewRJ2.Enabled = enabled;
             btnStartPlatePreviewRJ3.Enabled = enabled;
             btnStopPlatePreviewRJ3.Enabled = enabled;
+            if (_previewDeviceComboBox != null)
+                _previewDeviceComboBox.Enabled = enabled;
+            UpdatePreviewSelectorButtonState();
         }
 
         private void UpdateMonitorInfo()
@@ -888,64 +1124,122 @@ namespace HZCYKJTHardWare.Proxy
 
         // --- Preview operations ---
 
-        private async void btnStartCameraPreview_Click(object sender, EventArgs e)
+        private async Task<bool> StartLocalPreviewFromUiAsync(
+            string resourceType,
+            string displayName,
+            Panel panel,
+            Label placeholder,
+            Button startButton,
+            Button stopButton)
+        {
+            if (_server == null) return false;
+            startButton.Enabled = false;
+            UpdatePreviewSelectorButtonState();
+            var ok = await _server.StartLocalPreviewAsync(resourceType, panel);
+            startButton.Enabled = true;
+            SetPreviewButtonState(startButton, stopButton, ok);
+            placeholder.Visible = !ok;
+            if (ok)
+                _activeLocalPreviews.Add(resourceType);
+            else
+                _activeLocalPreviews.Remove(resourceType);
+            UpdatePreviewSelectorButtonState();
+            AppendLog(ok ? $"{displayName}预览已启动" : $"{displayName}预览启动失败");
+            return ok;
+        }
+
+        private void StopLocalPreviewFromUi(
+            string resourceType,
+            string displayName,
+            Label placeholder,
+            Button startButton,
+            Button stopButton)
         {
             if (_server == null) return;
-            btnStartCameraPreview.Enabled = false;
-            var ok = await _server.StartLocalPreviewAsync("camera", panelCamera);
-            btnStartCameraPreview.Enabled = true;
-            SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, ok);
-            lblCameraPlaceholder.Visible = !ok;
-            AppendLog(ok ? "摄像头预览已启动" : "摄像头预览启动失败");
+            _server.StopLocalPreview(resourceType);
+            SetPreviewButtonState(startButton, stopButton, false);
+            placeholder.Visible = true;
+            _activeLocalPreviews.Remove(resourceType);
+            UpdatePreviewSelectorButtonState();
+            AppendLog($"{displayName}预览已停止");
+        }
+
+        private async void btnStartSelectedPreview_Click(object sender, EventArgs e)
+        {
+            var option = GetSelectedPreviewOption();
+            if (option == null || _server == null)
+                return;
+            if (Interlocked.Exchange(ref _previewControlBusy, 1) == 1)
+                return;
+
+            try
+            {
+                UpdatePreviewSelectorButtonState();
+                await StartLocalPreviewFromUiAsync(option.ResourceType, option.DisplayName,
+                    option.HostPanel, option.Placeholder, option.StartButton, option.StopButton);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _previewControlBusy, 0);
+                UpdatePreviewSelectorButtonState();
+            }
+        }
+
+        private void btnStopSelectedPreview_Click(object sender, EventArgs e)
+        {
+            var option = GetSelectedPreviewOption();
+            if (option == null || _server == null)
+                return;
+            if (Interlocked.Exchange(ref _previewControlBusy, 1) == 1)
+                return;
+
+            try
+            {
+                UpdatePreviewSelectorButtonState();
+                StopLocalPreviewFromUi(option.ResourceType, option.DisplayName,
+                    option.Placeholder, option.StartButton, option.StopButton);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _previewControlBusy, 0);
+                UpdatePreviewSelectorButtonState();
+            }
+        }
+
+        private async void btnStartCameraPreview_Click(object sender, EventArgs e)
+        {
+            await StartLocalPreviewFromUiAsync("camera", "摄像头", panelCamera,
+                lblCameraPlaceholder, btnStartCameraPreview, btnStopCameraPreview);
         }
 
         private void btnStopCameraPreview_Click(object sender, EventArgs e)
         {
-            if (_server == null) return;
-            _server.StopLocalPreview("camera");
-            SetPreviewButtonState(btnStartCameraPreview, btnStopCameraPreview, false);
-            lblCameraPlaceholder.Visible = true;
-            AppendLog("摄像头预览已停止");
+            StopLocalPreviewFromUi("camera", "摄像头", lblCameraPlaceholder,
+                btnStartCameraPreview, btnStopCameraPreview);
         }
 
         private async void btnStartFingerprintPreview_Click(object sender, EventArgs e)
         {
-            if (_server == null) return;
-            btnStartFingerprintPreview.Enabled = false;
-            var ok = await _server.StartLocalPreviewAsync("fingerprint", panelFingerprint);
-            btnStartFingerprintPreview.Enabled = true;
-            SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, ok);
-            lblFingerprintPlaceholder.Visible = !ok;
-            AppendLog(ok ? "指纹预览已启动" : "指纹预览启动失败");
+            await StartLocalPreviewFromUiAsync("fingerprint", "指纹", panelFingerprint,
+                lblFingerprintPlaceholder, btnStartFingerprintPreview, btnStopFingerprintPreview);
         }
 
         private void btnStopFingerprintPreview_Click(object sender, EventArgs e)
         {
-            if (_server == null) return;
-            _server.StopLocalPreview("fingerprint");
-            SetPreviewButtonState(btnStartFingerprintPreview, btnStopFingerprintPreview, false);
-            lblFingerprintPlaceholder.Visible = true;
-            AppendLog("指纹预览已停止");
+            StopLocalPreviewFromUi("fingerprint", "指纹", lblFingerprintPlaceholder,
+                btnStartFingerprintPreview, btnStopFingerprintPreview);
         }
 
         private async void btnStartIrisPreview_Click(object sender, EventArgs e)
         {
-            if (_server == null) return;
-            btnStartIrisPreview.Enabled = false;
-            var ok = await _server.StartLocalPreviewAsync("iris", panelIris);
-            btnStartIrisPreview.Enabled = true;
-            SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, ok);
-            lblIrisPlaceholder.Visible = !ok;
-            AppendLog(ok ? "虹膜预览已启动" : "虹膜预览启动失败");
+            await StartLocalPreviewFromUiAsync("iris", "虹膜", panelIris,
+                lblIrisPlaceholder, btnStartIrisPreview, btnStopIrisPreview);
         }
 
         private void btnStopIrisPreview_Click(object sender, EventArgs e)
         {
-            if (_server == null) return;
-            _server.StopLocalPreview("iris");
-            SetPreviewButtonState(btnStartIrisPreview, btnStopIrisPreview, false);
-            lblIrisPlaceholder.Visible = true;
-            AppendLog("虹膜预览已停止");
+            StopLocalPreviewFromUi("iris", "虹膜", lblIrisPlaceholder,
+                btnStartIrisPreview, btnStopIrisPreview);
         }
 
         private static string GetPlatePreviewDisplayName(string plateCode)
@@ -962,24 +1256,17 @@ namespace HZCYKJTHardWare.Proxy
         private async Task StartLocalPlatePreviewAsync(string plateCode, Panel panel,
             Label placeholder, Button startButton, Button stopButton)
         {
-            if (_server == null) return;
             var displayName = GetPlatePreviewDisplayName(plateCode);
-            startButton.Enabled = false;
-            var ok = await _server.StartLocalPreviewAsync("plate_" + plateCode, panel);
-            startButton.Enabled = true;
-            SetPreviewButtonState(startButton, stopButton, ok);
-            placeholder.Visible = !ok;
-            AppendLog(ok ? $"{displayName}预览已启动" : $"{displayName}预览启动失败");
+            await StartLocalPreviewFromUiAsync("plate_" + plateCode, displayName,
+                panel, placeholder, startButton, stopButton);
         }
 
         private void StopLocalPlatePreview(string plateCode, Label placeholder,
             Button startButton, Button stopButton)
         {
-            if (_server == null) return;
-            _server.StopLocalPreview("plate_" + plateCode);
-            SetPreviewButtonState(startButton, stopButton, false);
-            placeholder.Visible = true;
-            AppendLog($"{GetPlatePreviewDisplayName(plateCode)}预览已停止");
+            StopLocalPreviewFromUi("plate_" + plateCode,
+                GetPlatePreviewDisplayName(plateCode), placeholder,
+                startButton, stopButton);
         }
 
         private async void btnStartPlatePreviewCJ_Click(object sender, EventArgs e) =>

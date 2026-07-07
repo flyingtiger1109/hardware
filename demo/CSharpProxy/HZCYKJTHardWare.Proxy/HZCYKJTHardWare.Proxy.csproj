@@ -12,6 +12,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
     <ApplicationIcon>国移局icon_256x256.ico</ApplicationIcon>
+    <DefaultItemExcludes>$(DefaultItemExcludes);_codex_build\**\*</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -34,6 +35,13 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="System.ValueTuple" Version="4.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="_codex_build\**\*.cs" />
+    <EmbeddedResource Remove="_codex_build\**\*" />
+    <None Remove="_codex_build\**\*" />
+    <Content Remove="_codex_build\**\*" />
   </ItemGroup>
 
   <ItemGroup>

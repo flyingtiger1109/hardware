@@ -215,11 +215,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                     : "";
                 _onTerminalChanged?.Invoke(terminalIndex);
                 _onProcessStateChanged?.Invoke(processActive);
+                _healthChecker?.RequestCheck();
             }
             catch (Exception ex)
             {
                 Logger.Error("[服务] 通知当前终端变化失败", ex);
             }
+        }
+
+        public void RequestHealthCheck()
+        {
+            _healthChecker?.RequestCheck(resetRetryAttempt: false);
         }
 
         public void Stop()

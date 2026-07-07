@@ -10,6 +10,7 @@
     <LangVersion>7.3</LangVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <DefaultItemExcludes>$(DefaultItemExcludes);_codex_build\**\*</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -26,6 +27,13 @@
   <ItemGroup>
     <PackageReference Include="MSTest.TestFramework" Version="2.2.10" />
     <PackageReference Include="MSTest.TestAdapter" Version="2.2.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="_codex_build\**\*.cs" />
+    <EmbeddedResource Remove="_codex_build\**\*" />
+    <None Remove="_codex_build\**\*" />
+    <Content Remove="_codex_build\**\*" />
   </ItemGroup>
 
   <ItemGroup>

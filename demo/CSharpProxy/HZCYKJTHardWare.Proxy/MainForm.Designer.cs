@@ -153,12 +153,12 @@ namespace HZCYKJTHardWare.Proxy
             this.headerLayout.Name = "headerLayout";
             this.headerLayout.RowCount = 1;
             this.headerLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
-            this.headerLayout.Size = new System.Drawing.Size(2232, 180);
+            this.headerLayout.Size = new System.Drawing.Size(2232, 292);
             this.headerLayout.TabIndex = 0;
             // 
             // lblPageTitle
             // 
-            this.lblPageTitle.AutoEllipsis = true;
+            this.lblPageTitle.AutoEllipsis = false;
             this.lblPageTitle.Dock = System.Windows.Forms.DockStyle.Fill;
             this.lblPageTitle.Font = new System.Drawing.Font("微软雅黑", 14F, System.Drawing.FontStyle.Bold);
             this.lblPageTitle.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(31)))), ((int)(((byte)(41)))), ((int)(((byte)(55)))));
@@ -344,7 +344,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelTop.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.panelTop.Name = "panelTop";
             this.panelTop.Padding = new System.Windows.Forms.Padding(40, 20, 40, 20);
-            this.panelTop.Size = new System.Drawing.Size(2360, 420);
+            this.panelTop.Size = new System.Drawing.Size(2360, 360);
             this.panelTop.TabIndex = 2;
             // 
             // cardLayout
@@ -362,7 +362,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardLayout.Name = "cardLayout";
             this.cardLayout.RowCount = 1;
             this.cardLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
-            this.cardLayout.Size = new System.Drawing.Size(2280, 380);
+            this.cardLayout.Size = new System.Drawing.Size(2280, 320);
             this.cardLayout.TabIndex = 0;
             // 
             // cardService
@@ -376,7 +376,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardService.Margin = new System.Windows.Forms.Padding(0, 0, 24, 0);
             this.cardService.Name = "cardService";
             this.cardService.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardService.Size = new System.Drawing.Size(735, 380);
+            this.cardService.Size = new System.Drawing.Size(735, 320);
             this.cardService.TabIndex = 0;
             // 
             // tlpService
@@ -412,7 +412,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardOperation.Margin = new System.Windows.Forms.Padding(0, 0, 24, 0);
             this.cardOperation.Name = "cardOperation";
             this.cardOperation.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardOperation.Size = new System.Drawing.Size(735, 380);
+            this.cardOperation.Size = new System.Drawing.Size(735, 320);
             this.cardOperation.TabIndex = 1;
             // 
             // tlpOperation
@@ -448,7 +448,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardPreviewControl.Margin = new System.Windows.Forms.Padding(0);
             this.cardPreviewControl.Name = "cardPreviewControl";
             this.cardPreviewControl.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-            this.cardPreviewControl.Size = new System.Drawing.Size(762, 380);
+            this.cardPreviewControl.Size = new System.Drawing.Size(762, 320);
             this.cardPreviewControl.TabIndex = 2;
             // 
             // tlpPreviewControl
@@ -480,11 +480,11 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPreview.Controls.Add(this.splitter2);
             this.panelPreview.Controls.Add(this.splitter1);
             this.panelPreview.Dock = System.Windows.Forms.DockStyle.Top;
-            this.panelPreview.Location = new System.Drawing.Point(0, 648);
+            this.panelPreview.Location = new System.Drawing.Point(0, 700);
             this.panelPreview.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.panelPreview.Name = "panelPreview";
             this.panelPreview.Padding = new System.Windows.Forms.Padding(40, 0, 40, 16);
-            this.panelPreview.Size = new System.Drawing.Size(2360, 520);
+            this.panelPreview.Size = new System.Drawing.Size(2360, 468);
             this.panelPreview.TabIndex = 1;
             // 
             // previewLayout
@@ -503,14 +503,14 @@ namespace HZCYKJTHardWare.Proxy
             this.previewLayout.Controls.Add(this.panelPlateCJ, 1, 1);
             this.previewLayout.Controls.Add(this.panelPlateRJ2, 3, 1);
             this.previewLayout.Controls.Add(this.panelPlateRJ3, 5, 1);
-            this.previewLayout.Dock = System.Windows.Forms.DockStyle.Top;
+            this.previewLayout.Dock = System.Windows.Forms.DockStyle.Fill;
             this.previewLayout.Location = new System.Drawing.Point(56, 0);
             this.previewLayout.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
             this.previewLayout.Name = "previewLayout";
             this.previewLayout.RowCount = 2;
-            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 250F));
-            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 250F));
-            this.previewLayout.Size = new System.Drawing.Size(2264, 500);
+            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.previewLayout.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.previewLayout.Size = new System.Drawing.Size(2264, 452);
             this.previewLayout.TabIndex = 0;
             // 
             // panelCamera
