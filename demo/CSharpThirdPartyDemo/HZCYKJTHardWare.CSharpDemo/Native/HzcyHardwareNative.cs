@@ -68,7 +68,7 @@ namespace HZCYKJTHardWare.CSharpDemo.Native
         internal static extern int HZCYKJTHardWare_CaptureCameraImage(IntPtr saveDir);
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
-        internal static extern int HZCYKJTHardWare_CaptureFingerprintImage(IntPtr saveDir);
+        internal static extern int HZCYKJTHardWare_CaptureFingerprintImage(IntPtr saveDir, IntPtr saveDirHk);
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
         internal static extern int HZCYKJTHardWare_CaptureIrisImage(IntPtr saveDir);

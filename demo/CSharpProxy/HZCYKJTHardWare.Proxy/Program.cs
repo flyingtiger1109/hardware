@@ -11,6 +11,8 @@ namespace HZCYKJTHardWare.Proxy
 {
     internal static class Program
     {
+        private const string SingleInstanceMutexName = @"Local\HZCYKJTHardWare.Proxy.SingleInstance";
+
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
@@ -20,43 +22,55 @@ namespace HZCYKJTHardWare.Proxy
             // DPI awareness - safe on Win7+ (function exists since Vista)
             try { SetProcessDPIAware(); } catch { /* WinXP fallback */ }
 
-            // Thread pool warm-up: prevent slow thread ramp-up under sudden high load
-            // Default min threads is very low; without this, high-frequency requests queue up
-            int minWorker, minIo;
-            ThreadPool.GetMinThreads(out minWorker, out minIo);
-            ThreadPool.SetMinThreads(Math.Max(minWorker, 20), Math.Max(minIo, 20));
-
-            // ServicePointManager: connection pool and DNS settings (process-wide, set once)
-            ServicePointManager.DefaultConnectionLimit = 50;
-            ServicePointManager.Expect100Continue = false;
-            ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
-            ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
-
-            // === Global exception handlers for long-running stability ===
-            AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+            bool createdNew;
+            using (var singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out createdNew))
             {
-                var ex = args.ExceptionObject as Exception;
-                var msg = $"[全局异常] UnhandledException: {(ex != null ? ex.ToString() : args.ExceptionObject?.ToString() ?? "未知")}";
-                try { CrashLog(msg); } catch { }
-            };
+                if (!createdNew)
+                {
+                    Application.EnableVisualStyles();
+                    MessageBox.Show("程序已在运行，请勿重复打开。", "HZCYKJTHardWare 后台服务",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
 
-            Application.ThreadException += (sender, args) =>
-            {
-                var msg = $"[全局异常] ThreadException: {args.Exception}";
-                try { CrashLog(msg); } catch { }
-                // Do NOT re-throw — keep the process alive for long-running service
-            };
+                // Thread pool warm-up: prevent slow thread ramp-up under sudden high load
+                // Default min threads is very low; without this, high-frequency requests queue up
+                int minWorker, minIo;
+                ThreadPool.GetMinThreads(out minWorker, out minIo);
+                ThreadPool.SetMinThreads(Math.Max(minWorker, 20), Math.Max(minIo, 20));
 
-            TaskScheduler.UnobservedTaskException += (sender, args) =>
-            {
-                var msg = $"[全局异常] UnobservedTaskException: {args.Exception}";
-                try { CrashLog(msg); } catch { }
-                args.SetObserved();  // Prevent process crash
-            };
+                // ServicePointManager: connection pool and DNS settings (process-wide, set once)
+                ServicePointManager.DefaultConnectionLimit = 50;
+                ServicePointManager.Expect100Continue = false;
+                ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
+                ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+                // === Global exception handlers for long-running stability ===
+                AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+                {
+                    var ex = args.ExceptionObject as Exception;
+                    var msg = $"[全局异常] UnhandledException: {(ex != null ? ex.ToString() : args.ExceptionObject?.ToString() ?? "未知")}";
+                    try { CrashLog(msg); } catch { }
+                };
+
+                Application.ThreadException += (sender, args) =>
+                {
+                    var msg = $"[全局异常] ThreadException: {args.Exception}";
+                    try { CrashLog(msg); } catch { }
+                    // Do NOT re-throw — keep the process alive for long-running service
+                };
+
+                TaskScheduler.UnobservedTaskException += (sender, args) =>
+                {
+                    var msg = $"[全局异常] UnobservedTaskException: {args.Exception}";
+                    try { CrashLog(msg); } catch { }
+                    args.SetObserved();  // Prevent process crash
+                };
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm());
+            }
         }
 
         /// <summary>

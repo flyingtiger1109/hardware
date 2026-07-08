@@ -48,6 +48,24 @@ static bool IsDelphiErrorResponse(const std::string& body, std::string& errorCod
     return true;
 }
 
+static std::string LogValue(const std::string& value, size_t maxLength = 256) {
+    std::string result;
+    result.reserve(value.size());
+    for (char ch : value) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (ch == '\r' || ch == '\n' || ch == '\t' || c < 0x20) {
+            result += ' ';
+        } else {
+            result += ch;
+        }
+        if (result.size() >= maxLength) {
+            result += "...";
+            break;
+        }
+    }
+    return result;
+}
+
 static std::string JsonEscape(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size() + 8);
@@ -1141,6 +1159,15 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     if (message.empty()) {
         message = (authResult == 1) ? "授权通过" : "授权未通过";
     }
+    LOG_INFO("授权", "DLL收到EXE授权回调：请求ID=%s，授权结果=%d，消息=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
+             requestId.c_str(), authResult, LogValue(message).c_str(),
+             LogValue(JsonHelper::GetString(body, "ZJHM")).c_str(),
+             LogValue(JsonHelper::GetString(body, "ZJLB")).c_str(),
+             LogValue(JsonHelper::GetString(body, "GJDQDM")).c_str(),
+             LogValue(JsonHelper::GetString(body, "XM")).c_str(),
+             LogValue(JsonHelper::GetString(body, "XB")).c_str(),
+             LogValue(JsonHelper::GetString(body, "CSRQ")).c_str(),
+             LogValue(JsonHelper::GetString(body, "KADM")).c_str());
 
     // Build the basic event
     auto& ctx = HzsjkjtContext::Instance();

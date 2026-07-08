@@ -349,11 +349,27 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 "\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"" +
                 "}";
 
-            _log("[授权] 转发至终端");
+            _log("[授权] 转发至终端：请求ID=" + JsonHelper.ToLogValue(requestId) +
+                "，终端=" + routeEpoch.Route.TerminalIndex +
+                "，请求地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl + "/resources/protocol/request") +
+                "，回调地址=" + JsonHelper.ToLogValue(callbackBase) +
+                "，证件号码=" + JsonHelper.ToLogValue(idNo) +
+                "，证件类别=" + JsonHelper.ToLogValue(docType) +
+                "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
+                "，姓名=" + JsonHelper.ToLogValue(name) +
+                "，性别=" + JsonHelper.ToLogValue(sex) +
+                "，出生日期=" + JsonHelper.ToLogValue(birthday) +
+                "，口岸代码=" + JsonHelper.ToLogValue(portCode));
 
             var (ok, response) = await _terminalClient.PostJsonAsync(routeEpoch.Route.BaseUrl,
                 "/resources/protocol/request", terminalBody, 5000,
                 routeEpoch.CancellationToken).ConfigureAwait(false);
+            _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
+                "，HTTP提交=" + (ok ? "是" : "否") +
+                "，响应请求ID=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "request_id")) +
+                "，状态=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "status")) +
+                "，错误码=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorCode(response)) +
+                "，消息=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorMessage(response)));
             if (routeEpoch.IsCancellationRequested)
             {
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);

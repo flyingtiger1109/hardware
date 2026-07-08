@@ -1,5 +1,197 @@
 # 项目进度记录
 
+# 授权回调 resource_type 日志识别后打印（2026-07-08）
+
+## 当前阶段
+
+- [x] 修复授权终端回调缺少 `resource_type` 时先打印空值的问题。
+- [x] 缺少 `resource_type` 但带 `status=yes/no` 和 `request_id` 的回调会先识别为 `protocol`，再打印日志。
+- [x] C# Proxy `Release|x86|net46` 编译通过。
+- [ ] 真实终端授权回调现场复测待执行。
+
+## 本次修改内容
+
+1. `TerminalCallbackHandler.HandleAsync()` 将协议回调兜底识别前移到日志输出前。
+2. 授权回调缺少 `resource_type` 时，日志改为输出 `resource_type=protocol(inferred)`。
+3. 未识别资源类型时不再输出空 `resource_type=`，只保留未知资源类型诊断日志。
+
+## 兼容性说明
+
+- DLL 导出函数、第三方回调 JSON、终端请求/回调协议：未修改。
+- 仅调整 C# Proxy 内部日志打印顺序和显示内容。
+
+## 验证状态
+
+- [x] `git diff --check`：通过，仅有 LF/CRLF 规范化提示。
+- [x] C# Proxy `Release|x86|net46` 编译：通过，0 警告，0 错误。
+- [ ] 真实终端授权回调日志：待现场复测，预期不再出现 `[终端回调] resource_type=` 空值。
+
+## 回退方式
+
+- 将 `TerminalCallbackHandler.HandleAsync()` 中的 `resource_type` 日志恢复到兜底识别前打印即可。
+
+# 授权结果字段自动回填与抓拍汇总修复（2026-07-08）
+
+## 当前阶段
+
+- [x] C# Proxy 授权回调支持在终端未回传证件/姓名等字段时自动回填原请求信息。
+- [x] DLL 授权调用和 C# Proxy 本机授权入口均已登记原始授权请求体。
+- [x] 抓拍成功日志改为前缀汇总，带无畸变图路径的指纹抓拍成功日志也会进入抓拍汇总。
+- [ ] 真实终端授权回调和指纹抓拍现场复测待执行。
+
+## 本次修改内容
+
+1. `RequestRegistry` 的请求上下文新增 `OriginalRequestBodyUtf8`，用于保存授权请求原始字段。
+2. `DllCommandHandler.EnqueueAuthorize()` 注册授权请求时传入 DLL 原始请求体。
+3. `BizOperationHandler.RequestAuthorizeAsync()` 为 Proxy 本机授权按钮构造兼容 DLL 字段名的回填请求体。
+4. `TerminalCallbackHandler.HandleProtocolAsync()` 优先使用终端回调字段，字段为空时回填 `ZJHM/ZJLB/GJDQDM/XM/XB/CSRQ/KADM`。
+5. `MainForm.TryAggregateCaptureSuccess()` 从精确匹配改为前缀匹配，避免追加无畸变图路径后脱离抓拍汇总。
+
+## 涉及文件
+
+- `Core/RequestRegistry.cs`：保存原始请求体。
+- `Server/DllCommandHandler.cs`：DLL 授权请求注册时携带原请求体。
+- `Server/Coordinator/BizOperationHandler.cs`：Proxy 本机授权请求注册时携带回填源。
+- `Server/TerminalCallbackHandler.cs`：授权结果字段自动回填并继续投递给 DLL。
+- `MainForm.cs`：抓拍成功日志汇总前缀匹配。
+- `PROGRESS.md`：记录本次修改。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、参数顺序、错误码：未修改。
+- 第三方授权回调 JSON 字段名：未修改，仍输出 `ZJHM/ZJLB/GJDQDM/XM/XB/CSRQ/KADM`。
+- 终端 HTTP 请求格式：未修改。
+- 配置文件、部署方式、x86/net46 目标：未修改。
+
+## 风险与注意事项
+
+1. 回填只在终端回调字段为空时生效；如果终端回调给出非空字段，以终端回调为准。
+2. C# Proxy 本机授权入口当前没有口岸代码输入，因此该入口回填的 `KADM` 仍为空；DLL 调用入口会使用原请求中的 `KADM`。
+3. 真实终端仍可能返回 `status=no`，此时授权结果仍为 `0`，但证件/姓名字段应不再为空。
+
+## 验证状态
+
+- [x] `git diff --check`：通过，仅有工作区 LF/CRLF 规范化提示。
+- [x] C# Proxy `Release|x86|net46` 编译：通过，0 警告，0 错误。
+- [ ] CSharpThirdPartyDemo + DLL 授权回调字段回填：待现场复测。
+- [ ] 指纹抓拍日志汇总与 352x544 无畸变图保存：待现场复测。
+
+## 回退方式
+
+- 回退 `OriginalRequestBodyUtf8` 相关注册和路由字段，`TerminalCallbackHandler` 恢复为只读取终端回调字段。
+- 将 `TryAggregateCaptureSuccess()` 恢复为 `string.Equals()` 精确匹配即可恢复旧日志行为。
+
+# 指纹无畸变图成功日志汇总调整（2026-07-08）
+
+## 当前阶段
+
+- [x] 将无畸变图保存成功日志合并到 `[指纹抓拍]` 汇总日志。
+- [x] 保留无畸变图缺字段、保存失败、异常的可见排查日志。
+- [ ] 真实终端重新抓拍验证待现场执行。
+
+## 本次修改内容
+
+1. `SaveUndistortedFingerprintImage()` 从直接输出成功日志改为返回保存路径。
+2. `CaptureFingerprintAsync()` 在主图保存成功日志中追加无畸变图保存结果。
+3. 成功场景由两条日志合并为一条，例如：`[指纹抓拍] 图片保存成功，无畸变图保存成功: ...`。
+
+## 兼容性说明
+
+- DLL 导出函数、C# ThirdParty Demo 调用参数、Proxy HTTP API 和终端协议：未修改。
+- 仅调整 Proxy 内部日志输出方式，不影响图片保存路径和文件内容。
+
+## 验证状态
+
+- [x] Proxy `Release|x86|net46` 编译：通过，0 警告，0 错误。
+- [ ] CSharpThirdPartyDemo + 真实终端指纹抓拍：待现场重新执行，预期成功时只出现一条 `[指纹抓拍]` 汇总日志。
+
+## 回退方式
+
+- 将 `SaveUndistortedFingerprintImage()` 恢复为 `void` 并在方法内部输出 `[无畸变] 图片保存成功` 即可回退。
+
+# 指纹无畸变图 data 字段解析修复（2026-07-08）
+
+## 当前阶段
+
+- [x] 修复 CSharpThirdPartyDemo 调 DLL 后 Proxy 未保存 352x544 无畸变指纹图的问题。
+- [x] 保持 DLL 导出函数、C# Demo 调用签名和终端协议不变。
+- [x] Proxy `Release|x86|net46` 默认输出已重新编译到测试目录。
+- [ ] 真实终端重新抓拍验证待现场执行。
+
+## 本次修改内容
+
+1. `BizOperationHandler.SaveUndistortedFingerprintImage()` 保留兼容顶层 `undistorted_image_base64`。
+2. 顶层取不到时改为读取 `data.undistorted_image_base64`，匹配终端实际返回结构。
+3. 缺少无畸变字段时改为输出可见业务日志，避免 Info 日志级别下静默跳过。
+4. 无畸变图继续按 352x544 写入 BMP。
+
+## 涉及文件
+
+- `Server/Coordinator/BizOperationHandler.cs`：修复无畸变 Base64 字段解析路径和跳过日志。
+- `PROGRESS.md`：记录本次修复。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、结构体、错误码和第三方回调签名：未修改。
+- C# ThirdParty Demo 双参数调用：未修改。
+- Proxy HTTP API、终端请求/响应协议、配置文件和部署方式：未修改。
+- 仅修正 Proxy 对终端 JSON 的读取位置，兼容旧的顶层字段和新的 `data` 内字段。
+
+## 验证状态
+
+- [x] Proxy `Release|x86|net46` 临时输出目录编译：通过，0 警告，0 错误。
+- [x] Proxy `Release|x86|net46` 默认输出目录编译：通过，0 警告，0 错误。
+- [ ] CSharpThirdPartyDemo + 真实终端指纹抓拍：待现场重新执行，预期在无畸变目录生成 `fingerprint_undistorted_*.bmp`。
+
+## 回退方式
+
+- 将 `SaveUndistortedFingerprintImage()` 恢复为只读取顶层 `undistorted_image_base64` 即可回退本次行为。
+
+# C# Proxy 单实例防重复启动（2026-07-07）
+
+## 当前阶段
+
+- [x] 在修改前提交当前 `v1.2.6` 基线：`971cff4 release: v1.2.6 current proxy baseline`。
+- [x] 增加 C# Proxy 单实例启动保护。
+- [x] 编译和自动化回归测试已完成。
+- [ ] 双开弹窗待现场/人工验证。
+
+## 本次修改内容
+
+1. `Program.Main()` 启动早期创建命名互斥体 `Local\HZCYKJTHardWare.Proxy.SingleInstance`。
+2. 第一个进程持有互斥体直到主窗口退出，保持原启动流程和后台服务行为不变。
+3. 第二个进程发现已有实例运行时，不创建 `MainForm`、不启动监听服务，只弹窗提示“程序已在运行，请勿重复打开。”后退出。
+
+## 涉及文件
+
+- `Program.cs`：新增单实例互斥体检查和重复启动提示。
+- `PROGRESS.md`：记录本次修改。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、结构体、错误码和第三方回调签名：未修改。
+- Proxy HTTP API、终端协议、配置文件和部署方式：未修改。
+- 第一个正常启动的 Proxy 行为：不变。
+- 重复启动行为：由“可能打开第二个界面并启动服务失败”改为“弹窗提示后退出”。
+- 互斥体使用 `Local\` 命名空间，限制同一 Windows 登录会话内单实例；不要求管理员权限。
+
+## 风险与注意事项
+
+1. 如果现场存在多用户远程桌面，并要求整台机器全局只允许一个实例，需要改为 `Global\` 互斥体；该方式可能涉及额外权限，不作为本次默认实现。
+2. 第二个实例只弹窗退出，不主动激活已有窗口；如后续需要，可再增加查找旧窗口并置前逻辑。
+
+## 验证状态
+
+- [x] `Release|x86|net46` 编译：通过，0 警告，0 错误。
+- [x] 测试项目 `Release|x86|net46` 编译：通过，0 警告，0 错误。
+- [x] 自动化回归测试：69/69 通过。
+- [x] `git diff --check`：通过，仅有 LF/CRLF 规范化提示。
+- [ ] 双开弹窗验证：待现场/人工验证。
+
+## 回退方式
+
+- 移除 `Program.cs` 中 `SingleInstanceMutexName` 常量和 `Main()` 内的 `Mutex` 判断，即可恢复修改前允许重复启动到主界面的行为。
+
 ## 当前阶段
 
 C# Proxy 外部预览窗口时序修复验证阶段。

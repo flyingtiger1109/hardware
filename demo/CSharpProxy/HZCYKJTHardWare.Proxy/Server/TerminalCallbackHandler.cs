@@ -41,9 +41,29 @@ namespace HZCYKJTHardWare.Proxy.Server
             try
             {
                 var resourceType = CallbackParser.GetResourceType(bodyUtf8);
+                var inferredResourceType = false;
+                var cbStatus = "";
+
+                if (string.IsNullOrEmpty(resourceType))
+                {
+                    // Fallback: detect callbacks without resource_type by characteristic fields.
+                    // 2.22 protocol callback body: {"request_id":"...","status":"yes|no"}
+                    // (terminal may not echo back all fields like id_no/name)
+                    cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
+                    var cbRequestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+                    if ((string.Equals(cbStatus, "yes", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(cbStatus, "no", StringComparison.OrdinalIgnoreCase)) &&
+                        !string.IsNullOrEmpty(cbRequestId))
+                    {
+                        resourceType = "protocol";
+                        inferredResourceType = true;
+                    }
+                }
+
                 // ocr_event_status 高频推送，日志已在 HandleOcrEventStatus 内按事件类型精简
-                if (resourceType != "ocr_event_status")
-                    _log($"[终端回调] resource_type={resourceType}");
+                if (!string.IsNullOrEmpty(resourceType) && resourceType != "ocr_event_status")
+                    _log("[终端回调] resource_type=" + resourceType +
+                        (inferredResourceType ? "(inferred)" : ""));
 
                 switch (resourceType)
                 {
@@ -69,29 +89,15 @@ namespace HZCYKJTHardWare.Proxy.Server
                         HandleFingerprintImage(bodyUtf8);
                         break;
                     case "protocol":
+                        if (inferredResourceType)
+                            _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
                         await HandleProtocolAsync(bodyUtf8, sourceAddress)
                             .ConfigureAwait(false);
                         break;
                     default:
-                        // Fallback: detect callbacks without resource_type by characteristic fields.
-                        // 2.22 protocol callback body: {"request_id":"...","status":"yes|no"}
-                        // (terminal may not echo back all fields like id_no/name)
-                        var cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
-                        var cbRequestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
-                        if ((string.Equals(cbStatus, "yes", StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(cbStatus, "no", StringComparison.OrdinalIgnoreCase)) &&
-                            !string.IsNullOrEmpty(cbRequestId))
-                        {
-                            _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
-                            await HandleProtocolAsync(bodyUtf8, sourceAddress)
-                                .ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            // Log body snippet to help diagnose unknown callback types
-                            var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
-                            _log($"[终端回调] 未知资源类型: path={callbackPath}, body={snippet}");
-                        }
+                        // Log body snippet to help diagnose unknown callback types
+                        var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
+                        _log($"[终端回调] 未知资源类型: path={callbackPath}, body={snippet}");
                         break;
                 }
             }
@@ -335,18 +341,35 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
 
             // 2.22 status field: "yes" (agreed) or "no" (rejected)
-            var status = JsonHelper.ExtractString(bodyUtf8, "status");
-            _log($"[授权回调] request_id={result.RequestId}, status={status}");
+            var status = ExtractTopOrDataString(bodyUtf8, "status");
 
             // Map 2.22 terminal fields back to DLL Chinese field names
             // Terminal: name,sex,id_no,doc_type,birthday,nationality,port_code → DLL: XM,XB,ZJHM,ZJLB,CSRQ,GJDQDM,KADM
-            var name = JsonHelper.ExtractString(bodyUtf8, "name");
-            var sex = JsonHelper.ExtractString(bodyUtf8, "sex");
-            var idNo = JsonHelper.ExtractString(bodyUtf8, "id_no");
-            var docType = JsonHelper.ExtractString(bodyUtf8, "doc_type");
-            var birthday = JsonHelper.ExtractString(bodyUtf8, "birthday");
-            var nationality = JsonHelper.ExtractString(bodyUtf8, "nationality");
-            var portCode = JsonHelper.ExtractString(bodyUtf8, "port_code");  // KADM
+            var originalBody = route.OriginalRequestBodyUtf8;
+            var name = CoalesceString(ExtractTopOrDataString(bodyUtf8, "name"),
+                JsonHelper.ExtractString(originalBody, "XM"));
+            var sex = CoalesceString(ExtractTopOrDataString(bodyUtf8, "sex"),
+                JsonHelper.ExtractString(originalBody, "XB"));
+            var idNo = CoalesceString(ExtractTopOrDataString(bodyUtf8, "id_no"),
+                JsonHelper.ExtractString(originalBody, "ZJHM"));
+            var docType = CoalesceString(ExtractTopOrDataString(bodyUtf8, "doc_type"),
+                JsonHelper.ExtractString(originalBody, "ZJLB"));
+            var birthday = CoalesceString(ExtractTopOrDataString(bodyUtf8, "birthday"),
+                JsonHelper.ExtractString(originalBody, "CSRQ"));
+            var nationality = CoalesceString(ExtractTopOrDataString(bodyUtf8, "nationality"),
+                JsonHelper.ExtractString(originalBody, "GJDQDM"));
+            var portCode = CoalesceString(ExtractTopOrDataString(bodyUtf8, "port_code"),
+                JsonHelper.ExtractString(originalBody, "KADM"));  // KADM
+            _log("[授权回调] 收到终端回调：请求ID=" + JsonHelper.ToLogValue(result.RequestId) +
+                "，来源=" + JsonHelper.ToLogValue(sourceAddress?.ToString()) +
+                "，状态=" + JsonHelper.ToLogValue(status) +
+                "，证件号码=" + JsonHelper.ToLogValue(idNo) +
+                "，证件类别=" + JsonHelper.ToLogValue(docType) +
+                "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
+                "，姓名=" + JsonHelper.ToLogValue(name) +
+                "，性别=" + JsonHelper.ToLogValue(sex) +
+                "，出生日期=" + JsonHelper.ToLogValue(birthday) +
+                "，口岸代码=" + JsonHelper.ToLogValue(portCode));
 
             // Build DLL callback payload (matching Delphi format with Chinese field names)
             var isYes = (status == "yes");
@@ -367,11 +390,36 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\"message\":\"" + JsonHelper.EscapeString(message) + "\"" +
                 "}";
 
-            _log($"[授权回调] 转发至DLL: request_id={result.RequestId}, auth_result={authResult}");
+            _log("[授权回调] 转发至DLL：原始请求ID=" + JsonHelper.ToLogValue(result.RequestId) +
+                "，投递请求ID=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
+                "，授权结果=" + authResult +
+                "，消息=" + JsonHelper.ToLogValue(message) +
+                "，证件号码=" + JsonHelper.ToLogValue(idNo) +
+                "，证件类别=" + JsonHelper.ToLogValue(docType) +
+                "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
+                "，姓名=" + JsonHelper.ToLogValue(name) +
+                "，性别=" + JsonHelper.ToLogValue(sex) +
+                "，出生日期=" + JsonHelper.ToLogValue(birthday) +
+                "，口岸代码=" + JsonHelper.ToLogValue(portCode));
             if (!CanDeliver(route, "授权")) return;
             var delivery = await _dllCallback.PostCallbackRaw("/authorize", payload,
                 route.CancellationToken).ConfigureAwait(false);
             FinishDelivery(route, delivery);
+        }
+
+        private static string ExtractTopOrDataString(string json, string key)
+        {
+            var value = JsonHelper.ExtractString(json, key);
+            if (!string.IsNullOrEmpty(value))
+                return value;
+
+            var dataJson = JsonHelper.ExtractObject(json, "data");
+            return JsonHelper.ExtractString(dataJson, key);
+        }
+
+        private static string CoalesceString(string primary, string fallback)
+        {
+            return !string.IsNullOrEmpty(primary) ? primary : (fallback ?? "");
         }
 
         /// <summary>
@@ -540,7 +588,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return new CallbackRoute(requestId, requestId, resourceType,
                     PathHelper.SafeResolveSaveDir(context.SaveDir),
                     context.CancellationToken, context.TerminalIndex,
-                    current.RouteEpoch, false);
+                    current.RouteEpoch, false, context.OriginalRequestBodyUtf8);
             }
 
             if (!_processRegistry.TryGetByRequestId(requestId, out var session))
@@ -641,12 +689,14 @@ namespace HZCYKJTHardWare.Proxy.Server
             internal CallbackRoute(string sourceRequestId,
                 string deliveryRequestId, string resourceType, string saveDir,
                 CancellationToken cancellationToken, int terminalIndex,
-                long routeEpoch, bool persistent)
+                long routeEpoch, bool persistent,
+                string originalRequestBodyUtf8 = "")
             {
                 SourceRequestId = sourceRequestId;
                 DeliveryRequestId = deliveryRequestId;
                 ResourceType = resourceType;
                 SaveDir = saveDir;
+                OriginalRequestBodyUtf8 = originalRequestBodyUtf8 ?? "";
                 CancellationToken = cancellationToken;
                 TerminalIndex = terminalIndex;
                 RouteEpoch = routeEpoch;
@@ -657,6 +707,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             internal string DeliveryRequestId { get; }
             internal string ResourceType { get; }
             internal string SaveDir { get; }
+            internal string OriginalRequestBodyUtf8 { get; }
             internal CancellationToken CancellationToken { get; }
             internal int TerminalIndex { get; }
             internal long RouteEpoch { get; }

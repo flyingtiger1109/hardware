@@ -247,38 +247,53 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     }
                 }
             }
-            if (!string.IsNullOrEmpty(savePath))
-                _log("[指纹抓拍] 图片保存成功");
-            else
-                _log("[指纹抓拍] 抓拍失败：未获取有效图片或终端请求失败");
-
             // 无畸变图保存（独立于主图，失败不影响主流程）
+            string undistortedPath = "";
             if (!string.IsNullOrEmpty(saveDirHk))
-                SaveUndistortedFingerprintImage(response, saveDirHk, requestId);
+                undistortedPath = SaveUndistortedFingerprintImage(response, saveDirHk, requestId);
+
+            if (!string.IsNullOrEmpty(savePath))
+            {
+                var message = "[指纹抓拍] 图片保存成功";
+                if (!string.IsNullOrEmpty(undistortedPath))
+                    message += "，无畸变图保存成功: " + undistortedPath;
+                _log(message);
+            }
+            else
+            {
+                _log("[指纹抓拍] 抓拍失败：未获取有效图片或终端请求失败");
+            }
 
             return (!string.IsNullOrEmpty(savePath), savePath);
         }
 
-        private void SaveUndistortedFingerprintImage(string terminalJson, string saveDirHk, string requestId)
+        private string SaveUndistortedFingerprintImage(string terminalJson, string saveDirHk, string requestId)
         {
             try
             {
                 var undistortedB64 = JsonHelper.ExtractString(terminalJson, "undistorted_image_base64");
                 if (string.IsNullOrEmpty(undistortedB64))
                 {
-                    Logger.Debug("[无畸变] 终端响应中无 undistorted_image_base64 字段");
-                    return;
+                    var dataJson = JsonHelper.ExtractObject(terminalJson, "data");
+                    undistortedB64 = JsonHelper.ExtractString(dataJson, "undistorted_image_base64");
                 }
-                var path = FileSaver.SaveRawGrayscaleAsBmp(undistortedB64, saveDirHk, requestId, 544, 352);
+                if (string.IsNullOrEmpty(undistortedB64))
+                {
+                    _log("[无畸变] 图片保存跳过：终端响应中无 data.undistorted_image_base64 字段");
+                    return "";
+                }
+                var path = FileSaver.SaveRawGrayscaleAsBmp(undistortedB64, saveDirHk, requestId, 352, 544);
                 if (!string.IsNullOrEmpty(path))
-                    _log("[无畸变] 图片保存成功: " + path);
-                else
-                    _log("[无畸变] 图片保存失败");
+                    return path;
+
+                _log("[无畸变] 图片保存失败");
             }
             catch (Exception ex)
             {
                 Logger.Error("[无畸变] 图片保存异常", ex);
             }
+
+            return "";
         }
 
         // ====== Async Resources ======
@@ -391,16 +406,39 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 $"\"name\":\"{JsonHelper.EscapeString(name)}\",\"sex\":\"{JsonHelper.EscapeString(sex)}\"," +
                 $"\"id_no\":\"{JsonHelper.EscapeString(idNo)}\",\"doc_type\":\"{JsonHelper.EscapeString(docType)}\"," +
                 $"\"birthday\":\"{JsonHelper.EscapeString(birthday)}\",\"nationality\":\"{JsonHelper.EscapeString(nationality)}\"}}";
+            var originalAuthBody = $"{{\"request_id\":\"{requestId}\"," +
+                $"\"ZJHM\":\"{JsonHelper.EscapeString(idNo)}\",\"ZJLB\":\"{JsonHelper.EscapeString(docType)}\"," +
+                $"\"GJDQDM\":\"{JsonHelper.EscapeString(nationality)}\",\"XM\":\"{JsonHelper.EscapeString(name)}\"," +
+                $"\"XB\":\"{JsonHelper.EscapeString(sex)}\",\"CSRQ\":\"{JsonHelper.EscapeString(birthday)}\"," +
+                "\"KADM\":\"\"}}";
+
+            _log("[授权] EXE本机授权请求：请求ID=" + JsonHelper.ToLogValue(requestId) +
+                "，终端=" + routeEpoch.Route.TerminalIndex +
+                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
+                "，回调地址=" + JsonHelper.ToLogValue(callbackBase) +
+                "，证件号码=" + JsonHelper.ToLogValue(idNo) +
+                "，证件类别=" + JsonHelper.ToLogValue(docType) +
+                "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
+                "，姓名=" + JsonHelper.ToLogValue(name) +
+                "，性别=" + JsonHelper.ToLogValue(sex) +
+                "，出生日期=" + JsonHelper.ToLogValue(birthday));
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.Protocol,
                 _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex),
-                AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize", routeEpoch))
+                AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize", routeEpoch,
+                originalAuthBody))
                 return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "registry full" };
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
                 routeEpoch.Route.BaseUrl, "/resources/protocol/request", body, 5000,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
+            _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
+                "，HTTP提交=" + (ok ? "是" : "否") +
+                "，响应请求ID=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "request_id")) +
+                "，状态=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "status")) +
+                "，错误码=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorCode(response)) +
+                "，消息=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorMessage(response)));
             if (routeEpoch.IsCancellationRequested)
             {
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
@@ -499,7 +537,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         // ====== Private Helpers ======
 
         private bool RegisterDirectRequest(string requestId, string resourceType,
-            string saveDir, string callbackUrl, TerminalRouteEpochSnapshot routeEpoch)
+            string saveDir, string callbackUrl, TerminalRouteEpochSnapshot routeEpoch,
+            string originalRequestBodyUtf8 = "")
         {
             if (routeEpoch == null || routeEpoch.IsCancellationRequested)
                 return false;
@@ -509,7 +548,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
             var context = _requestRegistry.Register(requestId, resourceType,
                 PathHelper.SafeResolveSaveDir(saveDir), callbackUrl,
-                routeEpoch.Generation, terminalIndex: terminalIndex);
+                routeEpoch.Generation, terminalIndex: terminalIndex,
+                originalRequestBodyUtf8: originalRequestBodyUtf8);
             if (context == null) return false;
             if (routeEpoch.IsCancellationRequested)
             {

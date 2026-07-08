@@ -149,7 +149,8 @@ namespace HZCYKJTHardWare.CSharpDemo
 
         private void btnFingerprintCapture_Click(object sender, EventArgs e)
         {
-            ExecuteWithSaveDir("指纹抓拍", ptr => HzcyHardwareNative.HZCYKJTHardWare_CaptureFingerprintImage(ptr));
+            ExecuteWithFingerprintSaveDirs("指纹抓拍", (saveDir, saveDirHk) =>
+                HzcyHardwareNative.HZCYKJTHardWare_CaptureFingerprintImage(saveDir, saveDirHk));
         }
 
         private void btnOcr_Click(object sender, EventArgs e)
@@ -208,6 +209,18 @@ namespace HZCYKJTHardWare.CSharpDemo
                 using (var saveDir = new Utf8NativeString(txtSaveDir.Text))
                 {
                     LogRet(name, action(saveDir.Pointer));
+                }
+            });
+        }
+
+        private void ExecuteWithFingerprintSaveDirs(string name, Func<IntPtr, IntPtr, int> action)
+        {
+            ExecuteDllCall(name, () =>
+            {
+                using (var saveDir = new Utf8NativeString(txtSaveDir.Text))
+                using (var saveDirHk = new Utf8NativeString(txtSaveDirHk.Text))
+                {
+                    LogRet(name, action(saveDir.Pointer, saveDirHk.Pointer));
                 }
             });
         }

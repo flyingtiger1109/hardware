@@ -14,7 +14,10 @@ namespace HZCYKJTHardWare.CSharpDemo
         private Button btnSwitch2;
         private Button btnStartProcess;
         private Button btnEndProcess;
+        private Label lblSaveDir;
         private TextBox txtSaveDir;
+        private Label lblSaveDirHk;
+        private TextBox txtSaveDirHk;
         private Button btnCameraPreview;
         private Button btnStopCameraPreview;
         private Button btnFingerprintPreview;
@@ -64,7 +67,10 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.btnSwitch2 = new Button();
             this.btnStartProcess = new Button();
             this.btnEndProcess = new Button();
+            this.lblSaveDir = new Label();
             this.txtSaveDir = new TextBox();
+            this.lblSaveDirHk = new Label();
+            this.txtSaveDirHk = new TextBox();
             this.btnCameraPreview = new Button();
             this.btnStopCameraPreview = new Button();
             this.btnFingerprintPreview = new Button();
@@ -107,7 +113,10 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.panelTop.Controls.Add(this.btnSwitch2);
             this.panelTop.Controls.Add(this.btnStartProcess);
             this.panelTop.Controls.Add(this.btnEndProcess);
+            this.panelTop.Controls.Add(this.lblSaveDir);
             this.panelTop.Controls.Add(this.txtSaveDir);
+            this.panelTop.Controls.Add(this.lblSaveDirHk);
+            this.panelTop.Controls.Add(this.txtSaveDirHk);
             this.panelTop.Controls.Add(this.btnCameraPreview);
             this.panelTop.Controls.Add(this.btnStopCameraPreview);
             this.panelTop.Controls.Add(this.btnFingerprintPreview);
@@ -199,13 +208,33 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.btnEndProcess.UseVisualStyleBackColor = true;
             this.btnEndProcess.Click += this.btnEndProcess_Click;
             //
+            // lblSaveDir
+            //
+            this.lblSaveDir.AutoSize = true;
+            this.lblSaveDir.Location = new Point(8, 45);
+            this.lblSaveDir.Text = "主图目录";
+            //
             // txtSaveDir
             //
-            this.txtSaveDir.Location = new Point(8, 42);
+            this.txtSaveDir.Location = new Point(70, 42);
             this.txtSaveDir.Name = "txtSaveDir";
-            this.txtSaveDir.Size = new Size(500, 22);
+            this.txtSaveDir.Size = new Size(300, 22);
             this.txtSaveDir.TabIndex = 6;
             this.txtSaveDir.Text = @".\captures";
+            //
+            // lblSaveDirHk
+            //
+            this.lblSaveDirHk.AutoSize = true;
+            this.lblSaveDirHk.Location = new Point(382, 45);
+            this.lblSaveDirHk.Text = "无畸变目录";
+            //
+            // txtSaveDirHk
+            //
+            this.txtSaveDirHk.Location = new Point(466, 42);
+            this.txtSaveDirHk.Name = "txtSaveDirHk";
+            this.txtSaveDirHk.Size = new Size(300, 22);
+            this.txtSaveDirHk.TabIndex = 7;
+            this.txtSaveDirHk.Text = @".\captures_hk";
             //
             // btnCameraPreview
             //

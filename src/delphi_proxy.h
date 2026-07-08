@@ -94,7 +94,8 @@ private:
     bool PostJson(const std::string& path,
                    const std::string& body,
                    std::string& response,
-                   int timeoutMs = -1);
+                   int timeoutMs = -1,
+                   bool logRawResponse = true);
 
     bool IsOkResponse(const std::string& response);
     bool IsAcceptedResponse(const std::string& response);

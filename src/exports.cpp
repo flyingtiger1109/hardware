@@ -50,6 +50,28 @@ static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
 }
 
+static std::string LogValue(const std::string& value, size_t maxLength = 256) {
+    std::string result;
+    result.reserve(value.size());
+    for (char ch : value) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (ch == '\r' || ch == '\n' || ch == '\t' || c < 0x20) {
+            result += ' ';
+        } else {
+            result += ch;
+        }
+        if (result.size() >= maxLength) {
+            result += "...";
+            break;
+        }
+    }
+    return result;
+}
+
+static std::string LogValue(const char* value, size_t maxLength = 256) {
+    return LogValue(std::string(value ? value : ""), maxLength);
+}
+
 // Business queuing is owned exclusively by the C# Proxy Scheduler.
 
 class IrisPreviewRestoreWorker {
@@ -1730,7 +1752,7 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     DelphiProxy proxy(ctx.delphi_server_url);
     bool ok;
     if (saveDirHk != nullptr && saveDirHk[0] != '\0') {
-        std::string saveDirHkRoot = ResolveCaptureTargetPath(saveDirHk, false);
+        std::string saveDirHkRoot = saveDirHk;
         ok = proxy.CaptureFingerprint(requestId, saveRoot, saveDirHkRoot, savePath);
     } else {
         ok = proxy.CaptureFingerprint(requestId, saveRoot, "", savePath);
@@ -1942,6 +1964,19 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
         HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
+    std::string authZJHM = ZJHM ? ZJHM : "";
+    std::string authZJLB = ZJLB ? ZJLB : "";
+    std::string authGJDQDM = GJDQDM ? GJDQDM : "";
+    std::string authXM = XM ? XM : "";
+    std::string authXB = XB ? XB : "";
+    std::string authCSRQ = CSRQ ? CSRQ : "";
+    std::string authKADM = KADM ? KADM : "";
+    LOG_INFO("授权", "第三方调用授权请求：请求ID=%s，回调地址=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
+             requestId.c_str(), LogValue(callbackUrl).c_str(),
+             LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
+             LogValue(authGJDQDM).c_str(), LogValue(authXM).c_str(),
+             LogValue(authXB).c_str(), LogValue(authCSRQ).c_str(),
+             LogValue(authKADM).c_str());
 
     if (IsSwitchPending()) {
         LOG_WARN("接口", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
@@ -1959,15 +1994,17 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestAuthorize(requestId,
-                                ZJHM ? ZJHM : "",
-                                ZJLB ? ZJLB : "",
-                                GJDQDM ? GJDQDM : "",
-                                XM ? XM : "",
-                                XB ? XB : "",
-                                CSRQ ? CSRQ : "",
-                                KADM ? KADM : "",
+                                authZJHM,
+                                authZJLB,
+                                authGJDQDM,
+                                authXM,
+                                authXB,
+                                authCSRQ,
+                                authKADM,
                                 callbackUrl,
                                 httpTimeoutMs)) {
+        LOG_ERROR("授权", "EXE授权请求受理失败：请求ID=%s，EXE地址=%s",
+                  requestId.c_str(), LogValue(ctx.delphi_server_url).c_str());
         LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,

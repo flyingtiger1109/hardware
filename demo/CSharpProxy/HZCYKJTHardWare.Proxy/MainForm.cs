@@ -1325,13 +1325,16 @@ namespace HZCYKJTHardWare.Proxy
 
         private bool TryAggregateCaptureSuccess(string message)
         {
-            if (string.Equals(message, FaceCaptureSuccessMessage, StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(message))
+                return false;
+
+            if (message.StartsWith(FaceCaptureSuccessMessage, StringComparison.Ordinal))
             {
                 Interlocked.Increment(ref _pendingFaceCaptureSuccessCount);
                 return true;
             }
 
-            if (string.Equals(message, FingerprintCaptureSuccessMessage, StringComparison.Ordinal))
+            if (message.StartsWith(FingerprintCaptureSuccessMessage, StringComparison.Ordinal))
             {
                 Interlocked.Increment(ref _pendingFingerprintCaptureSuccessCount);
                 return true;

@@ -276,6 +276,25 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (string.IsNullOrEmpty(requestId))
                 requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
 
+            var authIdNo = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "ZJHM"));
+            var authDocType = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "ZJLB"));
+            var authNationality = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "GJDQDM"));
+            var authName = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "XM"));
+            var authSex = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "XB"));
+            var authBirthday = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "CSRQ"));
+            var authPortCode = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "KADM"));
+            _log("[授权] 收到DLL授权请求：请求ID=" + JsonHelper.ToLogValue(requestId) +
+                "，终端=" + routeEpoch.Route.TerminalIndex +
+                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
+                "，回调地址=" + JsonHelper.ToLogValue(callbackUrl) +
+                "，证件号码=" + authIdNo +
+                "，证件类别=" + authDocType +
+                "，国家地区代码=" + authNationality +
+                "，姓名=" + authName +
+                "，性别=" + authSex +
+                "，出生日期=" + authBirthday +
+                "，口岸代码=" + authPortCode);
+
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var data = new AuthorizeTaskData
             {
@@ -293,7 +312,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     : _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex));
             var context = _requestRegistry.Register(requestId, ProxyResourceTypes.Protocol,
                 resolvedSaveDir, callbackUrl, routeEpoch.Generation,
-                terminalIndex: routeEpoch.Route.TerminalIndex);
+                terminalIndex: routeEpoch.Route.TerminalIndex,
+                originalRequestBodyUtf8: bodyUtf8);
             if (context == null)
                 return "{\"error\":true,\"code\":\"registry_full\"}";
             context.TryMarkQueued();

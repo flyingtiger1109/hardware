@@ -18,7 +18,7 @@
     "scheme": "http",
     "port": 9098,
     "check_on_init": false,
-    "default_index": 1,
+    "default_index": 2,
     "preferred_subnet_prefix": "192.168.20",
     "fixed_terminals": [
       {

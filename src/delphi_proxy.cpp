@@ -81,6 +81,24 @@ std::string BuildAsyncJson(const std::string& requestId,
         "}";
 }
 
+std::string LogValue(const std::string& value, size_t maxLength = 256) {
+    std::string result;
+    result.reserve(value.size());
+    for (char ch : value) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (ch == '\r' || ch == '\n' || ch == '\t' || c < 0x20) {
+            result += ' ';
+        } else {
+            result += ch;
+        }
+        if (result.size() >= maxLength) {
+            result += "...";
+            break;
+        }
+    }
+    return result;
+}
+
 bool HasErrorResponse(const std::string& response, std::string& code, std::string& message) {
     if (!JsonHelper::GetBool(response, "error", false)) {
         return false;
@@ -307,7 +325,27 @@ bool DelphiProxy::RequestAuthorize(const std::string& requestId,
         JsonStringField("callback_url", callbackUrl) +
         "}";
     std::string response;
-    return PostJson("/authorize", body, response, timeoutMs) && IsAcceptedResponse(response);
+    LOG_INFO("授权", "DLL转发授权请求至EXE：请求ID=%s，请求地址=%s，回调地址=%s",
+             requestId.c_str(), BuildUrl("/authorize").c_str(),
+             LogValue(callbackUrl).c_str());
+
+    bool posted = PostJson("/authorize", body, response, timeoutMs, false);
+    std::string errorCode;
+    std::string errorMessage;
+    HasErrorResponse(response, errorCode, errorMessage);
+    bool accepted = posted && JsonHelper::GetBool(response, "accepted", false);
+    LOG_INFO("授权", "EXE授权受理响应：请求ID=%s，HTTP提交=%s，已受理=%s，状态=%s，错误码=%s，消息=%s",
+             requestId.c_str(), posted ? "是" : "否",
+             accepted ? "是" : "否",
+             LogValue(JsonHelper::GetString(response, "status")).c_str(),
+             LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
+    if (!accepted && posted) {
+        LOG_ERROR("授权", "EXE未受理授权请求：请求ID=%s，状态=%s，错误码=%s，消息=%s",
+                  requestId.c_str(),
+                  LogValue(JsonHelper::GetString(response, "status")).c_str(),
+                  LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
+    }
+    return accepted;
 }
 
 bool DelphiProxy::Get(const std::string& path, std::string& response,
@@ -349,7 +387,8 @@ bool DelphiProxy::Get(const std::string& path, std::string& response,
 bool DelphiProxy::PostJson(const std::string& path,
                            const std::string& body,
                            std::string& response,
-                           int timeoutMs) {
+                           int timeoutMs,
+                           bool logRawResponse) {
     if (baseUrl_.empty()) {
         LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：base_url为空，method=POST，path=%s", path.c_str());
         return false;
@@ -373,16 +412,28 @@ bool DelphiProxy::PostJson(const std::string& path,
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
-        LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=POST，url=%s，status=%d，response=%s",
-                  url.c_str(), statusCode, response.c_str());
+        if (logRawResponse) {
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=POST，url=%s，status=%d，response=%s",
+                      url.c_str(), statusCode, response.c_str());
+        } else {
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=POST，url=%s，HTTP状态=%d，错误码=%s，消息=%s",
+                      url.c_str(), statusCode,
+                      LogValue(JsonHelper::GetString(response, "code")).c_str(),
+                      LogValue(JsonHelper::GetString(response, "message")).c_str());
+        }
         return false;
     }
 
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("代理服务", "硬件控制程序返回业务错误：url=%s，code=%s，message=%s，response=%s",
-                  url.c_str(), errorCode.c_str(), errorMessage.c_str(), response.c_str());
+        if (logRawResponse) {
+            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：url=%s，code=%s，message=%s，response=%s",
+                      url.c_str(), errorCode.c_str(), errorMessage.c_str(), response.c_str());
+        } else {
+            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：url=%s，错误码=%s，消息=%s",
+                      url.c_str(), LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
+        }
         return false;
     }
 

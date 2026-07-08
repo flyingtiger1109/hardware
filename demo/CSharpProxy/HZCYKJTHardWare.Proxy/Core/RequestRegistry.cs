@@ -89,12 +89,13 @@ namespace HZCYKJTHardWare.Proxy.Core
 
         internal ProxyRequestContext(string requestId, string resourceType, string saveDir,
             string dllCallbackUrl, int generation, bool processFlow, TimeSpan lifetime,
-            int terminalIndex)
+            int terminalIndex, string originalRequestBodyUtf8)
         {
             RequestId = requestId;
             ResourceType = ProxyResourceTypes.Normalize(resourceType);
             SaveDir = saveDir ?? "";
             DllCallbackUrl = dllCallbackUrl ?? "";
+            OriginalRequestBodyUtf8 = originalRequestBodyUtf8 ?? "";
             Generation = generation;
             IsProcessFlow = processFlow;
             TerminalIndex = terminalIndex;
@@ -107,6 +108,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         internal string ResourceType { get; }
         internal string SaveDir { get; }
         internal string DllCallbackUrl { get; }
+        internal string OriginalRequestBodyUtf8 { get; }
         internal int Generation { get; }
         internal bool IsProcessFlow { get; }
         internal int TerminalIndex { get; }
@@ -252,7 +254,8 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         internal ProxyRequestContext Register(string requestId, string resourceType,
             string saveDir, string dllCallbackUrl, int generation,
-            bool processFlow = false, int terminalIndex = 0)
+            bool processFlow = false, int terminalIndex = 0,
+            string originalRequestBodyUtf8 = "")
         {
             if (string.IsNullOrEmpty(requestId))
                 throw new ArgumentException("request_id is required", nameof(requestId));
@@ -281,7 +284,8 @@ namespace HZCYKJTHardWare.Proxy.Core
 
                 var context = new ProxyRequestContext(requestId, normalized, saveDir,
                     dllCallbackUrl, generation, processFlow,
-                    processFlow ? ProcessLifetime : DefaultLifetime, terminalIndex);
+                    processFlow ? ProcessLifetime : DefaultLifetime, terminalIndex,
+                    originalRequestBodyUtf8);
                 if (_active.TryAdd(key, context))
                     return context;
 

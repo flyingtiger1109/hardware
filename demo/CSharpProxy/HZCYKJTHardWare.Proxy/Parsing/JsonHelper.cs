@@ -1,4 +1,5 @@
 using Newtonsoft.Json.Linq;
+using System.Text;
 
 namespace HZCYKJTHardWare.Proxy.Parsing
 {
@@ -77,6 +78,26 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 .Replace("\n", "\\n")
                 .Replace("\r", "\\r")
                 .Replace("\t", "\\t");
+        }
+
+        public static string ToLogValue(string value, int maxLength = 256)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (maxLength <= 0) maxLength = 256;
+
+            var sb = new StringBuilder(value.Length);
+            foreach (var ch in value)
+            {
+                if (ch == '\r' || ch == '\n' || ch == '\t' || char.IsControl(ch))
+                    sb.Append(' ');
+                else
+                    sb.Append(ch);
+
+                if (sb.Length >= maxLength)
+                    break;
+            }
+
+            return value.Length > maxLength ? sb.ToString() + "..." : sb.ToString();
         }
 
         public static string JsonStr(string name, string value)
