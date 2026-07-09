@@ -1,5 +1,58 @@
 # 项目进度记录
 
+# 方案 A：100% 缩放下硬件健康检测卡片显示不全修复（2026-07-09）
+
+## 当前阶段
+
+- [x] 已按用户要求在修改前提交当前版本，提交信息为 `1.2.8版本`。
+- [x] 已确认问题属于 WinForms 管理界面 DPI/布局问题，不涉及 DLL 业务逻辑。
+- [x] 已按 192 DPI 设计基准对健康检测 Header 右侧区域、刷新按钮和设备卡片固定列做最小宽度压缩。
+- [x] 已补充 100% 缩放窗口宽度下的 UI 布局回归断言。
+- [ ] 真实 Windows 100%、125%、150%、200% 缩放截图复核待现场执行。
+
+## 本次修改内容
+
+1. 新增 `HardwareHealthDpiLayout.ScaleFromDesignDpi()`，以 192 DPI 作为既有设计基准，在 100% 缩放下压缩固定列宽，同时保留可读最小值。
+2. `HardwareHealthPanel` Header 右侧状态区、刷新按钮列和摘要/按钮间距改为按当前 DPI 计算，避免低 DPI 下固定宽度过大。
+3. `DeviceHealthCard` 内部短码列、状态列、左右 Padding 和短码右侧间距改为 DPI 感知宽度，减少对中间设备名和说明文本的挤压。
+4. UI 测试将摘要与刷新按钮间距从固定 12px 改为至少 8px，适配 100% 缩放紧凑布局。
+5. 新增 `HardwareHealthPanel_DeviceCardsFitAtOneHundredPercentWindowWidth()`，验证 1180px 宽度下短码、状态和说明列保持基本可读。
+
+## 涉及文件
+
+- `UI/HardwareHealthPanel.cs`：健康检测面板 DPI 基准压缩和设备卡片固定列宽调整。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：100% 缩放宽度布局回归断言。
+- `PROGRESS.md`：本次修复记录。
+
+## 兼容性说明
+
+- 外部接口：DLL 导出函数、调用约定、参数、结构体、错误码和回调签名未修改。
+- 第三方调用：不影响第三方程序调用方式。
+- Proxy HTTP API：未修改请求/响应格式。
+- 配置文件和部署方式：未修改。
+- 影响范围：仅 WinForms 后台服务管理界面的健康检测区域显示。
+
+## 风险与注意事项
+
+1. 本次没有修改 `MainForm.Designer.cs` 的 `AutoScaleDimensions = 192F, 192F`，避免牵连整个窗体缩放；若后续还有其他区域在 100% 下异常，需要单独处理。
+2. 自动化测试只能验证控件边界和基本宽度，真实 Windows DPI 渲染效果仍需截图确认。
+3. 如果现场窗口宽度低于约 1180px，五张卡片仍可能需要进一步改为两行布局。
+
+## 验证状态
+
+- [x] Proxy Debug `net46` 编译：通过，0 警告，0 错误。
+- [x] Proxy Release `x86|net46` 编译：通过，0 警告，0 错误。
+- [x] Tests Debug `net46` 编译：通过，0 警告，0 错误。
+- [x] `dotnet test --no-restore`：退出码 0，但当前 SDK 未输出测试摘要。
+- [x] `dotnet vstest`：发现并执行 22 个测试，摘要显示 22 通过、0 失败；测试宿主清理阶段崩溃导致命令退出码为 1。
+- [ ] 真实 100% DPI 界面截图验证：待现场执行。
+- [ ] 真实 200% DPI 回归截图验证：待现场执行。
+
+## 回退方式
+
+- 回退 `HardwareHealthPanel.cs` 中 `HardwareHealthDpiLayout`、Header 右侧宽度计算和 `DeviceHealthCard` 列宽计算即可恢复旧固定列宽。
+- 回退 `MainFormLogRenderingTests.cs` 中新增的 100% 宽度测试和间距断言调整即可恢复旧测试约束。
+
 # 方案 B：切换终端后开始流程顺序等待（2026-07-08）
 
 ## 当前阶段

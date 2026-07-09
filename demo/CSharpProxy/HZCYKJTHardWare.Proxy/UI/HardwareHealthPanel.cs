@@ -7,6 +7,31 @@ using HZCYKJTHardWare.Proxy.Terminal;
 
 namespace HZCYKJTHardWare.Proxy.UI
 {
+    internal static class HardwareHealthDpiLayout
+    {
+        private const float DesignDpi = 192F;
+
+        public static int ScaleFromDesignDpi(Control control, int designPixels, int minimum)
+        {
+            if (designPixels <= 0)
+                return Math.Max(0, minimum);
+
+            var dpi = DesignDpi;
+            try
+            {
+                using (var graphics = control.CreateGraphics())
+                    dpi = graphics.DpiX;
+            }
+            catch
+            {
+                dpi = DesignDpi;
+            }
+
+            var scaled = (int)Math.Round(designPixels * dpi / DesignDpi);
+            return Math.Max(minimum, scaled);
+        }
+    }
+
     internal enum HardwareVisualState
     {
         Unknown,
@@ -90,6 +115,10 @@ namespace HZCYKJTHardWare.Proxy.UI
         private const int RefreshButtonWidth = 188;
         private const int RefreshButtonHeight = 40;
         private const int StatusButtonGap = 12;
+        private const int MinRightStatusColumnWidth = 380;
+        private const int MinRefreshButtonWidth = 156;
+        private const int MinRefreshButtonMinimumWidth = 132;
+        private const int MinStatusButtonGap = 8;
 
         private sealed class DeviceDescriptor
         {
@@ -138,6 +167,15 @@ namespace HZCYKJTHardWare.Proxy.UI
                 ShowAlways = true
             };
 
+            var rightStatusColumnWidth = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, RightStatusColumnWidth, MinRightStatusColumnWidth);
+            var refreshButtonWidth = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, RefreshButtonWidth, MinRefreshButtonWidth);
+            var refreshButtonMinimumWidth = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, 168, MinRefreshButtonMinimumWidth);
+            var statusButtonGap = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, StatusButtonGap, MinStatusButtonGap);
+
             var header = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
@@ -149,7 +187,7 @@ namespace HZCYKJTHardWare.Proxy.UI
                 Padding = Padding.Empty
             };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, RightStatusColumnWidth));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, rightStatusColumnWidth));
             header.RowStyles.Add(new RowStyle(SizeType.Absolute, HeaderRowHeight));
             header.RowStyles.Add(new RowStyle(SizeType.Absolute, HeaderGridGap));
             var titleLabel = new Label
@@ -172,7 +210,7 @@ namespace HZCYKJTHardWare.Proxy.UI
             _refreshButton = new Button
             {
                 Dock = DockStyle.Fill,
-                MinimumSize = new Size(168, RefreshButtonHeight),
+                MinimumSize = new Size(refreshButtonMinimumWidth, RefreshButtonHeight),
                 Text = "刷新状态",
                 Font = new Font("Microsoft YaHei", 8.5F),
                 ForeColor = Color.FromArgb(13, 110, 253),
@@ -198,8 +236,8 @@ namespace HZCYKJTHardWare.Proxy.UI
                 Padding = Padding.Empty
             };
             statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, StatusButtonGap));
-            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, RefreshButtonWidth));
+            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, statusButtonGap));
+            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, refreshButtonWidth));
             statusRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             statusRow.Controls.Add(_summaryLabel, 0, 0);
             statusRow.Controls.Add(_refreshButton, 2, 0);
@@ -402,6 +440,17 @@ namespace HZCYKJTHardWare.Proxy.UI
 
     internal sealed class DeviceHealthCard : Panel
     {
+        private const int CodeColumnWidth = 76;
+        private const int StatusColumnWidth = 118;
+        private const int CardHorizontalPadding = 8;
+        private const int CardVerticalPadding = 3;
+        private const int CodeRightMargin = 10;
+        private const int MinCodeColumnWidth = 44;
+        private const int MinStatusColumnWidth = 72;
+        private const int MinCardHorizontalPadding = 6;
+        private const int MinCardVerticalPadding = 3;
+        private const int MinCodeRightMargin = 4;
+
         private readonly string _deviceId;
         private readonly Label _codeLabel;
         private readonly Label _messageLabel;
@@ -422,18 +471,30 @@ namespace HZCYKJTHardWare.Proxy.UI
                      ControlStyles.ResizeRedraw |
                      ControlStyles.UserPaint, true);
 
+            var codeColumnWidth = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, CodeColumnWidth, MinCodeColumnWidth);
+            var statusColumnWidth = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, StatusColumnWidth, MinStatusColumnWidth);
+            var horizontalPadding = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, CardHorizontalPadding, MinCardHorizontalPadding);
+            var verticalPadding = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, CardVerticalPadding, MinCardVerticalPadding);
+            var codeRightMargin = HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, CodeRightMargin, MinCodeRightMargin);
+
             var layout = new TableLayoutPanel
             {
                 ColumnCount = 3,
                 RowCount = 2,
                 Dock = DockStyle.Fill,
                 Margin = Padding.Empty,
-                Padding = new Padding(8, 3, 8, 3),
+                Padding = new Padding(horizontalPadding, verticalPadding,
+                    horizontalPadding, verticalPadding),
                 BackColor = Color.Transparent
             };
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, codeColumnWidth));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, statusColumnWidth));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
@@ -444,7 +505,7 @@ namespace HZCYKJTHardWare.Proxy.UI
                 Text = deviceCode,
                 TextAlign = ContentAlignment.MiddleCenter,
                 AutoEllipsis = true,
-                Margin = new Padding(0, 0, 10, 0),
+                Margin = new Padding(0, 0, codeRightMargin, 0),
                 BackColor = Color.Transparent
             };
             var nameLabel = new Label

@@ -132,8 +132,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                         .Single(c => contentGrid.GetColumn(c) == 4);
                     var lastCardBounds = BoundsRelativeTo(panel, lastCard);
 
-                    Assert.AreEqual(12, buttonBounds.Left - summaryBounds.Right,
-                        "检测摘要与刷新按钮之间应保留 12px 横向间距");
+                    Assert.IsTrue(buttonBounds.Left - summaryBounds.Right >= 8,
+                        "检测摘要与刷新按钮之间应保留可读横向间距");
                     Assert.IsTrue(contentGridBounds.Top - buttonBounds.Bottom >= 20,
                         "Header Row 下方距离设备卡片上边缘应至少保留 20px");
                     Assert.IsTrue(contentGridBounds.Top - summaryBounds.Bottom >= 20,
@@ -178,6 +178,42 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                         Assert.IsTrue(
                             statusLabel.Width >= statusLabel.GetPreferredSize(Size.Empty).Width,
                             "设备状态列必须足够显示单行文本，避免“待检测”被拆行");
+                    }
+                }
+            });
+        }
+
+        [TestMethod]
+        public void HardwareHealthPanel_DeviceCardsFitAtOneHundredPercentWindowWidth()
+        {
+            RunInSta(() =>
+            {
+                using (var panel = new HardwareHealthPanel())
+                {
+                    panel.Width = 1180;
+                    panel.Height = HardwareHealthPanel.DefaultHeight;
+                    panel.CreateControl();
+                    panel.PerformLayout();
+
+                    foreach (var card in CollectControls<DeviceHealthCard>(panel))
+                    {
+                        card.PerformLayout();
+                        var codeLabel = (Label)GetField(
+                            typeof(DeviceHealthCard), "_codeLabel").GetValue(card);
+                        var messageLabel = (Label)GetField(
+                            typeof(DeviceHealthCard), "_messageLabel").GetValue(card);
+                        var statusLabel = (Label)GetField(
+                            typeof(DeviceHealthCard), "_statusLabel").GetValue(card);
+
+                        Assert.IsTrue(
+                            codeLabel.Width >= codeLabel.GetPreferredSize(Size.Empty).Width,
+                            "100% 缩放宽度下设备短码应完整可读");
+                        Assert.IsTrue(
+                            statusLabel.Width >= statusLabel.GetPreferredSize(Size.Empty).Width,
+                            "100% 缩放宽度下设备状态应完整可读");
+                        Assert.IsTrue(
+                            messageLabel.Width >= 88,
+                            "100% 缩放宽度下设备说明列不应被固定列宽挤压到只剩省略号");
                     }
                 }
             });
