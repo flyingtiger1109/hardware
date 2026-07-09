@@ -12,7 +12,10 @@ public:
     bool Ping();
     bool GetInstanceId(std::string& outInstanceId, int timeoutMs = 1000);
 
-    bool ProcessStart(const std::string& requestId, const std::string& saveDir, const std::string& callbacksJson = "{}");
+    bool ProcessStart(const std::string& requestId,
+                      const std::string& saveDir,
+                      const std::string& callbacksJson = "{}",
+                      int timeoutMs = -1);
     bool ProcessEnd();
 
     bool SwitchTerminal(int terminalIndex);

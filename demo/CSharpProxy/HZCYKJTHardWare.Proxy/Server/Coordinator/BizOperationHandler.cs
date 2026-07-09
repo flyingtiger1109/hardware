@@ -31,6 +31,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private readonly Action<bool> _onProcessStateChanged;
         private readonly SwitchCoordinator _switchCoordinator;
         private readonly DllCallbackSender _dllCallback;
+        private const int ProcessStartSwitchWaitMs = 5000;
+        private const int ProcessStartSwitchPollMs = 50;
 
         public class AuthorizeRequestResult
         {
@@ -71,19 +73,70 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         // ====== Process Control ======
 
+        private bool IsTerminalSwitching()
+        {
+            return _queueManager.SwitchingTerminal || _switchCoordinator.IsSwitching;
+        }
+
+        private async Task<(ControlOperationGate.Lease lease, TerminalRouteEpochSnapshot routeEpoch,
+            bool timedOut, bool busy)> TryEnterProcessStartAfterSwitchAsync(string requestId)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(ProcessStartSwitchWaitMs);
+            var loggedWait = false;
+
+            while (true)
+            {
+                var lease = _controlGate.TryEnter("start_process");
+                if (lease != null)
+                {
+                    if (_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                        return (lease, routeEpoch, false, false);
+
+                    lease.Dispose();
+                    if (!IsTerminalSwitching())
+                        return (null, null, false, false);
+                }
+                else if (!IsTerminalSwitching())
+                {
+                    return (null, null, false, true);
+                }
+
+                if (!loggedWait)
+                {
+                    _log("[流程] 开始流程等待终端切换完成：请求ID=" + requestId +
+                        "，最长等待毫秒=" + ProcessStartSwitchWaitMs);
+                    loggedWait = true;
+                }
+
+                var remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (remaining <= 0)
+                {
+                    _log("[流程] 开始流程等待终端切换超时：请求ID=" + requestId +
+                        "，最长等待毫秒=" + ProcessStartSwitchWaitMs);
+                    return (null, null, true, false);
+                }
+
+                await Task.Delay(Math.Min(ProcessStartSwitchPollMs,
+                    Math.Max(1, remaining))).ConfigureAwait(false);
+            }
+        }
+
         internal async Task<string> StartProcessAsync(string saveDir)
         {
-            using (var controlLease = _controlGate.TryEnter("start_process"))
-            {
-                if (controlLease == null)
-                    return "Busy";
+            var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            var entry = await TryEnterProcessStartAfterSwitchAsync(requestId)
+                .ConfigureAwait(false);
+            if (entry.timedOut || entry.lease == null || entry.routeEpoch == null)
+                return "Busy";
+            if (entry.busy)
+                return "Busy";
 
-                if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
-                    return "Busy";
+            using (var controlLease = entry.lease)
+            {
+                var routeEpoch = entry.routeEpoch;
                 var route = routeEpoch.Route;
                 var callbackBase = _getCallbackBaseUrl();
                 var irisCallback = _getIrisCallbackUrl();
-                var requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
                 var resolvedSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
                 var body = $"{{\"request_id\":\"{requestId}\"," +
                     $"\"callbacks\":{{" +
@@ -282,15 +335,17 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     _log("[无畸变] 图片保存跳过：终端响应中无 data.undistorted_image_base64 字段");
                     return "";
                 }
-                var path = FileSaver.SaveRawGrayscaleAsBmp(undistortedB64, saveDirHk, requestId, 352, 544);
+                // 有扩展名 → 精确路径，直接覆盖；无扩展名 → 目录，自动命名
+                var path = System.IO.Path.HasExtension(saveDirHk)
+                    ? FileSaver.SaveRawGrayscaleAsBmpToFile(undistortedB64,
+                        PathHelper.ResolveExactSaveFile(saveDirHk), 352, 544)
+                    : FileSaver.SaveRawGrayscaleAsBmp(undistortedB64, saveDirHk, requestId, 352, 544);
                 if (!string.IsNullOrEmpty(path))
                     return path;
-
-                _log("[无畸变] 图片保存失败");
             }
             catch (Exception ex)
             {
-                Logger.Error("[无畸变] 图片保存异常", ex);
+                Logger.Debug("[无畸变] 图片保存异常: " + ex.Message);
             }
 
             return "";

@@ -50,6 +50,33 @@ static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
 }
 
+static constexpr int kStartProcessSwitchWaitMs = 15000;
+static constexpr int kStartProcessSwitchPollMs = 50;
+static constexpr int kStartProcessProxyTimeoutMs = 22000;
+
+static bool WaitForSwitchPendingClearForStartProcess(const std::string& requestId) {
+    if (!IsSwitchPending()) {
+        return true;
+    }
+
+    LOG_INFO("接口", "开始流程等待终端切换完成：request_id=%s，最长等待毫秒=%d",
+             requestId.c_str(), kStartProcessSwitchWaitMs);
+
+    const ULONGLONG deadline = GetTickCount64() +
+        static_cast<ULONGLONG>(kStartProcessSwitchWaitMs);
+    while (IsSwitchPending()) {
+        if (GetTickCount64() >= deadline) {
+            LOG_WARN("接口", "开始流程等待终端切换超时：request_id=%s，最长等待毫秒=%d",
+                     requestId.c_str(), kStartProcessSwitchWaitMs);
+            return false;
+        }
+        Sleep(kStartProcessSwitchPollMs);
+    }
+
+    LOG_INFO("接口", "开始流程等待终端切换完成：request_id=%s", requestId.c_str());
+    return true;
+}
+
 static std::string LogValue(const std::string& value, size_t maxLength = 256) {
     std::string result;
     result.reserve(value.size());
@@ -1222,16 +1249,17 @@ static int StartProcessBody(const char* saveDir) {
         "\"iris\":\"" + irisCallback + "\"" +
         "}}";
 
-    if (IsSwitchPending()) {
-        LOG_WARN("接口", "开始流程被终端切换拦截：request_id=%s", requestId.c_str());
+    if (!WaitForSwitchPendingClearForStartProcess(requestId)) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    if (IsSwitchPending()) {
-        LOG_WARN("接口", "开始流程被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
-        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+
+    int processStartTimeoutMs = ctx.http_request_timeout_ms;
+    if (processStartTimeoutMs < kStartProcessProxyTimeoutMs) {
+        processStartTimeoutMs = kStartProcessProxyTimeoutMs;
     }
+
     DelphiProxy proxy(ctx.delphi_server_url);
-    if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
+    if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson, processStartTimeoutMs)) {
         LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }

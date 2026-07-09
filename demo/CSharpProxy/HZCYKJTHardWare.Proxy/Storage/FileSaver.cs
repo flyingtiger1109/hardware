@@ -165,20 +165,55 @@ namespace HZCYKJTHardWare.Proxy.Storage
 
             try
             {
-                var decoded = Convert.FromBase64String(base64Str);
-                var expectedLen = width * height;
-                if (decoded.Length != expectedLen)
-                {
-                    Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decoded.Length}");
-                }
-
                 var filePath = PathHelper.ResolveExactSaveFile(saveDir, requestId,
                     "fingerprint_undistorted", ".bmp");
+                return WriteBmpFile(base64Str, filePath, width, height);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("保存无畸变BMP图片失败: " + ex.Message);
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// 将 Base64 编码的 8 位灰度 raw 像素数据解码并写入指定路径的 BMP 文件（直接覆盖）。
+        /// </summary>
+        public static string SaveRawGrayscaleAsBmpToFile(string base64Str, string filePath,
+            int width, int height)
+        {
+            if (string.IsNullOrEmpty(base64Str)) return "";
+            if (string.IsNullOrEmpty(filePath)) return "";
+
+            try
+            {
                 var dir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
+                return WriteBmpFile(base64Str, filePath, width, height);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("保存无畸变BMP图片失败: " + ex.Message);
+                return "";
+            }
+        }
 
-                using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write,
+        private static string WriteBmpFile(string base64Str, string filePath,
+            int width, int height)
+        {
+            var decoded = Convert.FromBase64String(base64Str);
+            var expectedLen = width * height;
+            if (decoded.Length != expectedLen)
+            {
+                Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decoded.Length}");
+            }
+
+            // 原子写入：先写临时文件，再覆盖目标，避免第三方读到未写完的半截文件
+            var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
                     FileShare.None, 64 * 1024, FileOptions.SequentialScan))
                 using (var bw = new BinaryWriter(fs))
                 {
@@ -229,13 +264,14 @@ namespace HZCYKJTHardWare.Proxy.Storage
                     }
                 }
 
+                File.Copy(tempPath, filePath, true);
                 Logger.Debug($"已保存无畸变BMP: {filePath}");
                 return filePath;
             }
-            catch (Exception ex)
+            finally
             {
-                Logger.Error("保存无畸变BMP图片失败", ex);
-                return "";
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); }
+                catch { }
             }
         }
     }

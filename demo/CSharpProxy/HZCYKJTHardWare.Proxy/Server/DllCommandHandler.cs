@@ -34,6 +34,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly string _proxyInstanceId = CreateProxyInstanceId();
         private const string TerminalSwitchingResult =
             "{\"error\":true,\"code\":\"terminal_switching\"}";
+        private const int ProcessStartSwitchWaitMs = 5000;
+        private const int ProcessStartSwitchPollMs = 50;
 
         internal DllCommandHandler(
             TerminalManager terminalManager,
@@ -85,6 +87,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateRJ3, "rj3");
             if (path == "/preview/plate/rj3/stop")
                 return HandlePreviewStop(PreviewResourceType.PlateRJ3);
+
+            // StartProcess is allowed to wait for an in-flight terminal switch,
+            // so "switch terminal" followed immediately by "start process" keeps
+            // the caller's intended ordering.
+            if (path == "/process/start")
+                return await HandleProcessStart(bodyUtf8).ConfigureAwait(false);
 
             // Fast reject during terminal switch
             if (_queueManager.SwitchingTerminal)
@@ -155,8 +163,6 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return await HandlePreviewUrl(PreviewResourceType.Iris, routeEpoch);
 
                 // === Process and authorization ===
-                case "/process/start":
-                    return await HandleProcessStart(bodyUtf8);
                 case "/process/end":
                     return HandleProcessEnd();
                 case "/authorize":
@@ -430,15 +436,74 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // ====== Process control ======
 
+        private bool IsTerminalSwitching()
+        {
+            return _queueManager.SwitchingTerminal || _switchCoordinator.IsSwitching;
+        }
+
+        private async Task<(ControlOperationGate.Lease lease, TerminalRouteEpochSnapshot routeEpoch,
+            bool timedOut, bool busy)> TryEnterProcessStartAfterSwitchAsync(string requestId)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(ProcessStartSwitchWaitMs);
+            var loggedWait = false;
+
+            while (true)
+            {
+                var lease = _controlGate.TryEnter("start_process");
+                if (lease != null)
+                {
+                    if (_switchCoordinator.TryCaptureRoute(out var routeEpoch))
+                        return (lease, routeEpoch, false, false);
+
+                    lease.Dispose();
+                    if (!IsTerminalSwitching())
+                        return (null, null, false, false);
+                }
+                else if (!IsTerminalSwitching())
+                {
+                    return (null, null, false, true);
+                }
+
+                if (!loggedWait)
+                {
+                    _log("[流程] 开始流程等待终端切换完成：请求ID=" +
+                        JsonHelper.ToLogValue(requestId) +
+                        "，最长等待毫秒=" + ProcessStartSwitchWaitMs);
+                    loggedWait = true;
+                }
+
+                var remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (remaining <= 0)
+                {
+                    _log("[流程] 开始流程等待终端切换超时：请求ID=" +
+                        JsonHelper.ToLogValue(requestId) +
+                        "，最长等待毫秒=" + ProcessStartSwitchWaitMs);
+                    return (null, null, true, false);
+                }
+
+                await Task.Delay(Math.Min(ProcessStartSwitchPollMs,
+                    Math.Max(1, remaining))).ConfigureAwait(false);
+            }
+        }
+
         private async Task<string> HandleProcessStart(string bodyUtf8)
         {
-            using (var controlLease = _controlGate.TryEnter("start_process"))
-            {
-                if (controlLease == null)
-                    return "{\"error\":true,\"code\":\"busy\"}";
+            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+            if (string.IsNullOrEmpty(requestId))
+                requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
 
-                if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
-                    return TerminalSwitchingResult;
+            var entry = await TryEnterProcessStartAfterSwitchAsync(requestId)
+                .ConfigureAwait(false);
+            if (entry.timedOut)
+                return TerminalSwitchingResult;
+            if (entry.busy)
+                return "{\"error\":true,\"code\":\"busy\"}";
+            if (entry.lease == null || entry.routeEpoch == null)
+                return TerminalSwitchingResult;
+
+            using (var controlLease = entry.lease)
+            {
+                var routeEpoch = entry.routeEpoch;
                 var route = routeEpoch.Route;
                 var saveDir = JsonHelper.ExtractString(bodyUtf8, "save_dir");
                 if (string.IsNullOrEmpty(saveDir))
@@ -449,9 +514,6 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 var callbackBase = _getCallbackBaseUrl();
                 var irisCallback = BuildIrisCallbackUrl(callbackBase);
-                var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
-                if (string.IsNullOrEmpty(requestId))
-                    requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
 
                 var registration = _processRegistry.Prepare(route.TerminalIndex,
                     route.BaseUrl, requestId, resolvedSaveDir, routeEpoch.Generation);

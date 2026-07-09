@@ -1,5 +1,64 @@
 # 项目进度记录
 
+# 方案 B：切换终端后开始流程顺序等待（2026-07-08）
+
+## 当前阶段
+
+- [x] 已在修改前提交当前版本，提交信息为 `1.2.7版本`。
+- [x] DLL 和 C# Proxy 已改为允许 `SwitchTerminal` 后紧接 `StartProcess` 时按顺序等待切换完成。
+- [x] DLL 导出函数、调用约定、参数、错误码、第三方请求格式和终端协议未修改。
+- [x] 正式运行目录 EXE/DLL 已覆盖部署到 `bin/x86/Release/net46`。
+- [ ] 真实第三方连续切换终端并立即开始流程的现场复测待执行。
+
+## 本次修改内容
+
+1. DLL `StartProcess` 在检测到终端切换中时，不再立即返回忙，而是最多等待 15 秒，切换完成后继续转发开始流程。
+2. DLL 转发 `/process/start` 到 Proxy 时，将本次内部 HTTP 超时提升到至少 22 秒，覆盖 Proxy 等待切换和终端开始流程的耗时。
+3. C# Proxy 的 DLL 命令入口 `/process/start` 绕过切换中的快速拒绝逻辑，最多等待 15 秒获取新终端路由后再执行。
+4. C# Proxy 管理界面本机开始流程入口使用同一等待逻辑，避免 UI 入口与 DLL 入口行为不一致。
+5. 其他 OCR、NFC、授权、抓拍、预览等接口仍保持终端切换中快速拒绝，不扩大排队等待范围。
+
+## 涉及文件
+
+- `src/exports.cpp`：`StartProcess` 切换等待和内部 Proxy 超时兜底。
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`：内部 `ProcessStart` 增加可选超时参数。
+- `Server/DllCommandHandler.cs`：DLL `/process/start` 等待终端切换完成后再执行。
+- `Server/Coordinator/BizOperationHandler.cs`：Proxy UI 开始流程入口同步等待策略。
+- `PROGRESS.md`：记录本次方案 B 修改。
+
+## 兼容性说明
+
+- DLL 导出 ABI：未修改。
+- 第三方调用参数、调用约定、错误码：未修改。
+- Proxy HTTP 路由和请求/响应 JSON：未修改。
+- 终端 HTTP 协议：未修改。
+- 行为变化仅限 `StartProcess`：终端切换中由立即失败改为最多等待 15 秒后继续或按原忙语义失败。
+
+## 风险与注意事项
+
+1. 第三方线程调用 `StartProcess` 时，若刚好处于终端切换中，切换等待段最多约 15 秒；整体耗时还包括 Proxy/终端开始流程请求时间，DLL 内部 HTTP 超时下限为 22 秒。
+2. 如果终端切换超过 15 秒仍未完成，`StartProcess` 仍会返回原有忙/切换中语义，不引入无限等待。
+3. 仅解决“切换请求已发出但尚未完成时立即开始流程”的竞态；如果终端实际 HTTP 服务切换后仍不可用，仍需要按现有失败日志排查终端侧。
+
+## 验证状态
+
+- [x] `git diff --check`：通过，仅有 LF/CRLF 规范化提示。
+- [x] C# Proxy `Release|x86|net46` 独立输出编译：通过，0 警告，0 错误。
+- [x] C# Proxy `Release|x86|net46` 正式输出编译：通过，0 警告，0 错误。
+- [x] C++ DLL `Release|Win32` 编译：通过，0 警告，0 错误。
+- [ ] C# 测试结果记录：`dotnet test` 返回 0，但未输出测试摘要和 TRX 文件，需后续重新生成有效报告。
+- [x] 正式运行目录覆盖部署：已更新 `HZCYKJTHardWare.Proxy.exe` 和 `HZCYKJTHardWare.dll`。
+- [ ] 真实第三方现场复测：待执行。
+
+## 下一步计划
+
+- [ ] 使用第三方程序连续执行“切换终端 1/2 后立即开始流程”，确认不再因切换中返回开始流程失败。
+- [ ] 补充切换超时、终端不可达、重复快速调用 `StartProcess` 的回归验证。
+
+## 回退方式
+
+- 回退上述 5 个代码文件中新增的 `StartProcess` 等待逻辑和内部超时参数，即可恢复终端切换中立即失败的旧行为；DLL 导出接口和部署配置无需回退。
+
 # 授权回调 resource_type 日志识别后打印（2026-07-08）
 
 ## 当前阶段

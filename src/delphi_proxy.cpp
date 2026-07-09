@@ -141,12 +141,15 @@ bool DelphiProxy::GetInstanceId(std::string& outInstanceId, int timeoutMs) {
     return !outInstanceId.empty();
 }
 
-bool DelphiProxy::ProcessStart(const std::string& requestId, const std::string& saveDir, const std::string& callbacksJson) {
+bool DelphiProxy::ProcessStart(const std::string& requestId,
+                               const std::string& saveDir,
+                               const std::string& callbacksJson,
+                               int timeoutMs) {
     std::string body = "{" + JsonStringField("request_id", requestId) +
         "," + JsonStringField("save_dir", saveDir) +
         "," + callbacksJson.substr(1); // merge request_id + save_dir into callbacks JSON
     std::string response;
-    return PostJson("/process/start", body, response) && IsOkResponse(response);
+    return PostJson("/process/start", body, response, timeoutMs) && IsOkResponse(response);
 }
 
 bool DelphiProxy::ProcessEnd() {
