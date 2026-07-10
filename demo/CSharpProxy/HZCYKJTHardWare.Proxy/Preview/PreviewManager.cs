@@ -129,6 +129,33 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private static int CompareRestartPriority(PreviewSession left, PreviewSession right)
+        {
+            var result = GetRestartPriority(left).CompareTo(GetRestartPriority(right));
+            if (result != 0)
+                return result;
+
+            result = left.SessionType.CompareTo(right.SessionType);
+            if (result != 0)
+                return result;
+
+            return left.TargetHwnd.ToInt64().CompareTo(right.TargetHwnd.ToInt64());
+        }
+
+        private static int GetRestartPriority(PreviewSession session)
+        {
+            if (session == null)
+                return int.MaxValue;
+
+            switch (session.ResourceType)
+            {
+                case PreviewResourceType.Camera: return 0;
+                case PreviewResourceType.Fingerprint: return 10;
+                case PreviewResourceType.Iris: return 20;
+                default: return 100;
+            }
+        }
+
         private static (int srcW, int srcH, bool swap) GetSourceDimensions(PreviewResourceType resType)
         {
             switch (resType)
@@ -836,6 +863,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (session.TerminalBound)
                         restartList.Add(session);
                 }
+                restartList.Sort(CompareRestartPriority);
 
                 // The lane-level plate camera is not tied to terminal 1/2. Stop and restart
                 // terminal sessions individually so plate local/external sessions remain live.
@@ -860,7 +888,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return;
                 }
 
-                Logger.Info($"终端切换，重启 {restartList.Count} 个预览");
+                Logger.Info($"终端切换，后台恢复 {restartList.Count} 个预览");
 
                 for (int i = 0; i < restartList.Count; i++)
                 {
@@ -869,16 +897,23 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (shouldContinue != null && !shouldContinue())
                         return;
 
+                    var previewSw = System.Diagnostics.Stopwatch.StartNew();
+                    var resourceName = ResourceToName(info.ResourceType);
+                    Logger.Info($"预览后台恢复开始: resource={resourceName}, session={info.SessionType}");
                     try
                     {
-                        await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd,
+                        var started = await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd,
                             newTerminalBaseUrl, info.LocalPanel, shouldContinue,
                             info.ExplicitPreviewUrl, info.TerminalBound, info.DirectRenderTarget)
                             .ConfigureAwait(false);
+                        if (started)
+                            Logger.Info($"预览后台恢复完成: resource={resourceName}, session={info.SessionType}, 耗时={previewSw.ElapsedMilliseconds}ms");
+                        else
+                            Logger.Warn($"预览后台恢复未完成: resource={resourceName}, session={info.SessionType}, 耗时={previewSw.ElapsedMilliseconds}ms");
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error($"重启预览失败 {ResourceToName(info.ResourceType)}: {ex.Message}");
+                        Logger.Error($"预览后台恢复失败: resource={resourceName}, session={info.SessionType}, 耗时={previewSw.ElapsedMilliseconds}ms, error={ex.Message}");
                     }
 
                     if (i < restartList.Count - 1)

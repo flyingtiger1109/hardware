@@ -14,8 +14,7 @@ public:
 
     bool ProcessStart(const std::string& requestId,
                       const std::string& saveDir,
-                      const std::string& callbacksJson = "{}",
-                      int timeoutMs = -1);
+                      const std::string& callbacksJson = "{}");
     bool ProcessEnd();
 
     bool SwitchTerminal(int terminalIndex);

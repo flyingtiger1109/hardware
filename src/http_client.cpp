@@ -5,22 +5,7 @@
 
 namespace HZCYKJTHardWare {
 
-namespace {
-class CriticalSectionGuard {
-public:
-    explicit CriticalSectionGuard(CRITICAL_SECTION* cs) : m_cs(cs) {
-        EnterCriticalSection(m_cs);
-    }
-    ~CriticalSectionGuard() {
-        LeaveCriticalSection(m_cs);
-    }
-private:
-    CRITICAL_SECTION* m_cs;
-};
-}
-
 HttpClient::HttpClient() {
-    InitializeCriticalSection(&m_cs);
     m_hSession = WinHttpOpen(L"HZCYKJTHardWare-DLL/1.0",
                               WINHTTP_ACCESS_TYPE_NO_PROXY,
                               WINHTTP_NO_PROXY_NAME,
@@ -35,7 +20,6 @@ HttpClient::~HttpClient() {
         WinHttpCloseHandle(m_hSession);
         m_hSession = nullptr;
     }
-    DeleteCriticalSection(&m_cs);
 }
 
 bool HttpClient::PostJson(const std::string& url,
@@ -44,6 +28,7 @@ bool HttpClient::PostJson(const std::string& url,
                           int requestTimeoutMs,
                           std::string& responseBody,
                           int& responseStatusCode) {
+    const ULONGLONG startedAt = GetTickCount64();
     responseBody.clear();
     responseStatusCode = 0;
 
@@ -51,8 +36,6 @@ bool HttpClient::PostJson(const std::string& url,
         LOG_ERROR("HTTP请求", "HTTP请求失败：WinHTTP session 未初始化");
         return false;
     }
-
-    CriticalSectionGuard guard(&m_cs);
 
     // 解析 URL
     std::wstring wUrl = PathHelper::Utf8ToWide(url);
@@ -144,8 +127,10 @@ bool HttpClient::PostJson(const std::string& url,
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
-    LOG_DEBUG("HTTP请求", "HTTP POST完成：url=%s，status=%d，response_size=%zu",
-              url.c_str(), responseStatusCode, responseBody.size());
+    const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
+    LOG_INFO("HTTP请求", "HTTP POST完成：url=%s，status=%d，request_size=%zu，response_size=%zu，elapsed_ms=%llu",
+             url.c_str(), responseStatusCode, body.size(), responseBody.size(),
+             static_cast<unsigned long long>(elapsedMs));
 
     return true;
 }
@@ -155,6 +140,7 @@ bool HttpClient::Get(const std::string& url,
                      int requestTimeoutMs,
                      std::string& responseBody,
                      int& responseStatusCode) {
+    const ULONGLONG startedAt = GetTickCount64();
     responseBody.clear();
     responseStatusCode = 0;
 
@@ -162,8 +148,6 @@ bool HttpClient::Get(const std::string& url,
         LOG_ERROR("HTTP请求", "HTTP GET失败：WinHTTP session 未初始化，url=%s", url.c_str());
         return false;
     }
-
-    CriticalSectionGuard guard(&m_cs);
 
     std::wstring wUrl = PathHelper::Utf8ToWide(url);
     URL_COMPONENTS urlComp = {0};
@@ -241,8 +225,10 @@ bool HttpClient::Get(const std::string& url,
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
-    LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu",
-              url.c_str(), responseStatusCode, responseBody.size());
+    const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
+    LOG_INFO("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
+             url.c_str(), responseStatusCode, responseBody.size(),
+             static_cast<unsigned long long>(elapsedMs));
 
     return true;
 }

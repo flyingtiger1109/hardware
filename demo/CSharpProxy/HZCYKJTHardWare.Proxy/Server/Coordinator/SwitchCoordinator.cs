@@ -15,8 +15,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
     ///   3. Cancel old-generation requests in Registry
     ///   4. Stop all active previews (preserving restart info)
     ///   5. Switch terminal in TerminalManager
-    ///   6. Restart previews on new terminal
-    ///   7. Clear switching flag
+    ///   6. Clear switching flag
+    ///   7. Restart previews on new terminal in background
     ///
     /// Both UI and DLL requests enter through this coordinator.
     /// </summary>
@@ -169,6 +169,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         private async Task<bool> SwitchToCoreAsync(int terminalIndex, int generation)
         {
+            var switchFinished = false;
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -182,12 +183,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 _log("[Coordinator] 当前终端=" + _terminalManager.CurrentName);
                 NotifyTerminalChanged(_terminalManager.CurrentIndex);
 
-                phase = sw.ElapsedMilliseconds;
-                await _previewManager.RestartPreviewsOnTerminalSwitch(
-                    _terminalManager.CurrentBaseUrl,
-                    () => _queueManager.IsGenerationValid(generation)).ConfigureAwait(false);
-                Logger.Debug($"[性能] 终端切换启动 耗时={sw.ElapsedMilliseconds - phase}ms");
-                Logger.Debug($"[性能] 终端切换总耗时={sw.ElapsedMilliseconds}ms");
+                var restartBaseUrl = _terminalManager.CurrentBaseUrl;
+                var switchElapsedMs = sw.ElapsedMilliseconds;
+                FinishSwitch();
+                switchFinished = true;
+
+                Logger.Info($"[Coordinator] 终端切换完成，已清除切换中标志，批次={generation}，目标终端={_terminalManager.CurrentName}，耗时={switchElapsedMs}ms，预览进入后台恢复");
+                Logger.Debug($"[性能] 终端切换总耗时={switchElapsedMs}ms");
+                StartPreviewRestartInBackground(restartBaseUrl, generation, switchElapsedMs);
                 return true;
             }
             catch (Exception ex)
@@ -197,8 +200,29 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
             finally
             {
-                FinishSwitch();
+                if (!switchFinished)
+                    FinishSwitch();
             }
+        }
+
+        private void StartPreviewRestartInBackground(string terminalBaseUrl, int generation, long switchElapsedMs)
+        {
+            _ = Task.Run(async () =>
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                Logger.Info($"[Coordinator] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
+                try
+                {
+                    await _previewManager.RestartPreviewsOnTerminalSwitch(
+                        terminalBaseUrl,
+                        () => _queueManager.IsGenerationValid(generation)).ConfigureAwait(false);
+                    Logger.Info($"[Coordinator] 预览后台恢复完成，批次={generation}，耗时={sw.ElapsedMilliseconds}ms");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"[Coordinator] 预览后台恢复异常，批次={generation}，耗时={sw.ElapsedMilliseconds}ms", ex);
+                }
+            });
         }
 
         private void FinishSwitch()

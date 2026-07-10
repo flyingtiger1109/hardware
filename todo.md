@@ -792,6 +792,61 @@
 详细修改、兼容性、风险和回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
 
+## DLL 到 Proxy HTTP 并发与初始化顺序优化（2026-07-09）
+
+### 当前阶段
+
+- [x] 完成不改变第三方 DLL 导出接口的最小改动。
+- [x] 完成 DLL `Release|Win32` 编译验证。
+- [ ] 真实终端环境验证人脸和指纹同时抓拍吞吐。
+
+### 本次修改内容
+
+1. `DelphiProxy` 改为复用 `HzsjkjtContext::http_client`，避免每次请求创建新的 WinHTTP session。
+2. `HttpClient` 移除成员级 `CRITICAL_SECTION` 整段串行保护；每次请求仍独立创建 `Connect/Request` handle。
+3. `InitSdk` 在首次 `/ping` Proxy 前创建全局 `HttpClient`，失败路径释放，避免空指针风险。
+4. `DelphiProxy` 增加 `http_client == nullptr` 防护日志。
+5. `HttpClient` 在 `INFO` 日志中记录 `elapsed_ms`、请求大小和响应大小，便于现场压测判断瓶颈是否仍在 DLL 到 Proxy 链路。
+
+### 涉及文件
+
+- `src/http_client.cpp`
+- `src/http_client.h`
+- `src/delphi_proxy.cpp`
+- `src/exports.cpp`
+
+### 兼容性说明
+
+- DLL 导出函数、参数、`__stdcall` 调用约定、`.def` 导出名未改变。
+- 第三方 Delphi 7 调用方式不变。
+- DLL 到 Proxy HTTP 路由和 JSON 协议不变。
+- C# Proxy 本次未修改，仍由 Proxy 端业务队列控制终端请求并发。
+
+### 风险与注意事项
+
+1. WinHTTP session 现在由 DLL 全局复用，多个请求并发共享 session，但 request handle 仍为每次调用独立创建。
+2. Proxy 当前响应头仍为 `Connection: close`，本次没有改造 Proxy Keep-Alive 循环；收益主要来自取消 DLL 侧公共串行点和复用 session。
+3. 如果现场合计吞吐仍稳定在 5 次/秒，应继续检查 Proxy 队列执行耗时、终端 HTTP 响应耗时和终端本身处理能力。
+4. `INFO` 日志量会增加；完成现场验证后可按需要降回 `DEBUG` 或增加耗时阈值。
+
+### 验证状态
+
+- [x] DLL `Release|Win32` 编译通过：0 warning，0 error。
+- [x] `HZCYKJTHardWare.def` 和 public header 未修改，ABI 面保持不变。
+- [ ] Delphi 7 第三方程序加载验证：待验证。
+- [ ] 两终端真实环境人脸/指纹同时抓拍 20 秒吞吐验证：待验证。
+- [ ] 2 小时与 24 小时长稳内存、句柄、线程数观察：待验证。
+
+### 下一步计划
+
+- [ ] 现场对比修改前后人脸单抓、指纹单抓、人脸+指纹同时抓拍的成功数/秒。
+- [ ] 重点查看 DLL 日志 `HTTP POST完成 ... elapsed_ms=...`，确认是否存在单次请求约 200ms 且串行等待的现象。
+- [ ] 如仍合计 5 次/秒，继续在 Proxy `WorkerQueue` 和 `TerminalClient.PostJsonAsync` 增加分段耗时日志。
+
+### 回退方式
+
+- 恢复上述 4 个文件到本节修改前版本，重新编译 `Release|Win32` DLL。
+
 ## Proxy 车牌预览界面汉化与布局优化（2026-07-03）
 
 - [x] 预览控制按钮移除内部函数名，统一改为中文业务名称。
@@ -818,6 +873,172 @@
 
 详细修改、兼容性、风险、验证与回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## OCR ID 卡光学鉴伪兼容支持（2026-07-10）
+
+### 当前阶段
+
+- [x] 保持原 OCR 请求接口、DLL 导出函数、`__stdcall` 回调签名和公共结构体不变。
+- [x] 支持 `data.card_type=30` 的 ID 卡人员字段和光学鉴伪字段解析。
+- [x] ID 卡扩展字段已贯通“终端推送 → C# Proxy → C++ DLL → 第三方 eventJson”。
+- [x] C# 第三方 Demo 已同步展示 ID 卡人员信息和光学鉴伪结果。
+- [x] 其他证件类型继续使用原 OCR 回调字段，不增加 ID 卡专用字段。
+- [ ] 使用真实 ID 卡终端完成现场联调。
+
+### 本次修改内容
+
+1. `CallbackParser.ParseOcrDocument` 仅在 `card_type=30` 时读取 `person_info[0]` 和 `optics_authen`。
+2. ID 卡复用终端已有的 `name`、`sex`、`cardId`、`birthday`、`dateOfissue` 字段名和值。
+3. `authen_score` 和 `optical_check_result` 缺失、为 `null`、类型非法或整数越界时使用 `-1`。
+4. `optical_check_result` 仅接受 `0`（通过）和 `1`（不通过），其他整数统一转换为 `-1`，避免误判为通过。
+5. Proxy 仅对 ID 卡向 DLL 增量发送人员和鉴伪字段；非 ID 卡继续发送原 `request_id/mrz/save_path` JSON。
+6. DLL 仅对 ID 卡 OCR 成功事件向第三方 JSON 增加 `card_type`、人员字段和鉴伪字段。
+7. 增加 ID 卡完整、失败、字段缺失、`null`、非 ID 卡、旧 OCR 和非法类型测试。
+8. C# Demo 仅在 `ocr_document + card_type=30` 时展示人员字段、鉴伪分数和“通过/不通过/未知”状态；整数缺失默认值显式使用 `-1`。
+9. C# Proxy 的 ID 卡 OCR 成功日志不再打印 MRZ，改为打印经过控制字符清理和长度限制的姓名、性别、证号，以及鉴权分数和中文鉴伪结果；其他证件类型继续打印 MRZ。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Parsing/CallbackParser.cs`：OCR ID 卡模型和容错解析。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`：业务转换、鉴伪日志和 DLL 投递。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCallbackSender.cs`：ID 卡扩展 JSON，保留原公开重载。
+- `src/event_dispatcher.cpp`：严格整数解析、ID 卡日志和第三方回调 JSON 扩展。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/OcrIdCardCallbackTests.cs`：7 个 OCR 解析场景。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/DllCallbackSenderTests.cs`：ID 卡透传和旧回调字段集合测试。
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`：ID 卡回调字段解析和日志展示。
+- `demo/CSharpThirdPartyDemo/README.md`：ID 卡演示字段及状态说明。
+- `第三方接口调用说明.md`：ID 卡字段和状态定义。
+- `todo.md`：本次进度记录。
+
+### 兼容性说明
+
+- 外部函数：未修改函数名、参数、返回值、错误码或调用方式。
+- 回调 ABI：仍为 `THZCYKJTHardWareEventCallback(const char* eventJson)`，调用约定仍为 x86 `__stdcall`。
+- 公共结构体：`HZCYKJTHardWare_EVENT` 未修改，字段布局和大小不变。
+- 第三方 JSON：仅 ID 卡 OCR 成功事件增加可选字段；其他 OCR 类型字段集合保持不变。
+- Proxy：继续使用 `.NET Framework 4.6/x86`，未新增依赖。
+- DLL：继续生成 Win32/x86，当前导出表仍为 24 项。
+
+### 风险与注意事项
+
+1. 第三方应按 JSON 字段名解析，不应依赖字段顺序；ID 卡字段为增量可选字段。
+2. `cardId` 和 `dateOfissue` 沿用终端原始大小写，第三方解析时需保持一致。
+3. 人员字段缺失或类型异常时返回空字符串；两个鉴伪整数字段返回 `-1`。
+4. Proxy ID 卡日志包含姓名、性别和证件号码等敏感信息，需限制日志访问权限与留存周期。
+5. C++ 旧 `ResultParser::ParseOcrResult` 当前位于停用的 `#if 0` 路径，本次未修改；如恢复旧原始报文处理，需要同步支持 ID 卡字段。
+6. 自动测试使用模拟 JSON，真实终端是否存在字段大小写或协议版本差异仍需现场确认。
+
+### 验证状态
+
+- [x] C# Proxy/Test `Release|x86|net46` 编译：0 warning，0 error。
+- [x] C# Proxy ID 卡日志调整使用隔离输出目录编译：0 warning，0 error；正式输出 EXE 被运行中的 Proxy 占用，本次未停止进程或覆盖文件。
+- [x] C# 第三方 Demo `Release|x86|net46` 编译：0 warning，0 error。
+- [x] 非集成自动测试：72/72 通过，0 失败、0 跳过。
+- [x] 新增 OCR ID 卡解析测试：7/7 通过。
+- [x] 新增 Proxy→DLL JSON 兼容测试：2/2 通过。
+- [x] DLL `Release|Win32` 编译：0 warning，0 error。
+- [x] DLL 架构：PE32/x86；24 项导出及 `__stdcall` 装饰保持不变。
+- [x] 公共类型头文件和 `.def` 导出文件无修改。
+- [ ] 既有 `HttpListener` 集成测试：当前运行环境在 `MockTerminalServer` 初始化时抛出 `PlatformNotSupportedException`，7 项未进入业务断言；需在支持 `System.Net.HttpListener` 的正式 Windows 测试宿主复验。
+- [ ] 真实终端 `card_type=30`、鉴伪通过/不通过/缺失字段联调：待验证。
+- [ ] 第三方 Delphi/C# 程序实际解析新增 JSON 字段：待验证。
+
+### 下一步计划
+
+- [ ] 部署最新 x86 DLL 和 C# Proxy，使用真实 ID 卡验证 `0/1/-1` 三种状态。
+- [ ] 核对第三方回调中的 `name/sex/cardId/birthday/dateOfissue` 与终端原始数据一致。
+- [ ] 使用原有护照等证件回归，确认回调 JSON 不出现 ID 卡专用字段。
+- [ ] 进行重复识别、终端切换、字段异常和 2 小时稳定性验证。
+
+### 回退方式
+
+- 恢复上述 Proxy、DLL 和测试文件中本节对应的 ID 卡增量逻辑。
+- 删除 `第三方接口调用说明.md` 和 `todo.md` 中本节新增记录。
+- 公共结构体和导出接口未修改，无需第三方重新编译即可回退。
+
+## 终端切换与预览后台恢复解耦（2026-07-09）
+
+### 当前阶段
+
+- [x] 保持第三方 Delphi 调用接口、DLL 导出函数、HTTP 路由和请求/响应格式不变。
+- [x] Proxy 终端路由切换完成后立即清除 `SwitchingTerminal`，不再等待所有预览恢复。
+- [x] 预览恢复改为后台执行，并在日志中区分“终端切换完成”和“预览后台恢复完成”。
+- [x] 后台恢复按摄像头优先、指纹随后处理，避免当前指纹预览慢时阻塞人脸预览显示。
+
+### 本次修改内容
+
+1. `SwitchCoordinator` 在 `TerminalManager.SwitchTo()` 成功后记录终端切换完成日志，并启动后台预览恢复任务。
+2. `PreviewManager` 增加预览恢复优先级排序，摄像头优先于指纹和虹膜。
+3. `PreviewManager` 为每一路预览增加后台恢复开始、完成、未完成和失败日志。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/Coordinator/SwitchCoordinator.cs`：终端切换完成标志提前释放，预览恢复后台化。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`：后台恢复日志和摄像头优先恢复顺序。
+- `todo.md`：记录本次修改范围、兼容性和验证状态。
+
+### 兼容性说明
+
+- 外部接口：未改变。
+- 第三方调用：未改变 DLL 函数名、参数、调用约定、错误码和 JSON 字段。
+- 配置文件：未新增配置项。
+- 部署方式：未改变。
+
+### 风险与注意事项
+
+1. 切换完成后预览可能短时间处于后台恢复中，人脸会优先显示，指纹慢恢复不再阻塞切换完成。
+2. 如果指纹组件仍处于 `starting/device_not_ready`，指纹抓拍仍可能失败，需要继续排查终端侧指纹组件状态。
+3. 预览生命周期仍保持全局 `_operationLock` 串行保护，避免过度并发引入 VLC/MJPEG 资源竞争。
+
+### 验证状态
+
+- [x] C# Proxy `Release|x86|net46` 隔离输出编译通过：0 warning，0 error。
+- [ ] DLL `Release|Win32` 编译验证：本次未改 DLL，按需复验。
+- [ ] 真实终端切换：待验证 `/process/start` 不再因预览恢复慢等待 5000ms。
+- [ ] 真实终端预览：待验证人脸先恢复显示，指纹恢复慢时后台继续恢复。
+
+### 下一步计划
+
+- [ ] 编译 C# Proxy。
+- [ ] 使用真实终端连续切换 20 次，检查日志中的“终端切换完成”和“预览后台恢复完成”耗时。
+- [ ] 核对 DLL 日志不再出现 `/process/start elapsed_ms=5000` 且返回 `terminal_switching`。
+
+### 回退方式
+
+- 恢复 `SwitchCoordinator.SwitchToCoreAsync()` 中同步等待 `RestartPreviewsOnTerminalSwitch()` 的旧逻辑。
+- 删除 `PreviewManager` 中本次新增的恢复优先级排序和后台恢复分路日志。
+
+## 试验性回退 StartProcess 切换等待串行逻辑（2026-07-09）
+
+### 当前阶段
+
+- [x] 按用户要求回退 `SwitchTerminal -> StartProcess` 顺序等待逻辑，用于验证切换慢是否来自等待/串行路径。
+- [x] 保留第三方 DLL 导出函数、调用约定、参数、错误码和 HTTP JSON 协议不变。
+- [x] 保留终端切换后的预览后台恢复改动。
+- [ ] 真实第三方现场复测待执行。
+
+### 本次修改内容
+
+1. DLL `StartProcess` 检测到本地 `switch_pending` 时立即返回 busy，不再最多等待 15 秒。
+2. DLL 转发 `/process/start` 不再把内部 HTTP 超时提升到 22 秒，恢复使用默认请求超时。
+3. Proxy DLL 入口 `/process/start` 不再绕过切换中快速拒绝逻辑，切换中立即返回 `terminal_switching`。
+4. Proxy 管理界面 `StartProcess` 不再等待切换完成，拿不到控制门禁或稳定终端路由时立即返回 `Busy`。
+
+### 涉及文件
+
+- `src/exports.cpp`
+- `src/delphi_proxy.h`
+- `src/delphi_proxy.cpp`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/Coordinator/BizOperationHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`
+- `todo.md`
+
+### 验证状态
+
+- [x] C# Proxy `Release|x86|net46` 隔离输出编译通过：0 warning，0 error。
+- [x] DLL `Release|Win32` 编译通过：0 warning，0 error。
+- [ ] 现场连续执行“切换终端后立即开始流程”：待验证。
 
 ## 通道级车牌 RTSP 预览（2026-07-02）
 

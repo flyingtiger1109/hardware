@@ -8,6 +8,7 @@
 #include "hzsjkjt_context.h"
 #include "path_helper.h"
 #include "json_helper.h"
+#include <climits>
 
 namespace HZCYKJTHardWare {
 
@@ -90,6 +91,92 @@ static std::string JsonEscape(const std::string& value) {
         }
     }
     return escaped;
+}
+
+struct OcrIdCardFields {
+    bool present = false;
+    std::string name;
+    std::string sex;
+    std::string card_id;
+    std::string birthday;
+    std::string date_of_issue;
+    int authen_score = -1;
+    int optical_check_result = -1;
+};
+
+static bool TryGetStrictJsonInt(const std::string& json,
+                                const std::string& key,
+                                int& result) {
+    const std::string searchKey = "\"" + key + "\"";
+    size_t pos = json.find(searchKey);
+    if (pos == std::string::npos) return false;
+    pos += searchKey.size();
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        pos++;
+    }
+    if (pos >= json.size() || json[pos] != ':') return false;
+    pos++;
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        pos++;
+    }
+
+    bool negative = false;
+    if (pos < json.size() && json[pos] == '-') {
+        negative = true;
+        pos++;
+    }
+    if (pos >= json.size() || !isdigit(static_cast<unsigned char>(json[pos]))) return false;
+
+    const unsigned long long limit = negative
+        ? static_cast<unsigned long long>(INT_MAX) + 1ULL
+        : static_cast<unsigned long long>(INT_MAX);
+    unsigned long long value = 0;
+    while (pos < json.size() && isdigit(static_cast<unsigned char>(json[pos]))) {
+        const unsigned int digit = static_cast<unsigned int>(json[pos] - '0');
+        if (value > (limit - digit) / 10ULL) return false;
+        value = value * 10ULL + digit;
+        pos++;
+    }
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        pos++;
+    }
+    if (pos < json.size() && json[pos] != ',' && json[pos] != '}') return false;
+
+    if (negative) {
+        result = value == static_cast<unsigned long long>(INT_MAX) + 1ULL
+            ? INT_MIN : -static_cast<int>(value);
+    } else {
+        result = static_cast<int>(value);
+    }
+    return true;
+}
+
+static OcrIdCardFields ParseOcrIdCardFields(const std::string& json) {
+    OcrIdCardFields fields;
+    int cardType = -1;
+    if (!TryGetStrictJsonInt(json, "card_type", cardType) || cardType != 30) {
+        return fields;
+    }
+
+    fields.present = true;
+    fields.name = JsonHelper::GetString(json, "name");
+    fields.sex = JsonHelper::GetString(json, "sex");
+    fields.card_id = JsonHelper::GetString(json, "cardId");
+    fields.birthday = JsonHelper::GetString(json, "birthday");
+    fields.date_of_issue = JsonHelper::GetString(json, "dateOfissue");
+
+    int value = -1;
+    if (TryGetStrictJsonInt(json, "authen_score", value)) {
+        fields.authen_score = value;
+    }
+    if (TryGetStrictJsonInt(json, "optical_check_result", value) &&
+        (value == 0 || value == 1)) {
+        fields.optical_check_result = value;
+    }
+    return fields;
 }
 
 static bool SafeInvokeThirdPartyCallback(THZCYKJTHardWareEventCallback callback, const char* json) {
@@ -631,6 +718,12 @@ void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
 
     LOG_INFO("事件分发", "OCR回调完成：request_id=%s，MRZ=%s",
              requestId.c_str(), mrz.c_str());
+    const OcrIdCardFields idCard = ParseOcrIdCardFields(body);
+    if (idCard.present) {
+        LOG_INFO("事件分发",
+                 "OCR ID卡鉴伪：request_id=%s，authen_score=%d，optical_check_result=%d",
+                 requestId.c_str(), idCard.authen_score, idCard.optical_check_result);
+    }
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
               savePath.c_str(), body.c_str(), nullptr, mrz.c_str());
@@ -1109,6 +1202,21 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                         json += ",\"ic_number\":\"" + JsonEscape(strs.ic_number) + "\"";
                     if (!strs.mrz.empty())
                         json += ",\"mrz\":\"" + JsonEscape(strs.mrz) + "\"";
+                    if (event.event_type == HZCYKJTHardWare_EVENT_OCR_SUCCESS &&
+                        strs.resource_type == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
+                        const OcrIdCardFields idCard = ParseOcrIdCardFields(strs.raw_json);
+                        if (idCard.present) {
+                            json += ",\"card_type\":30";
+                            json += ",\"name\":\"" + JsonEscape(idCard.name) + "\"";
+                            json += ",\"sex\":\"" + JsonEscape(idCard.sex) + "\"";
+                            json += ",\"cardId\":\"" + JsonEscape(idCard.card_id) + "\"";
+                            json += ",\"birthday\":\"" + JsonEscape(idCard.birthday) + "\"";
+                            json += ",\"dateOfissue\":\"" + JsonEscape(idCard.date_of_issue) + "\"";
+                            json += ",\"authen_score\":" + std::to_string(idCard.authen_score);
+                            json += ",\"optical_check_result\":" +
+                                std::to_string(idCard.optical_check_result);
+                        }
+                    }
                     if (!strs.auth_result.empty())
                         json += ",\"auth_result\":" + strs.auth_result;
                     if (!strs.auth_zjhm.empty())

@@ -143,13 +143,12 @@ bool DelphiProxy::GetInstanceId(std::string& outInstanceId, int timeoutMs) {
 
 bool DelphiProxy::ProcessStart(const std::string& requestId,
                                const std::string& saveDir,
-                               const std::string& callbacksJson,
-                               int timeoutMs) {
+                               const std::string& callbacksJson) {
     std::string body = "{" + JsonStringField("request_id", requestId) +
         "," + JsonStringField("save_dir", saveDir) +
         "," + callbacksJson.substr(1); // merge request_id + save_dir into callbacks JSON
     std::string response;
-    return PostJson("/process/start", body, response, timeoutMs) && IsOkResponse(response);
+    return PostJson("/process/start", body, response) && IsOkResponse(response);
 }
 
 bool DelphiProxy::ProcessEnd() {
@@ -368,9 +367,13 @@ bool DelphiProxy::Get(const std::string& path, std::string& response,
     }
 
     int statusCode = 0;
-    HttpClient client;
+    auto* http = ctx.http_client;
+    if (!http) {
+        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，method=GET，path=%s", path.c_str());
+        return false;
+    }
     std::string url = BuildUrl(path);
-    bool ok = client.Get(url, connectTimeout, requestTimeout, response, statusCode);
+    bool ok = http->Get(url, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
         if (!quiet)
             LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", url.c_str());
@@ -406,10 +409,14 @@ bool DelphiProxy::PostJson(const std::string& path,
     }
 
     int statusCode = 0;
-    HttpClient client;
+    auto* http = ctx.http_client;
+    if (!http) {
+        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，method=POST，path=%s", path.c_str());
+        return false;
+    }
     std::string url = BuildUrl(path);
     LOG_DEBUG("代理服务", "DLL正在下发硬件控制程序：method=POST，url=%s", url.c_str());
-    bool ok = client.PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
+    bool ok = http->PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
         LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=POST，url=%s", url.c_str());
         return false;

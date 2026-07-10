@@ -50,33 +50,6 @@ static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
 }
 
-static constexpr int kStartProcessSwitchWaitMs = 15000;
-static constexpr int kStartProcessSwitchPollMs = 50;
-static constexpr int kStartProcessProxyTimeoutMs = 22000;
-
-static bool WaitForSwitchPendingClearForStartProcess(const std::string& requestId) {
-    if (!IsSwitchPending()) {
-        return true;
-    }
-
-    LOG_INFO("接口", "开始流程等待终端切换完成：request_id=%s，最长等待毫秒=%d",
-             requestId.c_str(), kStartProcessSwitchWaitMs);
-
-    const ULONGLONG deadline = GetTickCount64() +
-        static_cast<ULONGLONG>(kStartProcessSwitchWaitMs);
-    while (IsSwitchPending()) {
-        if (GetTickCount64() >= deadline) {
-            LOG_WARN("接口", "开始流程等待终端切换超时：request_id=%s，最长等待毫秒=%d",
-                     requestId.c_str(), kStartProcessSwitchWaitMs);
-            return false;
-        }
-        Sleep(kStartProcessSwitchPollMs);
-    }
-
-    LOG_INFO("接口", "开始流程等待终端切换完成：request_id=%s", requestId.c_str());
-    return true;
-}
-
 static std::string LogValue(const std::string& value, size_t maxLength = 256) {
     std::string result;
     result.reserve(value.size());
@@ -1000,6 +973,11 @@ static int InitSdkBody() {
 
     LOG_INFO("接口", "初始化DLL：正在检查硬件控制程序通信服务，服务地址=%s，自动启动=%s",
              delphiServerUrl.c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
+    {
+        auto lock = WriteLock();
+        delete ctx.http_client;
+        ctx.http_client = new HttpClient();
+    }
     DelphiProxy proxy(delphiServerUrl);
     if (!EnsureDelphiServiceAvailable(proxy, cfg, ctx.dll_dir, delphiServerUrl)) {
         LOG_ERROR("接口", "初始化DLL失败：硬件控制程序/ping不可用，服务地址=%s", delphiServerUrl.c_str());
@@ -1010,6 +988,8 @@ static int InitSdkBody() {
             ctx.callback_server_running = false;
             ctx.delphi_server_url.clear();
             ctx.current_terminal_base_url.clear();
+            delete ctx.http_client;
+            ctx.http_client = nullptr;
         }
         Logger::Instance().Shutdown();
         return HZCYKJTHardWare_RET_HTTP_FAILED;
@@ -1071,6 +1051,8 @@ static int ReleaseSdkBody() {
     {
         auto lock = WriteLock();
         ctx.callback_server_running = false;
+        delete ctx.http_client;
+        ctx.http_client = nullptr;
         ctx.Reset();
     }
 
@@ -1249,17 +1231,12 @@ static int StartProcessBody(const char* saveDir) {
         "\"iris\":\"" + irisCallback + "\"" +
         "}}";
 
-    if (!WaitForSwitchPendingClearForStartProcess(requestId)) {
+    if (IsSwitchPending()) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    int processStartTimeoutMs = ctx.http_request_timeout_ms;
-    if (processStartTimeoutMs < kStartProcessProxyTimeoutMs) {
-        processStartTimeoutMs = kStartProcessProxyTimeoutMs;
-    }
-
     DelphiProxy proxy(ctx.delphi_server_url);
-    if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson, processStartTimeoutMs)) {
+    if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
         LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }

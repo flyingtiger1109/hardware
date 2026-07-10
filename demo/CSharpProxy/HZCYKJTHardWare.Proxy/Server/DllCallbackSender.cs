@@ -41,14 +41,39 @@ namespace HZCYKJTHardWare.Proxy.Server
         internal Task<CallbackDeliveryResult> SendOcrResult(string requestId, string mrz,
             string savePath, CancellationToken cancellationToken)
         {
-            var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"mrz\":\"{JsonHelper.EscapeString(mrz)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"}}";
+            var body = BuildOcrCallbackBody(requestId, mrz, savePath, null);
+            return PostCallbackOnceWithLifetime("/ocr", body, cancellationToken);
+        }
+
+        internal Task<CallbackDeliveryResult> SendOcrResult(string requestId, string mrz,
+            string savePath, OcrCallbackResult ocrResult, CancellationToken cancellationToken)
+        {
+            var body = BuildOcrCallbackBody(requestId, mrz, savePath, ocrResult);
             return PostCallbackOnceWithLifetime("/ocr", body, cancellationToken);
         }
 
         public async Task SendOcrResult(string requestId, string mrz, string savePath)
         {
-            var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"mrz\":\"{JsonHelper.EscapeString(mrz)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"}}";
+            var body = BuildOcrCallbackBody(requestId, mrz, savePath, null);
             await PostCallbackOnce("/ocr", body, _shutdown.Token).ConfigureAwait(false);
+        }
+
+        private static string BuildOcrCallbackBody(string requestId, string mrz,
+            string savePath, OcrCallbackResult ocrResult)
+        {
+            var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"mrz\":\"{JsonHelper.EscapeString(mrz)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"";
+            if (ocrResult?.CardType == 30)
+            {
+                body += $",\"card_type\":30" +
+                    $",\"name\":\"{JsonHelper.EscapeString(ocrResult.Name)}\"" +
+                    $",\"sex\":\"{JsonHelper.EscapeString(ocrResult.Sex)}\"" +
+                    $",\"cardId\":\"{JsonHelper.EscapeString(ocrResult.CardId)}\"" +
+                    $",\"birthday\":\"{JsonHelper.EscapeString(ocrResult.Birthday)}\"" +
+                    $",\"dateOfissue\":\"{JsonHelper.EscapeString(ocrResult.DateOfIssue)}\"" +
+                    $",\"authen_score\":{ocrResult.AuthenScore}" +
+                    $",\"optical_check_result\":{ocrResult.OpticalCheckResult}";
+            }
+            return body + "}";
         }
 
         internal Task<CallbackDeliveryResult> SendNfcResult(string requestId, string cardText,

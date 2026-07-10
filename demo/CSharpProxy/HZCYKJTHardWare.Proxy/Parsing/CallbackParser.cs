@@ -10,6 +10,14 @@ namespace HZCYKJTHardWare.Proxy.Parsing
         public string Mrz { get; set; }
         public string SavePath { get; set; }
         public List<string> EvidenceImages { get; set; }
+        public int CardType { get; set; } = -1;
+        public string Name { get; set; } = "";
+        public string Sex { get; set; } = "";
+        public string CardId { get; set; } = "";
+        public string Birthday { get; set; } = "";
+        public string DateOfIssue { get; set; } = "";
+        public int AuthenScore { get; set; } = -1;
+        public int OpticalCheckResult { get; set; } = -1;
         public bool Valid { get; set; }
     }
 
@@ -85,6 +93,34 @@ namespace HZCYKJTHardWare.Proxy.Parsing
 
                 // Parse evidence images
                 var data = obj["data"] as JObject;
+                if (TryReadInt32(data?["card_type"], out var cardType))
+                    result.CardType = cardType;
+
+                // ID card (card_type=30) adds person and optical-authentication data.
+                // Other document types deliberately skip these fields so their existing
+                // callback shape and behavior remain unchanged.
+                if (result.CardType == 30)
+                {
+                    var person = FirstObject(data?["person_info"]);
+                    if (person != null)
+                    {
+                        result.Name = ReadString(person["name"]);
+                        result.Sex = ReadString(person["sex"]);
+                        result.CardId = ReadString(person["cardId"]);
+                        result.Birthday = ReadString(person["birthday"]);
+                        result.DateOfIssue = ReadString(person["dateOfissue"]);
+                    }
+
+                    var opticsAuthen = data?["optics_authen"] as JObject;
+                    if (TryReadInt32(opticsAuthen?["authen_score"], out var authenScore))
+                        result.AuthenScore = authenScore;
+                    if (TryReadInt32(opticsAuthen?["optical_check_result"], out var opticalResult) &&
+                        (opticalResult == 0 || opticalResult == 1))
+                    {
+                        result.OpticalCheckResult = opticalResult;
+                    }
+                }
+
                 var evidenceArray = data?["evidence_images"] as JArray ?? obj["evidence_images"] as JArray;
                 if (evidenceArray != null)
                 {
@@ -101,6 +137,40 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 result.Valid = false;
             }
             return result;
+        }
+
+        private static JObject FirstObject(JToken token)
+        {
+            if (token is JObject obj)
+                return obj;
+            if (token is JArray array && array.Count > 0)
+                return array[0] as JObject;
+            return null;
+        }
+
+        private static string ReadString(JToken token)
+        {
+            return token?.Type == JTokenType.String ? token.Value<string>() ?? "" : "";
+        }
+
+        private static bool TryReadInt32(JToken token, out int value)
+        {
+            value = -1;
+            if (token == null || token.Type != JTokenType.Integer)
+                return false;
+
+            try
+            {
+                var number = token.Value<long>();
+                if (number < int.MinValue || number > int.MaxValue)
+                    return false;
+                value = (int)number;
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static string FindMrzField(string json, string fieldName)

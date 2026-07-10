@@ -276,6 +276,23 @@ namespace HZCYKJTHardWare.CSharpDemo
             {
                 Log("  消息: " + message);
             }
+            if (resourceType == "ocr_document")
+            {
+                var cardType = ExtractJsonInt(json, "card_type", -1);
+                if (cardType == 30)
+                {
+                    var authenScore = ExtractJsonInt(json, "authen_score", -1);
+                    var opticalCheckResult = ExtractJsonInt(json, "optical_check_result", -1);
+                    Log("  证件类型: 香港身份证(30)");
+                    Log("  姓名: " + ExtractJsonString(json, "name"));
+                    Log("  性别: " + ExtractJsonString(json, "sex"));
+                    Log("  证件号码: " + ExtractJsonString(json, "cardId"));
+                    Log("  出生日期: " + ExtractJsonString(json, "birthday"));
+                    Log("  签发日期: " + ExtractJsonString(json, "dateOfissue"));
+                    Log("  鉴伪分数: " + authenScore);
+                    Log("  光学鉴伪结果: " + FormatOpticalCheckResult(opticalCheckResult));
+                }
+            }
             if (resourceType == "authorization")
             {
                 Log("  授权结果=" + ExtractJsonInt(json, "auth_result"));
@@ -338,6 +355,16 @@ namespace HZCYKJTHardWare.CSharpDemo
                 return "失败(0)";
             }
             return "返回码(" + code + ")";
+        }
+
+        private static string FormatOpticalCheckResult(int result)
+        {
+            switch (result)
+            {
+                case 0: return "通过(0)";
+                case 1: return "不通过(1)";
+                default: return "未知/未检测(-1)";
+            }
         }
 
         private void Log(string text)
@@ -435,6 +462,11 @@ namespace HZCYKJTHardWare.CSharpDemo
 
         private static int ExtractJsonInt(string json, string key)
         {
+            return ExtractJsonInt(json, key, 0);
+        }
+
+        private static int ExtractJsonInt(string json, string key, int defaultValue)
+        {
             var textValue = ExtractJsonString(json, key);
             int parsed;
             if (int.TryParse(textValue, out parsed))
@@ -444,14 +476,14 @@ namespace HZCYKJTHardWare.CSharpDemo
 
             if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key))
             {
-                return 0;
+                return defaultValue;
             }
 
             var searchKey = "\"" + key + "\"";
             var index = json.IndexOf(searchKey, StringComparison.Ordinal);
             if (index < 0)
             {
-                return 0;
+                return defaultValue;
             }
 
             index += searchKey.Length;
@@ -468,10 +500,11 @@ namespace HZCYKJTHardWare.CSharpDemo
 
             if (index <= start)
             {
-                return 0;
+                return defaultValue;
             }
 
-            return int.TryParse(json.Substring(start, index - start), out parsed) ? parsed : 0;
+            return int.TryParse(json.Substring(start, index - start), out parsed)
+                ? parsed : defaultValue;
         }
 
         private static bool IsJsonWhitespaceOrColon(char ch)

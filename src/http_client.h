@@ -34,7 +34,6 @@ public:
 private:
     // WinHTTP session handle
     HINTERNET m_hSession = nullptr;
-    CRITICAL_SECTION m_cs;
 };
 
 } // namespace HZCYKJTHardWare

@@ -140,6 +140,16 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        private static string FormatOpticalCheckResult(int result)
+        {
+            switch (result)
+            {
+                case 0: return "通过(0)";
+                case 1: return "不通过(1)";
+                default: return "未知/未检测(-1)";
+            }
+        }
+
         private void HandleOcrEventStatus(string bodyUtf8)
         {
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
@@ -185,7 +195,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
 
             var saveDir = route.SaveDir;
-            _log($"[OCR回调] MRZ={result.Mrz}");
+            if (result.CardType == 30)
+            {
+                _log("[OCR回调] ID卡: 姓名=" + JsonHelper.ToLogValue(result.Name) +
+                    ", 性别=" + JsonHelper.ToLogValue(result.Sex) +
+                    ", 证号=" + JsonHelper.ToLogValue(result.CardId) +
+                    ", 光学鉴权分数=" + result.AuthenScore +
+                    ", 鉴伪结果=" + FormatOpticalCheckResult(result.OpticalCheckResult));
+            }
+            else
+            {
+                _log($"[OCR回调] MRZ={result.Mrz}");
+            }
 
             // Save OCR result JSON
             FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
@@ -199,7 +220,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             if (!CanDeliver(route, "OCR")) return;
             var delivery = await _dllCallback.SendOcrResult(route.DeliveryRequestId,
-                result.Mrz, savePath, route.CancellationToken).ConfigureAwait(false);
+                result.Mrz, savePath, result, route.CancellationToken).ConfigureAwait(false);
             FinishDelivery(route, delivery);
         }
 

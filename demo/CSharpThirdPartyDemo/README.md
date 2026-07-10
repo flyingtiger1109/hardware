@@ -13,10 +13,13 @@
 - 人脸抓拍
 - 指纹抓拍
 - OCR 请求
+- ID 卡 OCR 人员信息与光学鉴伪结果展示
 - NFC/IC 请求
 - 虹膜抓拍
 - 授权模拟
 - 日志窗口显示 DLL callback 事件摘要
+
+当 OCR 回调中的 `card_type` 为 `30` 时，日志窗口会额外显示 `name`、`sex`、`cardId`、`birthday`、`dateOfissue`、`authen_score` 和 `optical_check_result`。光学鉴伪结果中 `0` 表示通过、`1` 表示不通过、`-1` 表示未知或未检测。
 
 ## 部署
 

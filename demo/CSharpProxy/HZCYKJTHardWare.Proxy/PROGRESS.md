@@ -1,5 +1,47 @@
 # 项目进度记录
 
+# 试验性回退：StartProcess 切换等待串行逻辑（2026-07-09）
+
+## 当前阶段
+
+- [x] 按用户要求回退上次 `SwitchTerminal -> StartProcess` 顺序等待逻辑，用于验证切换慢是否来自等待/串行路径。
+- [x] 保留第三方 DLL 导出函数、调用约定、参数、错误码和 HTTP JSON 协议不变。
+- [x] 保留终端切换后的预览后台恢复改动，不回退人脸优先恢复日志。
+- [ ] 真实第三方现场复测待执行。
+
+## 本次修改内容
+
+1. DLL `StartProcess` 检测到本地 `switch_pending` 时立即返回 busy，不再最多等待 15 秒。
+2. DLL 转发 `/process/start` 不再把内部 HTTP 超时提升到 22 秒，恢复使用默认请求超时。
+3. Proxy DLL 入口 `/process/start` 不再绕过切换中快速拒绝逻辑，切换中立即返回 `terminal_switching`。
+4. Proxy 管理界面 `StartProcess` 不再等待切换完成，拿不到控制门禁或稳定终端路由时立即返回 `Busy`。
+
+## 涉及文件
+
+- `src/exports.cpp`：移除 `StartProcess` 切换等待和 22 秒超时兜底。
+- `src/delphi_proxy.h`
+- `src/delphi_proxy.cpp`
+- `Server/DllCommandHandler.cs`
+- `Server/Coordinator/BizOperationHandler.cs`
+- `PROGRESS.md`
+
+## 兼容性说明
+
+- 外部接口：未改变。
+- 第三方调用：函数名、参数、调用约定、错误码定义未改变。
+- Proxy HTTP API：请求/响应格式未改变。
+- 行为变化：`StartProcess` 在终端切换中由等待切换完成恢复为快速失败/忙。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46` 隔离输出编译通过：0 warning，0 error。
+- [x] DLL `Release|Win32` 编译通过：0 warning，0 error。
+- [ ] 现场连续执行“切换终端后立即开始流程”：待验证。
+
+## 回退方式
+
+- 恢复 `StartProcess` 的切换等待函数、Proxy 入口等待逻辑和 `ProcessStart` 可选长超时参数。
+
 # 方案 A：100% 缩放下硬件健康检测卡片显示不全修复（2026-07-09）
 
 ## 当前阶段

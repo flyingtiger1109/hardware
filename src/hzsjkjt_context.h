@@ -4,6 +4,8 @@
 
 namespace HZCYKJTHardWare {
 
+class HttpClient;  // forward declaration
+
 struct PlatePreviewState {
     bool running = false;
     std::string request_id;
@@ -80,6 +82,9 @@ public:
 
     // DLL 模块路径
     std::string dll_dir;
+
+    // 全局 HTTP 客户端（InitSdk 时创建，ReleaseSdk 时销毁）
+    HttpClient* http_client = nullptr;
 
     // 线程安全
     mutable CRITICAL_SECTION mutex;
