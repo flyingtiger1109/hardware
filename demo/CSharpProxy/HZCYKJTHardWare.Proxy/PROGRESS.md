@@ -2061,3 +2061,70 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 
 - 将 `HardwareHealthPanel.DefaultHeight`、`HeaderRowHeight`、`RefreshButtonHeight` 和刷新按钮 `Margin` 恢复为上一版数值。
 - 移除本次新增的刷新按钮 40px 最小实际高度测试断言即可恢复到修改前测试约束。
+
+# 第二批长期运行稳定性优化（2026-07-13）
+
+## 当前阶段
+
+- [x] 健康检查快速退避耗尽后恢复 5 分钟慢速探测。
+- [x] 统一终端请求、Proxy 受理等待和 DLL 抓拍等待的分层超时预算。
+- [x] 本机 DLL 回调增加有界短重试。
+- [x] 预览恢复任务纳入统一后台任务生命周期。
+- [x] 增加 5 分钟一次的轻量长稳指标。
+- [ ] 真实双终端、断网和 24～72 小时长稳验证待执行。
+
+## 本次修改内容
+
+1. 健康检查失败时按 5/10/20/40/60 秒快速复查，之后不再永久停止，而是每 5 分钟慢速探测；探测成功立即恢复正常周期。
+2. 新增内部 `OperationTimeouts`，人脸终端请求 3 秒、指纹和异步受理 4 秒、Proxy 等待 4.5 秒；DLL 人脸/指纹继续读取现有 5 秒配置，形成“终端 < Proxy < DLL”的预算关系。
+3. 回调仅对 `HttpRequestException`、非主动取消的超时和 HTTP 503 重试，间隔为 50ms、200ms；4xx 不重试，重试复用同一请求体和 `request_id`，服务关闭时取消。
+4. 终端切换预览恢复和 MJPEG 恢复在生产路径中统一进入 `ActiveTasksTracker`；关闭时取消预览生命周期、停止两个 Timer、停止播放器并等待已跟踪任务。
+5. 每 5 分钟汇总 Private Bytes、Working Set、托管堆、线程、总句柄、GDI/USER 句柄、GC 次数、活动任务、预览会话、请求会话、日志积压/丢弃、磁盘空间和队列统计。
+6. 本地 OCR/图片文件仍使用第三方传入的固定文件路径循环覆盖，本批不增加目录、历史文件、留存天数或清理策略。
+
+## 涉及文件
+
+- `Infrastructure/OperationTimeouts.cs`：内部超时预算。
+- `Terminal/TerminalHealthChecker.cs`：失败后的慢速恢复探测。
+- `Server/DllCommandHandler.cs`、`Server/Scheduler/WorkerExecutionEngine.cs`、`Server/Coordinator/BizOperationHandler.cs`：应用分层超时。
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`、`src/exports.cpp`：将现有抓拍超时配置传入内部 HTTP 调用，不改变导出 ABI。
+- `Server/DllCallbackSender.cs`：有界回调短重试。
+- `Preview/PreviewManager.cs`、`Server/Coordinator/SwitchCoordinator.cs`、`Server/Runtime/ProxyRuntime.cs`：预览任务取消、跟踪和关闭顺序。
+- `Server/Runtime/RuntimeMetricsReporter.cs`、`Infrastructure/Logger.cs`：低频长稳指标和日志丢弃累计值。
+- 对应测试文件：健康检查、超时预算、回调重试和运行指标回归测试。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、调用约定、结构体、错误码和回调签名：未改变。
+- Proxy HTTP 路径、请求/响应 JSON、终端协议和部署方式：未改变。
+- C# Proxy 继续保持 `net46`、`x86`，DLL 继续保持 `Release|Win32`，未新增第三方依赖。
+- 本批未修改 Delphi 示例；当前联调仍以 C# Demo 为准。
+
+## 风险与注意事项
+
+1. 超时值已按当前终端实测耗时留出余量，但仍需用真实设备的 P99 复核；若设备固件偶发超过 4 秒，应优先确认网络/设备原因后再调整常量。
+2. 本机回调在连续超时场景下最多执行 3 次 HTTP 尝试；任务受回调监听并发和关闭令牌约束，不创建脱离生命周期的重试任务。
+3. 长稳指标默认一分钟后首次记录、之后每 5 分钟记录两条 INFO 日志，日志增量较小。
+4. 为避免共享关闭预算耗尽时晚到清理任务对已释放锁执行 `Release()`，`PreviewManager` 不主动释放唯一的 `_operationLock`；该对象与进程同生命周期，不会随业务次数增长。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46`：编译通过，0 警告、0 错误。
+- [x] C# 测试项目 `Release|x86|net46`：编译通过，0 警告、0 错误。
+- [x] 非集成回归测试：79/79 通过。
+- [x] DLL `Release|Win32`：编译通过，0 警告、0 错误。
+- [ ] `HttpListener` 集成测试：当前测试宿主不支持，待正式 Windows 测试环境执行。
+- [ ] C# Demo 双终端切换、设备断网/恢复、回调 503/超时异常注入：待现场验证。
+- [ ] 新版本 24～72 小时资源曲线：待验证。
+
+## 下一步计划
+
+- [ ] 部署本批构建，用 C# Demo 验证人脸、指纹、OCR、NFC、授权及双终端切换。
+- [ ] 验证终端断网超过快速重试周期后，5 分钟慢速探测能够自动恢复。
+- [ ] 观察 `[长稳指标]` 中 Private Bytes、线程、句柄、GDI/USER 句柄和活动任务是否持续单向增长。
+- [ ] 根据真实 P99 决定是否调整超时预算；没有资源曲线证据前，不实施指纹流式 Base64 重写或大对象池。
+
+## 回退方式
+
+- 第二批将作为独立 Git 提交；整体回退该提交即可恢复到 P0 + ID 卡兼容版本。
+- 若只回退某一项，可分别恢复 `TerminalHealthChecker`、`OperationTimeouts` 调用点、`DllCallbackSender`、预览生命周期或 `RuntimeMetricsReporter` 对应文件。

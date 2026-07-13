@@ -119,11 +119,13 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // === Async operations (return "accepted" immediately after terminal forwards) ===
                 case "/ocr":
-                    return await EnqueueAsyncResource(_queueManager.OcrQueue, routeEpoch, path, 12000,
+                    return await EnqueueAsyncResource(_queueManager.OcrQueue, routeEpoch, path,
+                        OperationTimeouts.AsyncProxyWaitMs,
                         requestId, saveDir, callbackUrl, ProxyResourceTypes.OcrDocument);
 
                 case "/nfc":
-                    return await EnqueueAsyncResource(_queueManager.NfcQueue, routeEpoch, path, 12000,
+                    return await EnqueueAsyncResource(_queueManager.NfcQueue, routeEpoch, path,
+                        OperationTimeouts.AsyncProxyWaitMs,
                         requestId, saveDir, callbackUrl, ProxyResourceTypes.NfcCard);
 
                 case "/capture/iris":
@@ -190,7 +192,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     Logger.Warn($"[队列] {queue.Name} 队列满");
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
+                var completed = await Task.WhenAny(tcs.Task,
+                    Task.Delay(OperationTimeouts.CaptureProxyWaitMs));
                 if (completed == tcs.Task && tcs.Task.IsCompleted)
                     return await tcs.Task;
                 Logger.Error($"[队列] {queue.Name} 请求超时");
@@ -253,7 +256,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(10000));
+                var completed = await Task.WhenAny(tcs.Task,
+                    Task.Delay(OperationTimeouts.AsyncProxyWaitMs));
                 if (completed == tcs.Task && tcs.Task.IsCompleted)
                 {
                     var result = await tcs.Task;
@@ -261,7 +265,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return result;
                 }
 
-                Logger.Error("[虹膜抓拍] 受理请求超时(10000ms)");
+                Logger.Error($"[虹膜抓拍] 受理请求超时({OperationTimeouts.AsyncProxyWaitMs}ms)");
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))
@@ -331,7 +335,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(12000));
+                var completed = await Task.WhenAny(tcs.Task,
+                    Task.Delay(OperationTimeouts.AuthorizeProxyWaitMs));
                 if (completed == tcs.Task && tcs.Task.IsCompleted)
                 {
                     var result = await tcs.Task;
@@ -339,7 +344,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return result;
                 }
 
-                Logger.Error("[授权] 受理请求超时(12000ms)");
+                Logger.Error($"[授权] 受理请求超时({OperationTimeouts.AuthorizeProxyWaitMs}ms)");
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))
@@ -474,7 +479,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                         resolvedSaveDir);
 
                     var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
-                        "/process/start", body, 5000, routeEpoch.CancellationToken)
+                        "/process/start", body, OperationTimeouts.ProcessStartTerminalRequestMs,
+                        routeEpoch.CancellationToken)
                         .ConfigureAwait(false);
                     if (!ok || !_processRegistry.Commit(registration))
                         return "{\"error\":true,\"code\":\"terminal_request_failed\"}";

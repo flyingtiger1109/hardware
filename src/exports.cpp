@@ -1729,7 +1729,8 @@ static int CaptureCameraImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
-    if (!proxy.CaptureFace(requestId, saveRoot, savePath)) {
+    if (!proxy.CaptureFace(requestId, saveRoot, savePath,
+                           ctx.face_capture_timeout_ms)) {
         LOG_ERROR("接口", "人脸抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
@@ -1771,9 +1772,11 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     bool ok;
     if (saveDirHk != nullptr && saveDirHk[0] != '\0') {
         std::string saveDirHkRoot = saveDirHk;
-        ok = proxy.CaptureFingerprint(requestId, saveRoot, saveDirHkRoot, savePath);
+        ok = proxy.CaptureFingerprint(requestId, saveRoot, saveDirHkRoot, savePath,
+                                      ctx.fingerprint_capture_timeout_ms);
     } else {
-        ok = proxy.CaptureFingerprint(requestId, saveRoot, "", savePath);
+        ok = proxy.CaptureFingerprint(requestId, saveRoot, "", savePath,
+                                      ctx.fingerprint_capture_timeout_ms);
     }
     if (!ok) {
         LOG_ERROR("接口", "指纹抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",

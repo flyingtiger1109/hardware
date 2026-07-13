@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Preview;
+using HZCYKJTHardWare.Proxy.Server.Runtime;
 using HZCYKJTHardWare.Proxy.Terminal;
 
 namespace HZCYKJTHardWare.Proxy.Server.Coordinator
@@ -29,6 +30,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private readonly Action<string> _log;
         private readonly Action<int> _onTerminalChanged;
         private readonly ControlOperationGate _controlGate;
+        private readonly ActiveTasksTracker _taskTracker;
         private readonly object _routeEpochSync = new object();
 
         private int _isSwitching;
@@ -70,7 +72,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             QueueManager queueManager,
             Action<string> log,
             Action<int> onTerminalChanged = null,
-            ControlOperationGate controlGate = null)
+            ControlOperationGate controlGate = null,
+            ActiveTasksTracker taskTracker = null)
         {
             _terminalManager = terminalManager;
             _previewManager = previewManager;
@@ -79,6 +82,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             _log = log;
             _onTerminalChanged = onTerminalChanged;
             _controlGate = controlGate ?? new ControlOperationGate();
+            _taskTracker = taskTracker;
         }
 
         /// <summary>
@@ -207,7 +211,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         private void StartPreviewRestartInBackground(string terminalBaseUrl, int generation, long switchElapsedMs)
         {
-            _ = Task.Run(async () =>
+            Func<Task> restartWork = async () =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 Logger.Info($"[Coordinator] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
@@ -222,7 +226,17 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 {
                     Logger.Error($"[Coordinator] 预览后台恢复异常，批次={generation}，耗时={sw.ElapsedMilliseconds}ms", ex);
                 }
-            });
+            };
+
+            if (_taskTracker != null)
+            {
+                if (!_taskTracker.TryRun(restartWork,
+                    "preview_switch_recovery_" + generation))
+                    Logger.Warn($"[Coordinator] 预览后台恢复未启动，任务容量已满，批次={generation}");
+                return;
+            }
+
+            _ = Task.Run(restartWork);
         }
 
         private void FinishSwitch()

@@ -15,8 +15,17 @@ namespace HZCYKJTHardWare.Proxy.Server
         Cancelled
     }
 
+    internal enum CallbackAttemptResult
+    {
+        Delivered,
+        RetryableFailure,
+        PermanentFailure,
+        Cancelled
+    }
+
     public class DllCallbackSender : IDisposable
     {
+        private static readonly int[] RetryDelaysMs = { 50, 200 };
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
         private readonly bool _baseUrlValid;
@@ -42,20 +51,20 @@ namespace HZCYKJTHardWare.Proxy.Server
             string savePath, CancellationToken cancellationToken)
         {
             var body = BuildOcrCallbackBody(requestId, mrz, savePath, null);
-            return PostCallbackOnceWithLifetime("/ocr", body, cancellationToken);
+            return PostCallbackWithRetryAndLifetime("/ocr", body, cancellationToken);
         }
 
         internal Task<CallbackDeliveryResult> SendOcrResult(string requestId, string mrz,
             string savePath, OcrCallbackResult ocrResult, CancellationToken cancellationToken)
         {
             var body = BuildOcrCallbackBody(requestId, mrz, savePath, ocrResult);
-            return PostCallbackOnceWithLifetime("/ocr", body, cancellationToken);
+            return PostCallbackWithRetryAndLifetime("/ocr", body, cancellationToken);
         }
 
         public async Task SendOcrResult(string requestId, string mrz, string savePath)
         {
             var body = BuildOcrCallbackBody(requestId, mrz, savePath, null);
-            await PostCallbackOnce("/ocr", body, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry("/ocr", body, _shutdown.Token).ConfigureAwait(false);
         }
 
         private static string BuildOcrCallbackBody(string requestId, string mrz,
@@ -91,32 +100,32 @@ namespace HZCYKJTHardWare.Proxy.Server
             CancellationToken cancellationToken)
         {
             var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"card_text\":\"{JsonHelper.EscapeString(cardText)}\"}}";
-            return PostCallbackOnceWithLifetime("/nfc-card", body, cancellationToken);
+            return PostCallbackWithRetryAndLifetime("/nfc-card", body, cancellationToken);
         }
 
         public async Task SendNfcResult(string requestId, string cardText)
         {
             var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"card_text\":\"{JsonHelper.EscapeString(cardText)}\"}}";
-            await PostCallbackOnce("/nfc-card", body, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry("/nfc-card", body, _shutdown.Token).ConfigureAwait(false);
         }
 
         internal Task<CallbackDeliveryResult> SendIrisResult(string requestId, string savePath,
             CancellationToken cancellationToken)
         {
             var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"}}";
-            return PostCallbackOnceWithLifetime("/iris", body, cancellationToken);
+            return PostCallbackWithRetryAndLifetime("/iris", body, cancellationToken);
         }
 
         public async Task SendIrisResult(string requestId, string savePath)
         {
             var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"}}";
-            await PostCallbackOnce("/iris", body, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry("/iris", body, _shutdown.Token).ConfigureAwait(false);
         }
 
         public async Task SendPreviewReady(string requestId, string resourceType, IntPtr renderHwnd, IntPtr delphiHostHwnd)
         {
             var body = $"{{\"request_id\":\"{requestId}\",\"resource_type\":\"{resourceType}\",\"render_hwnd\":{renderHwnd.ToInt64()},\"delphi_host_hwnd\":{delphiHostHwnd.ToInt64()}}}";
-            await PostCallbackOnce("/preview-ready", body, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry("/preview-ready", body, _shutdown.Token).ConfigureAwait(false);
         }
 
         public async Task SendAuthorizeResult(string requestId, string authResult, string message,
@@ -127,21 +136,21 @@ namespace HZCYKJTHardWare.Proxy.Server
                 $"\"id_no\":\"{JsonHelper.EscapeString(idNo)}\",\"doc_type\":\"{JsonHelper.EscapeString(docType)}\"," +
                 $"\"nationality\":\"{JsonHelper.EscapeString(nationality)}\",\"name\":\"{JsonHelper.EscapeString(name)}\"," +
                 $"\"sex\":\"{JsonHelper.EscapeString(sex)}\",\"birthday\":\"{JsonHelper.EscapeString(birthday)}\"}}";
-            await PostCallbackOnce("/authorize", body, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry("/authorize", body, _shutdown.Token).ConfigureAwait(false);
         }
 
-        private async Task<CallbackDeliveryResult> PostCallbackOnceWithLifetime(string path,
+        private async Task<CallbackDeliveryResult> PostCallbackWithRetryAndLifetime(string path,
             string bodyUtf8, CancellationToken requestCancellation)
         {
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
                 requestCancellation, _shutdown.Token))
             {
-                return await PostCallbackOnce(path, bodyUtf8, linked.Token)
+                return await PostCallbackWithRetry(path, bodyUtf8, linked.Token)
                     .ConfigureAwait(false);
             }
         }
 
-        private async Task<CallbackDeliveryResult> PostCallbackOnce(string path,
+        private async Task<CallbackDeliveryResult> PostCallbackWithRetry(string path,
             string bodyUtf8, CancellationToken cancellationToken)
         {
             if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
@@ -151,6 +160,43 @@ namespace HZCYKJTHardWare.Proxy.Server
                 Logger.Error($"[DLL callback] invalid callback base URL: {_baseUrl}");
                 return CallbackDeliveryResult.Failed;
             }
+
+            for (var attempt = 0; attempt <= RetryDelaysMs.Length; attempt++)
+            {
+                var attemptResult = await PostCallbackAttempt(path, bodyUtf8, cancellationToken)
+                    .ConfigureAwait(false);
+                if (attemptResult == CallbackAttemptResult.Delivered)
+                    return CallbackDeliveryResult.Delivered;
+                if (attemptResult == CallbackAttemptResult.Cancelled)
+                    return CallbackDeliveryResult.Cancelled;
+                if (attemptResult == CallbackAttemptResult.PermanentFailure)
+                    return CallbackDeliveryResult.Failed;
+                if (attempt >= RetryDelaysMs.Length)
+                {
+                    Logger.Error($"[DLL回调] POST {path} 重试耗尽，永久投递失败");
+                    return CallbackDeliveryResult.Failed;
+                }
+
+                var delayMs = RetryDelaysMs[attempt];
+                Logger.Warn($"[DLL回调] POST {path} 暂时失败，将在 {delayMs}ms 后重试，attempt={attempt + 2}");
+                try
+                {
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return CallbackDeliveryResult.Cancelled;
+                }
+            }
+
+            return CallbackDeliveryResult.Failed;
+        }
+
+        private async Task<CallbackAttemptResult> PostCallbackAttempt(string path,
+            string bodyUtf8, CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+                return CallbackAttemptResult.Cancelled;
 
             var url = _baseUrl + path;
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -166,25 +212,34 @@ namespace HZCYKJTHardWare.Proxy.Server
                     {
                         if (sw.ElapsedMilliseconds > 500)
                             Logger.Warn($"[DLL回调] POST {path} 响应较慢: {statusCode}, 耗时={sw.ElapsedMilliseconds}ms");
-                        return CallbackDeliveryResult.Delivered;
+                        return CallbackAttemptResult.Delivered;
                     }
 
+                    if (response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+                        return CallbackAttemptResult.RetryableFailure;
+
                     Logger.Warn($"[DLL回调] POST {path} 投递失败，不重试: status={statusCode}, 耗时={sw.ElapsedMilliseconds}ms");
-                    return CallbackDeliveryResult.Failed;
+                    return CallbackAttemptResult.PermanentFailure;
                 }
             }
             catch (OperationCanceledException)
             {
                 sw.Stop();
                 return cancellationToken.IsCancellationRequested
-                    ? CallbackDeliveryResult.Cancelled
-                    : CallbackDeliveryResult.Failed;
+                    ? CallbackAttemptResult.Cancelled
+                    : CallbackAttemptResult.RetryableFailure;
+            }
+            catch (HttpRequestException ex)
+            {
+                sw.Stop();
+                Logger.Warn($"[DLL回调] POST {path} 网络失败，可重试: {ex.Message}");
+                return CallbackAttemptResult.RetryableFailure;
             }
             catch (Exception ex)
             {
                 sw.Stop();
                 Logger.Error($"[DLL回调] POST {path} 失败, 耗时={sw.ElapsedMilliseconds}ms", ex);
-                return CallbackDeliveryResult.Failed;
+                return CallbackAttemptResult.PermanentFailure;
             }
         }
 
@@ -193,13 +248,13 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// </summary>
         public async Task PostCallbackRaw(string path, string bodyUtf8)
         {
-            await PostCallbackOnce(path, bodyUtf8, _shutdown.Token).ConfigureAwait(false);
+            await PostCallbackWithRetry(path, bodyUtf8, _shutdown.Token).ConfigureAwait(false);
         }
 
         internal Task<CallbackDeliveryResult> PostCallbackRaw(string path, string bodyUtf8,
             CancellationToken cancellationToken)
         {
-            return PostCallbackOnceWithLifetime(path, bodyUtf8, cancellationToken);
+            return PostCallbackWithRetryAndLifetime(path, bodyUtf8, cancellationToken);
         }
 
         internal void Stop()

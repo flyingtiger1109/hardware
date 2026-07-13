@@ -158,16 +158,14 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
         internal static int GetNextDelayMs(HealthStatus status, int retryAttempt)
         {
-            if (status != null &&
-                string.IsNullOrEmpty(status.ErrorMessage) &&
-                status.IsHealthy)
+            if (IsHealthyStatus(status))
                 return PollIntervalMs;
 
             if (retryAttempt < 0)
                 retryAttempt = 0;
 
             if (retryAttempt >= MaxRetrySchedules)
-                return Timeout.Infinite;
+                return PollIntervalMs;
 
             var delay = RetryBaseDelayMs;
             for (var i = 0; i < retryAttempt; i++)
@@ -185,21 +183,29 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var retryAttempt = Volatile.Read(ref _retryAttempt);
             var delay = GetNextDelayMs(status, retryAttempt);
 
-            if (delay == PollIntervalMs)
+            if (IsHealthyStatus(status))
             {
                 Interlocked.Exchange(ref _retryAttempt, 0);
                 return delay;
             }
 
-            if (delay == Timeout.Infinite)
+            if (retryAttempt >= MaxRetrySchedules)
             {
-                _log("[健康检测] 自动复查已达到上限，请点击刷新状态手动重试");
+                Interlocked.Exchange(ref _retryAttempt, MaxRetrySchedules);
+                _log("[健康检测] 快速复查已完成，后续每 5 分钟慢速探测一次");
                 return delay;
             }
 
             Interlocked.Exchange(ref _retryAttempt, retryAttempt + 1);
             _log($"[健康检测] 将在 {delay / 1000} 秒后自动复查");
             return delay;
+        }
+
+        private static bool IsHealthyStatus(HealthStatus status)
+        {
+            return status != null &&
+                   string.IsNullOrEmpty(status.ErrorMessage) &&
+                   status.IsHealthy;
         }
 
         internal static HealthStatus ParseResponse(string json, DateTime timestamp)

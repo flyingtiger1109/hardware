@@ -21,12 +21,14 @@ public:
 
     bool CaptureFace(const std::string& requestId,
                      const std::string& saveDir,
-                     std::string& outSavePath);
+                     std::string& outSavePath,
+                     int timeoutMs);
 
     bool CaptureFingerprint(const std::string& requestId,
                             const std::string& saveDir,
                             const std::string& saveDirHk,
-                            std::string& outSavePath);
+                            std::string& outSavePath,
+                            int timeoutMs);
 
     bool CaptureIrisAsync(const std::string& requestId,
                           const std::string& saveDir,

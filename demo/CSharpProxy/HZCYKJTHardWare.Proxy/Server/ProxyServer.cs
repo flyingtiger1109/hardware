@@ -43,6 +43,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly DllCommandHandler _commandHandler;
         private readonly TerminalCallbackHandler _callbackHandler;
         private readonly TerminalHealthChecker _healthChecker;
+        private readonly RuntimeMetricsReporter _metricsReporter;
 
         private readonly ProxyRuntime _runtime;
         private readonly Action<string> _log;
@@ -100,11 +101,14 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalManager = new TerminalManager();
             _terminalClient = new TerminalClient();
             _dllCallback = new DllCallbackSender();
-            _previewManager = new PreviewManager(_terminalClient);
+            _previewManager = new PreviewManager(_terminalClient, _taskTracker);
             _queueManager = new QueueManager();
             _requestRegistry = new RequestRegistry();
             _processRegistry = new TerminalProcessRegistry();
             _controlGate = new ControlOperationGate();
+            _metricsReporter = new RuntimeMetricsReporter(
+                _queueManager, _taskTracker, _previewManager,
+                _requestRegistry, _processRegistry);
 
             // === Four components ===
 
@@ -117,12 +121,14 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Runtime: lifecycle
             _runtime = new ProxyRuntime(
                 _transport, _requestRegistry, _processRegistry, _taskTracker,
-                _queueManager, _previewManager, _dllCallback, log);
+                _queueManager, _previewManager, _dllCallback,
+                _metricsReporter, log);
 
             // Coordinator: SwitchCoordinator
             _coordinator = new SwitchCoordinator(
                 _terminalManager, _previewManager, _requestRegistry,
-                _queueManager, log, NotifyTerminalChanged, _controlGate);
+                _queueManager, log, NotifyTerminalChanged, _controlGate,
+                _taskTracker);
 
             // Coordinator: BizOperationHandler
             _bizOps = new BizOperationHandler(
@@ -188,6 +194,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             // Terminal hardware health check
             _healthChecker.Start();
+            _metricsReporter.Start();
 
             // VLC warmup
             if (!_taskTracker.TryRun(() =>
@@ -244,6 +251,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             Stop();
+            SafeDispose(_metricsReporter, nameof(RuntimeMetricsReporter));
             SafeDispose(_processRegistry, nameof(TerminalProcessRegistry));
             SafeDispose(_requestRegistry, nameof(RequestRegistry));
             SafeDispose(_taskTracker, nameof(ActiveTasksTracker));

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Parsing;
+using HZCYKJTHardWare.Proxy.Server.Runtime;
 using HZCYKJTHardWare.Proxy.Terminal;
 
 namespace HZCYKJTHardWare.Proxy.Preview
@@ -64,6 +65,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
         private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
         private readonly TerminalClient _terminalClient;
+        private readonly ActiveTasksTracker _taskTracker;
         private readonly int _networkCachingMs;
         private readonly int _liveCachingMs;
         private readonly string _rtspTransport;
@@ -73,6 +75,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _previewUrlValidationRunning;
         private int _externalHostValidationRunning;
         private long _sessionGeneration;
+        private int _stopping;
+        private int _shutdownCompleted;
         private bool _disposed;
 
         private sealed class CachedPreviewUrl
@@ -84,9 +88,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             public DateTime LastValidatedUtc { get; set; }
         }
 
-        public PreviewManager(TerminalClient terminalClient)
+        public PreviewManager(TerminalClient terminalClient,
+            ActiveTasksTracker taskTracker = null)
         {
             _terminalClient = terminalClient;
+            _taskTracker = taskTracker;
             _uiContext = SynchronizationContext.Current;  // Capture UI thread sync context (same as Delphi MainThreadID)
             System.Diagnostics.Debug.Assert(_uiContext != null, "PreviewManager must be constructed on the UI thread");
             var cfg = AppConfig.Instance;
@@ -502,7 +508,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void ScheduleMjpegRecovery(string key, long generation,
             MjpegPreviewController faultedPlayer, string reason)
         {
-            if (_disposed || _lifetimeCts.IsCancellationRequested)
+            if (_disposed || Volatile.Read(ref _stopping) != 0 ||
+                _lifetimeCts.IsCancellationRequested)
                 return;
 
             var recoveryKey = key + "#" + generation;
@@ -510,6 +517,28 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return;
 
             Logger.Warn($"HTTP MJPEG流故障，启动受控恢复: session={key}, generation={generation}, error={reason}");
+            if (_taskTracker != null)
+            {
+                var accepted = _taskTracker.TryRun(async () =>
+                {
+                    try
+                    {
+                        await RecoverMjpegPreviewAsync(key, generation, faultedPlayer,
+                            _lifetimeCts.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _activeRecoveries.TryRemove(recoveryKey, out _);
+                    }
+                }, "preview_mjpeg_recovery_" + recoveryKey);
+                if (!accepted)
+                {
+                    _activeRecoveries.TryRemove(recoveryKey, out _);
+                    Logger.Warn($"HTTP MJPEG恢复未启动，后台任务容量已满: session={key}");
+                }
+                return;
+            }
+
             var task = Task.Run(() => RecoverMjpegPreviewAsync(key, generation, faultedPlayer, _lifetimeCts.Token));
             _recoveryTasks[recoveryKey] = task;
             task.ContinueWith(completedTask =>
@@ -849,12 +878,23 @@ namespace HZCYKJTHardWare.Proxy.Preview
             Logger.Debug("所有预览已停止");
         }
 
-        public async Task RestartPreviewsOnTerminalSwitch(string newTerminalBaseUrl, Func<bool> shouldContinue = null)
+        public async Task RestartPreviewsOnTerminalSwitch(string newTerminalBaseUrl,
+            Func<bool> shouldContinue = null)
         {
-            await _operationLock.WaitAsync().ConfigureAwait(false);
+            if (!CanContinuePreviewRecovery(shouldContinue))
+                return;
+
             try
             {
-                if (shouldContinue != null && !shouldContinue())
+                await _operationLock.WaitAsync(_lifetimeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            try
+            {
+                if (!CanContinuePreviewRecovery(shouldContinue))
                     return;
 
                 var restartList = new List<PreviewSession>();
@@ -877,9 +917,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (stopTasks.Count > 0)
                     await Task.WhenAll(stopTasks).ConfigureAwait(false);
 
-                await Task.Delay(VlcReleaseSettleMs).ConfigureAwait(false);
+                await Task.Delay(VlcReleaseSettleMs, _lifetimeCts.Token).ConfigureAwait(false);
 
-                if (shouldContinue != null && !shouldContinue())
+                if (!CanContinuePreviewRecovery(shouldContinue))
                     return;
 
                 if (restartList.Count == 0)
@@ -894,7 +934,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     var info = restartList[i];
 
-                    if (shouldContinue != null && !shouldContinue())
+                    if (!CanContinuePreviewRecovery(shouldContinue))
                         return;
 
                     var previewSw = System.Diagnostics.Stopwatch.StartNew();
@@ -917,8 +957,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     }
 
                     if (i < restartList.Count - 1)
-                        await Task.Delay(VlcReleaseSettleMs).ConfigureAwait(false);
+                        await Task.Delay(VlcReleaseSettleMs, _lifetimeCts.Token)
+                            .ConfigureAwait(false);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal during service shutdown.
             }
             finally
             {
@@ -926,13 +971,63 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private bool CanContinuePreviewRecovery(Func<bool> shouldContinue)
+        {
+            return !_disposed && Volatile.Read(ref _stopping) == 0 &&
+                   !_lifetimeCts.IsCancellationRequested &&
+                   (shouldContinue == null || shouldContinue());
+        }
+
+        internal int ActiveSessionCount => _sessions.Count;
+        internal int ActiveRecoveryCount => _activeRecoveries.Count;
+
+        internal void BeginShutdown()
+        {
+            if (Interlocked.Exchange(ref _stopping, 1) != 0)
+                return;
+
+            try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+            try { _previewUrlValidationTimer?.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+            try { _externalHostValidationTimer?.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+        }
+
+        internal async Task ShutdownAsync(int timeoutMs)
+        {
+            if (Volatile.Read(ref _shutdownCompleted) != 0)
+                return;
+
+            BeginShutdown();
+            await StopAllAsync(preserveRestartInfo: false).ConfigureAwait(false);
+
+            var recoveryTasks = new List<Task>(_recoveryTasks.Values);
+            if (recoveryTasks.Count > 0)
+            {
+                var all = Task.WhenAll(recoveryTasks);
+                await Task.WhenAny(all, Task.Delay(Math.Max(1, timeoutMs)))
+                    .ConfigureAwait(false);
+            }
+
+            Interlocked.Exchange(ref _shutdownCompleted, 1);
+        }
+
         public void Dispose()
         {
+            if (_disposed)
+                return;
             _disposed = true;
-            try { _lifetimeCts.Cancel(); } catch { }
+            BeginShutdown();
+            if (Volatile.Read(ref _shutdownCompleted) == 0)
+            {
+                try { ShutdownAsync(5000).GetAwaiter().GetResult(); }
+                catch (Exception ex) { Logger.Error("PreviewManager关闭异常", ex); }
+            }
             _previewUrlValidationTimer?.Dispose();
             _externalHostValidationTimer?.Dispose();
-            StopAll();
+            _lifetimeCts.Dispose();
+            // Do not dispose _operationLock here. If the shared shutdown budget is
+            // exhausted, a late player cleanup may still execute its finally/Release.
+            // The process owns one PreviewManager instance, so retaining this small
+            // synchronization object is safer than racing a late cleanup task.
         }
 
         private async Task WarmupPreviewStreamIfNeeded(PreviewResourceType resType, string rtspUrl,

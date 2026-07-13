@@ -25,6 +25,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         private readonly QueueManager _queueManager;
         private readonly PreviewManager _previewManager;
         private readonly DllCallbackSender _dllCallbackSender;
+        private readonly RuntimeMetricsReporter _metricsReporter;
         private readonly Action<string> _log;
         private readonly object _stopLock = new object();
         private CancellationTokenSource _cts;
@@ -40,6 +41,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             QueueManager queueManager,
             PreviewManager previewManager,
             DllCallbackSender dllCallbackSender,
+            RuntimeMetricsReporter metricsReporter,
             Action<string> log)
         {
             _transport = transport;
@@ -49,6 +51,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             _queueManager = queueManager;
             _previewManager = previewManager;
             _dllCallbackSender = dllCallbackSender;
+            _metricsReporter = metricsReporter;
             _log = log;
         }
 
@@ -81,9 +84,15 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             var deadline = DateTime.UtcNow.AddMilliseconds(5000);
             _log("[Runtime] 开始有序关闭...");
 
+            try { _metricsReporter?.Stop(); }
+            catch (Exception ex) { _log($"[Runtime] 长稳指标停止异常: {ex.Message}"); }
+
             // 1. Cancel token — stops accepting new connections
             try { _cts?.Cancel(); }
             catch (Exception ex) { _log($"[Runtime] 取消Token异常: {ex.Message}"); }
+
+            try { _previewManager?.BeginShutdown(); }
+            catch (Exception ex) { _log($"[Runtime] PreviewManager取消异常: {ex.Message}"); }
 
             // Cancel any in-flight one-shot callback before draining the
             // registry and task tracker.
@@ -123,10 +132,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             }
             catch (Exception ex) { _log($"[Runtime] QueueManager释放异常: {ex.Message}"); }
 
-            // 4. Stop all active previews
+            // 4. Cancel recovery tasks, stop timers and stop all active previews.
             try
             {
-                _previewManager?.StopAll();
+                await _previewManager.ShutdownAsync(RemainingMs(deadline))
+                    .ConfigureAwait(false);
                 Logger.Debug($"[Runtime] PreviewManager已停止");
             }
             catch (Exception ex) { _log($"[Runtime] PreviewManager停止异常: {ex.Message}"); }

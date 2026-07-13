@@ -13,7 +13,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
     public class DllCallbackSenderTests
     {
         [TestMethod]
-        public async Task ServiceUnavailable_IsNotRetried()
+        public async Task ServiceUnavailable_IsRetriedWithSameDelivery()
         {
             var handler = new SequenceHandler(call => new HttpResponseMessage(
                 call == 1 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.Accepted));
@@ -23,8 +23,24 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
             {
                 var result = await sender.SendNfcResult("retry-001", "card", timeout.Token);
 
+                Assert.AreEqual(CallbackDeliveryResult.Delivered, result);
+                Assert.AreEqual(2, handler.CallCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task RepeatedServiceUnavailable_StopsAfterTwoRetries()
+        {
+            var handler = new SequenceHandler(call =>
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            using (var client = new HttpClient(handler))
+            using (var sender = new DllCallbackSender(client, "http://127.0.0.1:39091"))
+            using (var timeout = new CancellationTokenSource(5000))
+            {
+                var result = await sender.SendNfcResult("retry-503", "card", timeout.Token);
+
                 Assert.AreEqual(CallbackDeliveryResult.Failed, result);
-                Assert.AreEqual(1, handler.CallCount);
+                Assert.AreEqual(3, handler.CallCount);
             }
         }
 

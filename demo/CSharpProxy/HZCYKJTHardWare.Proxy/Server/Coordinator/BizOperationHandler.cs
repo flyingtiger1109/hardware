@@ -105,7 +105,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                         "/process/start，save_dir=" + resolvedSaveDir);
 
                     var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
-                        "/process/start", body, 5000, routeEpoch.CancellationToken)
+                        "/process/start", body, OperationTimeouts.ProcessStartTerminalRequestMs,
+                        routeEpoch.CancellationToken)
                         .ConfigureAwait(false);
                     if (!ok || !_processRegistry.Commit(registration))
                         return "Failed";
@@ -173,7 +174,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             var requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                routeEpoch.Route.BaseUrl, "/resources/face-image/sync-request", body, 2500,
+                routeEpoch.Route.BaseUrl, "/resources/face-image/sync-request", body,
+                OperationTimeouts.FaceTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
@@ -221,7 +223,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             var requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                routeEpoch.Route.BaseUrl, "/resources/fingerprint/sync-request", body, 2500,
+                routeEpoch.Route.BaseUrl, "/resources/fingerprint/sync-request", body,
+                OperationTimeouts.FingerprintTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
@@ -311,7 +314,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 AppConfig.Instance.GetDllCallbackBaseUrl() + "/ocr", routeEpoch))
                 return "";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                routeEpoch.Route.BaseUrl, "/resources/ocr-document/request", body, 5000,
+                routeEpoch.Route.BaseUrl, "/resources/ocr-document/request", body,
+                OperationTimeouts.AsyncTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             if (routeEpoch.IsCancellationRequested)
@@ -340,7 +344,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 AppConfig.Instance.GetDllCallbackBaseUrl() + "/nfc-card", routeEpoch))
                 return "";
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                routeEpoch.Route.BaseUrl, "/resources/nfc-card/request", body, 5000,
+                routeEpoch.Route.BaseUrl, "/resources/nfc-card/request", body,
+                OperationTimeouts.AsyncTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             if (routeEpoch.IsCancellationRequested)
@@ -371,7 +376,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 return "";
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                    routeEpoch.Route.BaseUrl, "/resources/iris/request", body, 5000,
+                    routeEpoch.Route.BaseUrl, "/resources/iris/request", body,
+                    OperationTimeouts.AsyncTerminalRequestMs,
                     routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             if (routeEpoch.IsCancellationRequested)
@@ -432,7 +438,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "registry full" };
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
-                routeEpoch.Route.BaseUrl, "/resources/protocol/request", body, 5000,
+                routeEpoch.Route.BaseUrl, "/resources/protocol/request", body,
+                OperationTimeouts.AuthorizeTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
             _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +

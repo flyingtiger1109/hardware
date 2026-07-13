@@ -162,7 +162,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 var body = "{\"request_id\":\"" + JsonHelper.EscapeString(data.RequestId) +
                     "\",\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"}";
                 var terminalResult = _terminalClient.PostJsonAsync(
-                        routeEpoch.Route.BaseUrl, terminalPath, body, 5000,
+                        routeEpoch.Route.BaseUrl, terminalPath, body,
+                        OperationTimeouts.AsyncTerminalRequestMs,
                         routeEpoch.CancellationToken)
                     .GetAwaiter().GetResult();
                 if (routeEpoch.IsCancellationRequested)
@@ -232,7 +233,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         routeEpoch.Route.BaseUrl,
                         "/resources/iris/request",
                         body,
-                        5000,
+                        OperationTimeouts.AsyncTerminalRequestMs,
                         routeEpoch.CancellationToken)
                     .GetAwaiter().GetResult();
 
@@ -362,7 +363,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 "，口岸代码=" + JsonHelper.ToLogValue(portCode));
 
             var (ok, response) = await _terminalClient.PostJsonAsync(routeEpoch.Route.BaseUrl,
-                "/resources/protocol/request", terminalBody, 5000,
+                "/resources/protocol/request", terminalBody,
+                OperationTimeouts.AuthorizeTerminalRequestMs,
                 routeEpoch.CancellationToken).ConfigureAwait(false);
             _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
                 "，HTTP提交=" + (ok ? "是" : "否") +

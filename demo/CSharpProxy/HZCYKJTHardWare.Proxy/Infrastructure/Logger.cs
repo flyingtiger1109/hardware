@@ -17,6 +17,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static StreamWriter _writer;
         private static string _currentLogPath;
         private static long _droppedCount;
+        private static long _totalDroppedCount;
         private const string LogNamePrefix = "HZCYKJTHardWareExe_Logs";
         private static int _retentionDays = 30;
         private static long _maxTotalSizeBytes = 2048L * 1024L * 1024L;
@@ -42,6 +43,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         }
 
         public static string LogDirectory => _logDir;
+        internal static int PendingCount => _queue.Count;
+        internal static long TotalDroppedCount => Interlocked.Read(ref _totalDroppedCount);
 
         static Logger()
         {
@@ -101,7 +104,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
                 if (!_queue.TryAdd(new LogEntry
                     { Date = date, Line = line, LevelNum = levelNum }, 0))
+                {
                     Interlocked.Increment(ref _droppedCount);
+                    Interlocked.Increment(ref _totalDroppedCount);
+                }
             }
             catch
             {

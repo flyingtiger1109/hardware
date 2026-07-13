@@ -90,7 +90,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Terminal
         }
 
         [TestMethod]
-        public void GetNextDelay_UsesBoundedBackoffAndStopsAfterMax()
+        public void GetNextDelay_UsesBoundedBackoffAndFallsBackToSlowProbe()
         {
             Assert.AreEqual(5000, TerminalHealthChecker.GetNextDelayMs(
                 new HealthStatus { ErrorMessage = "终端不可达" }, 0));
@@ -102,7 +102,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Terminal
                 new HealthStatus { ErrorMessage = "终端不可达" }, 3));
             Assert.AreEqual(60000, TerminalHealthChecker.GetNextDelayMs(
                 new HealthStatus { ErrorMessage = "终端不可达" }, 4));
-            Assert.AreEqual(Timeout.Infinite, TerminalHealthChecker.GetNextDelayMs(
+            Assert.AreEqual(5 * 60 * 1000, TerminalHealthChecker.GetNextDelayMs(
                 new HealthStatus { ErrorMessage = "终端不可达" }, 5));
             Assert.AreEqual(5000, TerminalHealthChecker.GetNextDelayMs(
                 new HealthStatus { IsHealthy = false }, 0));

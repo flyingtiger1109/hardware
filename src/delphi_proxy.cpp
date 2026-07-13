@@ -164,10 +164,11 @@ bool DelphiProxy::SwitchTerminal(int terminalIndex) {
 
 bool DelphiProxy::CaptureFace(const std::string& requestId,
                               const std::string& saveDir,
-                              std::string& outSavePath) {
+                              std::string& outSavePath,
+                              int timeoutMs) {
     std::string response;
     std::string body = BuildRequestIdSaveDirJson(requestId, saveDir);
-    if (!PostJson("/capture/face", body, response)) {
+    if (!PostJson("/capture/face", body, response, timeoutMs)) {
         return false;
     }
     return ExtractSavePath(response, outSavePath);
@@ -176,10 +177,11 @@ bool DelphiProxy::CaptureFace(const std::string& requestId,
 bool DelphiProxy::CaptureFingerprint(const std::string& requestId,
                                      const std::string& saveDir,
                                      const std::string& saveDirHk,
-                                     std::string& outSavePath) {
+                                     std::string& outSavePath,
+                                     int timeoutMs) {
     std::string response;
     std::string body = BuildFingerprintCaptureJson(requestId, saveDir, saveDirHk);
-    if (!PostJson("/capture/fingerprint", body, response)) {
+    if (!PostJson("/capture/fingerprint", body, response, timeoutMs)) {
         return false;
     }
     return ExtractSavePath(response, outSavePath);
@@ -362,7 +364,7 @@ bool DelphiProxy::Get(const std::string& path, std::string& response,
     int connectTimeout = ctx.http_connect_timeout_ms;
     int requestTimeout = ctx.http_request_timeout_ms;
     if (timeoutMs > 0) {
-        connectTimeout = timeoutMs;
+        connectTimeout = (std::min)(connectTimeout, timeoutMs);
         requestTimeout = timeoutMs;
     }
 
@@ -404,7 +406,7 @@ bool DelphiProxy::PostJson(const std::string& path,
     int connectTimeout = ctx.http_connect_timeout_ms;
     int requestTimeout = ctx.http_request_timeout_ms;
     if (timeoutMs > 0) {
-        connectTimeout = timeoutMs;
+        connectTimeout = (std::min)(connectTimeout, timeoutMs);
         requestTimeout = timeoutMs;
     }
 
