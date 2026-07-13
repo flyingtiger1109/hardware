@@ -20,6 +20,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private bool _directRenderTarget;
         private string _vlcDir;
         private const string RiskySftpPluginRelativePath = @"plugins\access\libsftp_plugin.dll";
+        private const uint LoadWithAlteredSearchPath = 0x00000008;
         private static readonly object RiskyPluginCheckLock = new object();
         private static readonly HashSet<string> RiskyPluginCheckedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -159,10 +160,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 DisableRiskySftpPlugin(dir);
-                SetDllDirectory(dir);
-                _libVlcCoreHandle = LoadLibrary(corePath);
-                _libVlcHandle = LoadLibrary(libPath);
-                if (_libVlcHandle == IntPtr.Zero) return false;
+                _libVlcCoreHandle = LoadLibraryEx(corePath, IntPtr.Zero,
+                    LoadWithAlteredSearchPath);
+                if (_libVlcCoreHandle == IntPtr.Zero)
+                {
+                    Logger.Warn($"加载libvlccore.dll失败: path={corePath}, error={Marshal.GetLastWin32Error()}");
+                    return false;
+                }
+
+                _libVlcHandle = LoadLibraryEx(libPath, IntPtr.Zero,
+                    LoadWithAlteredSearchPath);
+                if (_libVlcHandle == IntPtr.Zero)
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    FreeLibrary(_libVlcCoreHandle);
+                    _libVlcCoreHandle = IntPtr.Zero;
+                    Logger.Warn($"加载libvlc.dll失败: path={libPath}, error={error}");
+                    return false;
+                }
 
                 _fnNew = GetDelegate<LibvlcNew>("libvlc_new");
                 _fnRelease = GetDelegate<LibvlcRelease>("libvlc_release");
@@ -179,13 +194,23 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnVideoSetMouseInput = GetDelegate<LibvlcVideoSetInput>("libvlc_video_set_mouse_input");
                 _fnVideoSetKeyInput = GetDelegate<LibvlcVideoSetInput>("libvlc_video_set_key_input");
 
-                if (_fnNew == null || _fnPlayerPlay == null) { Unload(); return false; }
+                if (_fnNew == null || _fnPlayerPlay == null)
+                {
+                    Logger.Warn("libVLC缺少必要导出函数");
+                    Unload();
+                    return false;
+                }
 
                 _vlcDir = dir;
                 Logger.Debug($"VLC已加载: {dir}");
                 return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                Logger.Warn($"加载VLC异常: dir={dir}, error={ex.Message}");
+                Unload();
+                return false;
+            }
         }
 
         // Child window handle for VLC rendering (same as Delphi's CreateWindowEx STATIC)
@@ -630,10 +655,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
         public void Dispose() { Unload(); }
 
         // Win32 API
-        [DllImport("kernel32.dll")] private static extern IntPtr LoadLibrary(string lpFileName);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string lpFileName,
+            IntPtr hFile, uint dwFlags);
         [DllImport("kernel32.dll")] private static extern bool FreeLibrary(IntPtr hModule);
         [DllImport("kernel32.dll")] private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
-        [DllImport("kernel32.dll")] private static extern bool SetDllDirectory(string lpPathName);
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string lpModuleName);
         [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,

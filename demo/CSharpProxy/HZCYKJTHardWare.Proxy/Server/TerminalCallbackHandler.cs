@@ -650,10 +650,18 @@ namespace HZCYKJTHardWare.Proxy.Server
         private bool SourceMatchesTerminal(IPAddress sourceAddress,
             int expectedTerminalIndex, string operation, string requestId)
         {
-            if (sourceAddress == null ||
-                !_terminalManager.TryResolveTerminalIndex(sourceAddress,
-                    out var sourceTerminalIndex))
-                return true;
+            if (sourceAddress == null)
+            {
+                Logger.Warn($"[{operation}回调] 缺少来源IP，已拒绝: request_id={requestId}, expected_terminal={expectedTerminalIndex}");
+                return false;
+            }
+
+            if (!_terminalManager.TryResolveTerminalIndex(sourceAddress,
+                out var sourceTerminalIndex))
+            {
+                Logger.Warn($"[{operation}回调] 来源IP不属于已配置终端，已拒绝: request_id={requestId}, source={sourceAddress}, expected_terminal={expectedTerminalIndex}");
+                return false;
+            }
 
             if (sourceTerminalIndex == expectedTerminalIndex)
                 return true;

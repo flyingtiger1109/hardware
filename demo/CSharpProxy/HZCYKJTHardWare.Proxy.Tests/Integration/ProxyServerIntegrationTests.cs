@@ -196,24 +196,19 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
         [TestMethod]
         public void SwitchTerminal_ChangesBaseUrl()
         {
-            // Just verify the switch endpoint responds without error
+            // The endpoint must not return success until the new route is committed.
             string body = "{\"terminal_index\":2}";
             string result = SendDllRequest("/terminal/switch", body);
 
             Assert.IsTrue(result.Contains("\"status\":\"ok\""),
                 $"Terminal switch should succeed, got: {result}");
 
-            // The HTTP endpoint returns before the queued switch is committed.
-            // Restore terminal 1 so this test does not leak route state into the
-            // following OCR backpressure test (terminal 2 has no mock server).
-            var restored = false;
-            for (var i = 0; i < 40 && !restored; i++)
-            {
-                Thread.Sleep(25);
-                var restoreResult = _proxy.SwitchTerminal(1);
-                restored = restoreResult.Contains("已切换到终端 1");
-            }
-            Assert.IsTrue(restored, "test route should be restored to mock terminal 1");
+            // A single immediate restore must succeed. If the HTTP endpoint still
+            // acknowledged only queue admission, this call would be rejected as
+            // terminal_switching.
+            var restoreResult = _proxy.SwitchTerminal(1);
+            Assert.IsTrue(restoreResult.Contains("已切换到终端 1"),
+                "switch response must represent a committed terminal route");
         }
 
         [TestMethod]

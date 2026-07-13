@@ -24,6 +24,9 @@ bool SdkRuntime::BeginInitialize(bool& shouldInitialize, int timeoutMs) {
     if (state_ == SdkLifecycleState::Running) {
         return true;
     }
+    if (state_ == SdkLifecycleState::Faulted) {
+        return false;
+    }
 
     state_ = SdkLifecycleState::Initializing;
     while (activeCalls_ > 0) {
@@ -58,7 +61,8 @@ bool SdkRuntime::TryEnterCall() {
 bool SdkRuntime::TryEnterCallbackRegistration() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ == SdkLifecycleState::Initializing ||
-        state_ == SdkLifecycleState::Releasing) {
+        state_ == SdkLifecycleState::Releasing ||
+        state_ == SdkLifecycleState::Faulted) {
         return false;
     }
     ++activeCalls_;
@@ -86,6 +90,12 @@ bool SdkRuntime::BeginRelease(bool& shouldRelease, int timeoutMs) {
         if (cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
             return false;
         }
+    }
+
+    // A failed teardown after irreversible cleanup may have left a worker
+    // thread alive. Only a host-process restart can guarantee a clean runtime.
+    if (state_ == SdkLifecycleState::Faulted) {
+        return false;
     }
 
     if (state_ == SdkLifecycleState::Stopped) {
@@ -119,10 +129,16 @@ bool SdkRuntime::WaitForActiveCalls(int timeoutMs) {
                         [this]() { return activeCalls_ == 0; });
 }
 
-void SdkRuntime::CompleteRelease(bool success) {
+void SdkRuntime::CompleteRelease(bool success, bool canResumeRunning) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        state_ = success ? SdkLifecycleState::Stopped : SdkLifecycleState::Running;
+        if (success) {
+            state_ = SdkLifecycleState::Stopped;
+        } else {
+            state_ = canResumeRunning
+                ? SdkLifecycleState::Running
+                : SdkLifecycleState::Faulted;
+        }
     }
     cv_.notify_all();
 }

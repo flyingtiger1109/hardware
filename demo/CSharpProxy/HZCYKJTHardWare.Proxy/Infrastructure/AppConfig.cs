@@ -61,6 +61,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         // Log settings
         public string LogLevel { get; set; } = "info";
+        public int LogRetentionDays { get; set; } = 30;
+        public int LogMaxTotalSizeMb { get; set; } = 2048;
+        public int LogDiskWarningFreeMb { get; set; } = 2048;
+        public int LogFlushIntervalMs { get; set; } = 500;
+        public int LogFlushBatchSize { get; set; } = 50;
 
         /// <summary>
         /// Unified config file shared by the DLL and C# proxy.
@@ -171,8 +176,21 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 if (log != null)
                 {
                     config.LogLevel = log.Value<string>("level") ?? config.LogLevel;
+                    config.LogRetentionDays = Math.Max(1, Math.Min(3650,
+                        log.Value<int?>("retention_days") ?? config.LogRetentionDays));
+                    config.LogMaxTotalSizeMb = Math.Max(16, Math.Min(102400,
+                        log.Value<int?>("max_total_size_mb") ?? config.LogMaxTotalSizeMb));
+                    config.LogDiskWarningFreeMb = Math.Max(0, Math.Min(102400,
+                        log.Value<int?>("disk_warning_free_mb") ?? config.LogDiskWarningFreeMb));
+                    config.LogFlushIntervalMs = Math.Max(50, Math.Min(10000,
+                        log.Value<int?>("flush_interval_ms") ?? config.LogFlushIntervalMs));
+                    config.LogFlushBatchSize = Math.Max(1, Math.Min(10000,
+                        log.Value<int?>("flush_batch_size") ?? config.LogFlushBatchSize));
                 }
 
+                Logger.Configure(config.LogRetentionDays,
+                    config.LogMaxTotalSizeMb, config.LogDiskWarningFreeMb,
+                    config.LogFlushIntervalMs, config.LogFlushBatchSize);
                 Logger.SetMinLevel(config.LogLevel);
                 Logger.Info($"配置文件已加载: {jsonPath}");
             }

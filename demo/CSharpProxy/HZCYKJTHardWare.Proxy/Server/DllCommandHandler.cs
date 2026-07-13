@@ -103,9 +103,9 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             switch (path)
             {
-                // === Terminal Switch (highest priority, immediate response) ===
+                // === Terminal Switch (highest priority, wait for route commit) ===
                 case "/terminal/switch":
-                    return HandleSwitch(bodyUtf8);
+                    return await HandleSwitch(bodyUtf8).ConfigureAwait(false);
 
                 // === Sync captures (wait for result, pass saveDir from third-party) ===
                 case "/capture/face":
@@ -408,9 +408,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        // ====== Switch (immediate response, async execution) ======
+        // ====== Switch (response after terminal route commit) ======
 
-        private string HandleSwitch(string bodyUtf8)
+        private async Task<string> HandleSwitch(string bodyUtf8)
         {
             var terminalIndex = (int)JsonHelper.ExtractInt(bodyUtf8, "terminal_index");
             if (terminalIndex < 1 || terminalIndex > 2)
@@ -421,8 +421,10 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log("[终端切换] 下发切换请求: " + _terminalManager.CurrentIndex + " -> " + terminalIndex);
 
-            // Enqueue to switch worker (immediate return, don't wait)
-            if (!_switchCoordinator.RequestSwitch(terminalIndex))
+            // Return success only after PreviewManager has stopped terminal-bound
+            // previews and TerminalManager has committed the new route. Preview
+            // restart remains a background operation inside SwitchCoordinator.
+            if (!await _switchCoordinator.SwitchToAsync(terminalIndex).ConfigureAwait(false))
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
             return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + "}";

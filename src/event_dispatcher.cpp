@@ -67,6 +67,35 @@ static std::string LogValue(const std::string& value, size_t maxLength = 256) {
     return result;
 }
 
+struct EventTerminalContext {
+    int terminal_index = 0;
+    std::string terminal_base_url;
+};
+
+static EventTerminalContext ResolveEventTerminalContext(
+    const std::string& requestId) {
+    EventTerminalContext result;
+
+    // Async requests capture their route when the session is created. Use that
+    // immutable snapshot so a late callback cannot be labelled as the terminal
+    // that happens to be current when the callback is processed.
+    auto session = RequestSessionManager::Instance().GetSession(requestId);
+    if (session) {
+        result.terminal_index = session->terminal_index;
+        result.terminal_base_url = session->terminal_base_url;
+        return result;
+    }
+
+    // Preview and persistent-process callbacks may not have a request session.
+    // Snapshot both fields under the context lock to avoid concurrent
+    // std::string read/write during terminal switching.
+    auto& ctx = HzsjkjtContext::Instance();
+    auto lock = ReadLock();
+    result.terminal_index = ctx.current_terminal_index;
+    result.terminal_base_url = ctx.current_terminal_base_url;
+    return result;
+}
+
 static std::string JsonEscape(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size() + 8);
@@ -260,8 +289,8 @@ static void ClearPlatePreviewLeaseOnFailure(const std::string& resourceType,
                                             const std::string& requestId) {
     if (resourceType != HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) return;
 
-    auto lock = WriteLock();
     auto& ctx = HzsjkjtContext::Instance();
+    auto lock = WriteLock();
     PlatePreviewState* state = FindPlatePreviewStateByRequestId(ctx, requestId);
     if (!state) return;
     state->running = false;
@@ -1045,7 +1074,8 @@ void EventDispatcher::SendEvent(const std::string& requestId,
                                  const char* rawJson,
                                  const char* icNumber,
                                  const char* mrz) {
-    auto& ctx = HzsjkjtContext::Instance();
+    const EventTerminalContext terminalContext =
+        ResolveEventTerminalContext(requestId);
 
     HZCYKJTHardWare_EVENT event;
     memset(&event, 0, sizeof(event));
@@ -1056,8 +1086,8 @@ void EventDispatcher::SendEvent(const std::string& requestId,
     event.status = status;
     event.error_code = errorCode;
     event.message = message;
-    event.terminal_base_url = ctx.current_terminal_base_url.c_str();
-    event.terminal_index = ctx.current_terminal_index;
+    event.terminal_base_url = terminalContext.terminal_base_url.c_str();
+    event.terminal_index = terminalContext.terminal_index;
     event.save_path = savePath;
     event.raw_json = rawJson;
     event.data = nullptr;
@@ -1278,7 +1308,8 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
              LogValue(JsonHelper::GetString(body, "KADM")).c_str());
 
     // Build the basic event
-    auto& ctx = HzsjkjtContext::Instance();
+    const EventTerminalContext terminalContext =
+        ResolveEventTerminalContext(requestId);
     HZCYKJTHardWare_EVENT event;
     memset(&event, 0, sizeof(event));
     event.struct_size = sizeof(HZCYKJTHardWare_EVENT);
@@ -1289,8 +1320,8 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     event.resource_type = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
     event.status = (authResult == 1) ? HZCYKJTHardWare_RET_OK : HZCYKJTHardWare_RET_FAILED;
     event.message = message.c_str();
-    event.terminal_base_url = ctx.current_terminal_base_url.c_str();
-    event.terminal_index = ctx.current_terminal_index;
+    event.terminal_base_url = terminalContext.terminal_base_url.c_str();
+    event.terminal_index = terminalContext.terminal_index;
     event.raw_json = body.c_str();
 
     // Build EventStrings with auth fields
@@ -1299,7 +1330,7 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     strs.request_id = requestId;
     strs.resource_type = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
     strs.message = message;
-    strs.terminal_base_url = ctx.current_terminal_base_url;
+    strs.terminal_base_url = terminalContext.terminal_base_url;
     strs.raw_json = body;
     strs.auth_result = std::to_string(authResult);
     strs.auth_zjhm = JsonHelper::GetString(body, "ZJHM");

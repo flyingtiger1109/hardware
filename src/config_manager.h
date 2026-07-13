@@ -92,6 +92,11 @@ public:
 
     const std::string& GetLogDir() const;
     const std::string& GetLogLevel() const;
+    int GetLogRetentionDays() const;
+    int GetLogMaxTotalSizeMb() const;
+    int GetLogDiskWarningFreeMb() const;
+    int GetLogFlushIntervalMs() const;
+    int GetLogFlushBatchSize() const;
 
     // 是否存在配置文件
     bool HasConfigFile() const;
@@ -120,7 +125,7 @@ private:
     std::string m_callbackServerHost;
     int m_callbackServerPort = 39091;
     bool m_autoBindLanIp = true;
-    bool m_listenAny = true;
+    bool m_listenAny = false;
     std::string m_callbackBasePath = "/HZCYKJTHardWare/callback";
 
     int m_httpConnectTimeoutMs = 3000;
@@ -149,6 +154,11 @@ private:
 
     std::string m_logDir = "HZCYKJTHardWareDLL_Logs";
     std::string m_logLevel = "info";
+    int m_logRetentionDays = 30;
+    int m_logMaxTotalSizeMb = 2048;
+    int m_logDiskWarningFreeMb = 2048;
+    int m_logFlushIntervalMs = 500;
+    int m_logFlushBatchSize = 50;
 
     bool m_hasConfigFile = false;
 };

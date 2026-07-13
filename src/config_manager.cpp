@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "config_manager.h"
+#include <algorithm>
 #include "include/HZCYKJTHardWare_types.h"
 #include "logger.h"
 #include "path_helper.h"
@@ -329,6 +330,21 @@ int ConfigManager::ParseJson(const std::string& json) {
             m_logDir = JsonHelper::GetString(logObj, "dir");
         if (JsonHelper::HasKey(logObj, "level"))
             m_logLevel = JsonHelper::GetString(logObj, "level");
+        if (JsonHelper::HasKey(logObj, "retention_days"))
+            m_logRetentionDays = std::clamp(
+                JsonHelper::GetInt(logObj, "retention_days"), 1, 3650);
+        if (JsonHelper::HasKey(logObj, "max_total_size_mb"))
+            m_logMaxTotalSizeMb = std::clamp(
+                JsonHelper::GetInt(logObj, "max_total_size_mb"), 16, 102400);
+        if (JsonHelper::HasKey(logObj, "disk_warning_free_mb"))
+            m_logDiskWarningFreeMb = std::clamp(
+                JsonHelper::GetInt(logObj, "disk_warning_free_mb"), 0, 102400);
+        if (JsonHelper::HasKey(logObj, "flush_interval_ms"))
+            m_logFlushIntervalMs = std::clamp(
+                JsonHelper::GetInt(logObj, "flush_interval_ms"), 50, 10000);
+        if (JsonHelper::HasKey(logObj, "flush_batch_size"))
+            m_logFlushBatchSize = std::clamp(
+                JsonHelper::GetInt(logObj, "flush_batch_size"), 1, 10000);
     }
 
     return HZCYKJTHardWare_RET_OK;
@@ -360,7 +376,7 @@ void ConfigManager::ApplyDefaults() {
     m_callbackServerHost.clear();
     m_callbackServerPort = 39091;
     m_autoBindLanIp = true;
-    m_listenAny = true;
+    m_listenAny = false;
     m_callbackBasePath = "/HZCYKJTHardWare/callback";
 
     m_httpConnectTimeoutMs = 3000;
@@ -389,6 +405,11 @@ void ConfigManager::ApplyDefaults() {
 
     m_logDir = "HZCYKJTHardWareDLL_Logs";
     m_logLevel = "info";
+    m_logRetentionDays = 30;
+    m_logMaxTotalSizeMb = 2048;
+    m_logDiskWarningFreeMb = 2048;
+    m_logFlushIntervalMs = 500;
+    m_logFlushBatchSize = 50;
 }
 
 // 访问器实现
@@ -462,6 +483,11 @@ std::string ConfigManager::BuildPlatePreviewUrl(PlatePreviewChannel channel) con
 }
 const std::string& ConfigManager::GetLogDir() const { return m_logDir; }
 const std::string& ConfigManager::GetLogLevel() const { return m_logLevel; }
+int ConfigManager::GetLogRetentionDays() const { return m_logRetentionDays; }
+int ConfigManager::GetLogMaxTotalSizeMb() const { return m_logMaxTotalSizeMb; }
+int ConfigManager::GetLogDiskWarningFreeMb() const { return m_logDiskWarningFreeMb; }
+int ConfigManager::GetLogFlushIntervalMs() const { return m_logFlushIntervalMs; }
+int ConfigManager::GetLogFlushBatchSize() const { return m_logFlushBatchSize; }
 bool ConfigManager::HasConfigFile() const { return m_hasConfigFile; }
 
 } // namespace HZCYKJTHardWare

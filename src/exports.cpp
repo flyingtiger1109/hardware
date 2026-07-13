@@ -865,6 +865,13 @@ static int InitSdkBody() {
         return HZCYKJTHardWare_RET_CONFIG_INVALID;
     }
 
+    Logger::Instance().ConfigureRetention(
+        cfg.GetLogRetentionDays(),
+        cfg.GetLogMaxTotalSizeMb(),
+        cfg.GetLogDiskWarningFreeMb(),
+        cfg.GetLogFlushIntervalMs(),
+        cfg.GetLogFlushBatchSize());
+
     std::string cfgLogDir = cfg.GetLogDir();
     if (!cfgLogDir.empty() && cfgLogDir != "HZCYKJTHardWareDLL_Logs") {
         bool absoluteLogDir =
@@ -1012,11 +1019,12 @@ static int InitSdkBody() {
     return HZCYKJTHardWare_RET_OK;
 }
 
-static int ReleaseSdkBody() {
+static int ReleaseSdkBody(bool& canResumeRunning) {
     using namespace HZCYKJTHardWare;
     //LOG_INFO("接口", "释放SDK");
 
     auto& ctx = HzsjkjtContext::Instance();
+    canResumeRunning = true;
 
     {
         auto lock = ReadLock();
@@ -1029,7 +1037,11 @@ static int ReleaseSdkBody() {
 
     // Refuse release from a blocked or re-entrant third-party callback before
     // dismantling the remaining runtime. The caller can retry after it returns.
+    // Mark the operation irreversible before entering Stop so an unexpected
+    // exception cannot incorrectly restore a partially stopped runtime.
+    canResumeRunning = false;
     if (!EventDispatcher::Instance().Stop(1000)) {
+        canResumeRunning = true;
         ctx.switch_pending.store(false);
         LOG_ERROR("接口", "释放SDK失败：第三方事件回调线程未能在1000ms内退出");
         return HZCYKJTHardWare_RET_FAILED;
@@ -1042,10 +1054,9 @@ static int ReleaseSdkBody() {
 
     RequestSessionManager::Instance().CancelAll();
 
-    if (!CallbackServer::Instance().Stop(500)) {
-        ctx.switch_pending.store(false);
-        LOG_ERROR("接口", "释放SDK失败：回调接收线程未能在500ms内退出");
-        return HZCYKJTHardWare_RET_FAILED;
+    const bool callbackStopped = CallbackServer::Instance().Stop(5000);
+    if (!callbackStopped) {
+        LOG_ERROR("接口", "释放SDK失败：回调接收线程未能在5000ms内退出，SDK进入故障状态，需重启宿主进程");
     }
 
     {
@@ -1058,7 +1069,9 @@ static int ReleaseSdkBody() {
 
     Logger::Instance().Shutdown();
 
-    return HZCYKJTHardWare_RET_OK;
+    return callbackStopped
+        ? HZCYKJTHardWare_RET_OK
+        : HZCYKJTHardWare_RET_FAILED;
 }
 
 static int SetTerminalBaseUrlBody(const char* baseUrl) {
@@ -1089,12 +1102,12 @@ static int SetCallbackServerBody(const char* host, int port) {
         ctx.callback_server_running = false;
     }
 
-    std::string listenHost("0.0.0.0");
     std::string callbackHost = host ? host : "";
     if (callbackHost.empty()) {
         callbackHost = selectedLanIp;
         if (callbackHost.empty()) callbackHost = "127.0.0.1";
     }
+    const std::string listenHost = callbackHost;
 
     int ret = CallbackServer::Instance().Start(listenHost, port);
     if (ret != HZCYKJTHardWare_RET_OK) return ret;
@@ -2098,15 +2111,17 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_ReleaseSdk(void) 
     if (!HZCYKJTHardWare::SdkRuntime::Instance().WaitForActiveCalls(activeWaitMs)) {
         LOG_ERROR("接口", "释放SDK等待在途调用超时：active=%d，wait_ms=%d",
                   HZCYKJTHardWare::SdkRuntime::Instance().ActiveCalls(), activeWaitMs);
-        HZCYKJTHardWare::SdkRuntime::Instance().CompleteRelease(false);
+        HZCYKJTHardWare::SdkRuntime::Instance().CompleteRelease(false, true);
         return 0;
     }
 
     int result = HZCYKJTHardWare_RET_FAILED;
-    __try { result = ReleaseSdkBody(); }
+    bool canResumeRunning = true;
+    __try { result = ReleaseSdkBody(canResumeRunning); }
     __except(EXCEPTION_EXECUTE_HANDLER) { result = HZCYKJTHardWare_RET_FAILED; }
     const bool success = (result == HZCYKJTHardWare_RET_OK);
-    HZCYKJTHardWare::SdkRuntime::Instance().CompleteRelease(success);
+    HZCYKJTHardWare::SdkRuntime::Instance().CompleteRelease(
+        success, canResumeRunning);
     return success ? 1 : 0;
 }
 

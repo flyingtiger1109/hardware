@@ -36,7 +36,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     Assert.IsTrue(processRegistry.Commit(processA));
 
                     await callbackHandler.HandleAsync(
-                        NfcBody("PROCESS_A", "CARD-A-1"));
+                        NfcBody("PROCESS_A", "CARD-A-1"),
+                        IPAddress.Parse("192.168.20.30"));
                     Assert.AreEqual(1, captureHandler.Count);
 
                     Assert.IsTrue(terminalManager.SwitchTo(2));
@@ -46,13 +47,15 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     Assert.IsTrue(processRegistry.Commit(processB));
 
                     await callbackHandler.HandleAsync(
-                        NfcBody("PROCESS_A", "CARD-A-INACTIVE"));
+                        NfcBody("PROCESS_A", "CARD-A-INACTIVE"),
+                        IPAddress.Parse("192.168.20.30"));
                     Assert.AreEqual(1, captureHandler.Count,
                         "inactive terminal callback must not cross routes");
 
                     Assert.IsTrue(terminalManager.SwitchTo(1));
                     await callbackHandler.HandleAsync(
-                        NfcBody("PROCESS_A", "CARD-A-2"));
+                        NfcBody("PROCESS_A", "CARD-A-2"),
+                        IPAddress.Parse("192.168.20.30"));
 
                     Assert.AreEqual(2, captureHandler.Count);
                     var requestIds = captureHandler.RequestIds;

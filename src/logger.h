@@ -19,6 +19,9 @@ public:
     // 初始化，指定日志目录
     bool Init(const std::string& logDir);
     void Shutdown();
+    void ConfigureRetention(int retentionDays, int maxTotalSizeMb,
+                            int diskWarningFreeMb, int flushIntervalMs,
+                            int flushBatchSize);
 
     void Log(LogLevel level, const char* module, const char* function, const char* fmt, ...);
 
@@ -37,12 +40,23 @@ private:
 
     const char* LevelToString(LogLevel level);
     std::string GetLogFilePath();
+    void CleanupOldLogsLocked();
+    void CheckDiskSpaceLocked();
+    void FlushLocked();
 
     CRITICAL_SECTION m_cs;
     FILE* m_file = nullptr;
     LogLevel m_level = LogLevel::Info;
     std::string m_logDir;
     std::string m_currentLogPath;
+    int m_retentionDays = 30;
+    uint64_t m_maxTotalSizeBytes = 2048ULL * 1024ULL * 1024ULL;
+    uint64_t m_diskWarningFreeBytes = 2048ULL * 1024ULL * 1024ULL;
+    int m_flushIntervalMs = 500;
+    int m_flushBatchSize = 50;
+    int m_pendingLines = 0;
+    ULONGLONG m_lastFlushTick = 0;
+    std::string m_lastCleanupDate;
 };
 
 } // namespace HZCYKJTHardWare

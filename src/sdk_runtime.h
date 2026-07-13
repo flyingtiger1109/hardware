@@ -8,7 +8,8 @@ enum class SdkLifecycleState {
     Stopped,
     Initializing,
     Running,
-    Releasing
+    Releasing,
+    Faulted
 };
 
 // Serializes InitSdk/ReleaseSdk and protects runtime resources from being reset
@@ -26,7 +27,7 @@ public:
 
     bool BeginRelease(bool& shouldRelease, int timeoutMs);
     bool WaitForActiveCalls(int timeoutMs);
-    void CompleteRelease(bool success);
+    void CompleteRelease(bool success, bool canResumeRunning);
 
     int ActiveCalls() const;
     SdkLifecycleState State() const;

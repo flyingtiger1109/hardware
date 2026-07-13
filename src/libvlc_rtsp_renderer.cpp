@@ -98,10 +98,12 @@ bool LibVlcRtspRenderer::TryLoadLibVlcFromDir(const std::string& dir) {
         return false;
     }
 
-    std::wstring wDir = PathHelper::Utf8ToWide(dir);
-    SetDllDirectoryW(wDir.c_str());
-
-    m_hLibVlcCore = LoadLibraryW(PathHelper::Utf8ToWide(corePath).c_str());
+    // Use an absolute module path with a per-load dependency search directory.
+    // SetDllDirectory is process-wide and would otherwise alter the Delphi host's
+    // DLL resolution for unrelated third-party modules.
+    m_hLibVlcCore = LoadLibraryExW(
+        PathHelper::Utf8ToWide(corePath).c_str(), nullptr,
+        LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!m_hLibVlcCore) {
         DWORD err = GetLastError();
         SetLastErrorMessage("加载 libvlccore.dll 失败: " + corePath + ", " + FormatWindowsError(err));
@@ -109,7 +111,9 @@ bool LibVlcRtspRenderer::TryLoadLibVlcFromDir(const std::string& dir) {
         return false;
     }
 
-    m_hLibVlc = LoadLibraryW(PathHelper::Utf8ToWide(vlcPath).c_str());
+    m_hLibVlc = LoadLibraryExW(
+        PathHelper::Utf8ToWide(vlcPath).c_str(), nullptr,
+        LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!m_hLibVlc) {
         DWORD err = GetLastError();
         SetLastErrorMessage("加载 libvlc.dll 失败: " + vlcPath + ", " + FormatWindowsError(err));

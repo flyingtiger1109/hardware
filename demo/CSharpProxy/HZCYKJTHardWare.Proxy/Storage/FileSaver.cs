@@ -1,5 +1,7 @@
 using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using HZCYKJTHardWare.Proxy.Infrastructure;
@@ -8,6 +10,13 @@ namespace HZCYKJTHardWare.Proxy.Storage
 {
     public static class FileSaver
     {
+        private const int MoveFileReplaceExisting = 0x1;
+        private const int MoveFileWriteThrough = 0x8;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileEx(string existingFileName,
+            string newFileName, int flags);
+
         private static DateTime _lastDiskCheck = DateTime.MinValue;
         private static readonly TimeSpan DiskCheckInterval = TimeSpan.FromMinutes(5);
 
@@ -139,10 +148,11 @@ namespace HZCYKJTHardWare.Proxy.Storage
                         offset += charCount;
                     }
                     decoder.FlushFinalBlock();
+                    output.Flush(true);
                     length = output.Length;
                 }
 
-                File.Copy(tempPath, filePath, true);
+                CommitTempFile(tempPath, filePath);
                 return length;
             }
             finally
@@ -262,9 +272,12 @@ namespace HZCYKJTHardWare.Proxy.Storage
                         for (int p = copyLen; p < rowSize; p++)
                             bw.Write((byte)0);
                     }
+
+                    bw.Flush();
+                    fs.Flush(true);
                 }
 
-                File.Copy(tempPath, filePath, true);
+                CommitTempFile(tempPath, filePath);
                 Logger.Debug($"已保存无畸变BMP: {filePath}");
                 return filePath;
             }
@@ -273,6 +286,23 @@ namespace HZCYKJTHardWare.Proxy.Storage
                 try { if (File.Exists(tempPath)) File.Delete(tempPath); }
                 catch { }
             }
+        }
+
+        /// <summary>
+        /// Atomically publishes a fully-written temporary file. Both paths are
+        /// created in the same directory, so MoveFileEx performs a same-volume
+        /// rename and the reader observes either the previous or the new file.
+        /// </summary>
+        private static void CommitTempFile(string tempPath, string filePath)
+        {
+            if (MoveFileEx(tempPath, filePath,
+                MoveFileReplaceExisting | MoveFileWriteThrough))
+            {
+                return;
+            }
+
+            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                "原子替换文件失败: " + filePath);
         }
     }
 }

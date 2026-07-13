@@ -1,7 +1,10 @@
 #include "pch.h"
 #include "logger.h"
 #include "path_helper.h"
+#include <algorithm>
+#include <filesystem>
 #include <share.h>
+#include <vector>
 
 namespace HZCYKJTHardWare {
 
@@ -71,17 +74,23 @@ bool Logger::Init(const std::string& logDir) {
         fclose(m_file);
         m_file = nullptr;
     }
+    m_currentLogPath.clear();
 
     std::wstring wLogDir = PathHelper::Utf8ToWide(m_logDir);
     CreateDirectoryW(wLogDir.c_str(), nullptr);
+    m_lastCleanupDate.clear();
+    CleanupOldLogsLocked();
 
     std::string logPath = GetLogFilePath();
     std::wstring wLogPath = PathHelper::Utf8ToWide(logPath);
     m_file = _wfsopen(wLogPath.c_str(), L"a", _SH_DENYNO);
     if (m_file) {
-        setvbuf(m_file, nullptr, _IONBF, 0);
+        setvbuf(m_file, nullptr, _IOFBF, 64 * 1024);
     }
     m_currentLogPath = logPath;
+    m_pendingLines = 0;
+    m_lastFlushTick = GetTickCount64();
+    CheckDiskSpaceLocked();
 
     LeaveCriticalSection(&m_cs);
     return m_file != nullptr;
@@ -90,11 +99,138 @@ bool Logger::Init(const std::string& logDir) {
 void Logger::Shutdown() {
     EnterCriticalSection(&m_cs);
     if (m_file) {
+        FlushLocked();
         fclose(m_file);
         m_file = nullptr;
     }
     m_currentLogPath.clear();
     LeaveCriticalSection(&m_cs);
+}
+
+void Logger::ConfigureRetention(int retentionDays, int maxTotalSizeMb,
+                                int diskWarningFreeMb, int flushIntervalMs,
+                                int flushBatchSize) {
+    EnterCriticalSection(&m_cs);
+    m_retentionDays = std::clamp(retentionDays, 1, 3650);
+    m_maxTotalSizeBytes = static_cast<uint64_t>(
+        std::clamp(maxTotalSizeMb, 16, 102400)) * 1024ULL * 1024ULL;
+    m_diskWarningFreeBytes = static_cast<uint64_t>(
+        std::clamp(diskWarningFreeMb, 0, 102400)) * 1024ULL * 1024ULL;
+    m_flushIntervalMs = std::clamp(flushIntervalMs, 50, 10000);
+    m_flushBatchSize = std::clamp(flushBatchSize, 1, 10000);
+    m_lastCleanupDate.clear();
+    CleanupOldLogsLocked();
+    CheckDiskSpaceLocked();
+    LeaveCriticalSection(&m_cs);
+}
+
+void Logger::CleanupOldLogsLocked() {
+    namespace fs = std::filesystem;
+    if (m_logDir.empty()) return;
+
+    const std::string today = PathHelper::GetDateString();
+    if (today == m_lastCleanupDate) return;
+    m_lastCleanupDate = today;
+
+    std::error_code ec;
+    const fs::path directory(PathHelper::Utf8ToWide(m_logDir));
+    if (!fs::is_directory(directory, ec)) return;
+
+    struct LogFileInfo {
+        fs::path path;
+        fs::file_time_type writeTime;
+        uint64_t size = 0;
+    };
+
+    std::vector<LogFileInfo> files;
+    const auto now = fs::file_time_type::clock::now();
+    const auto keepDuration = std::chrono::hours(
+        static_cast<long long>(m_retentionDays) * 24LL);
+    const fs::path currentPath(PathHelper::Utf8ToWide(m_currentLogPath));
+    std::string trimmedDir = m_logDir;
+    while (!trimmedDir.empty() &&
+           (trimmedDir.back() == '\\' || trimmedDir.back() == '/')) {
+        trimmedDir.pop_back();
+    }
+    std::string dirName = PathHelper::GetFileName(trimmedDir);
+    if (dirName.empty()) dirName = "HZCYKJTHardWareDLL_Logs";
+    const std::wstring filePrefix = PathHelper::Utf8ToWide(dirName + "_");
+
+    fs::directory_iterator end;
+    for (fs::directory_iterator it(directory, ec); !ec && it != end;
+         it.increment(ec)) {
+        const auto& entry = *it;
+        const std::wstring fileName = entry.path().filename().wstring();
+        if (!entry.is_regular_file(ec) || entry.path().extension() != L".log" ||
+            fileName.rfind(filePrefix, 0) != 0) {
+            ec.clear();
+            continue;
+        }
+        if (!m_currentLogPath.empty() && entry.path() == currentPath) {
+            continue;
+        }
+
+        const auto writeTime = entry.last_write_time(ec);
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        if (now - writeTime > keepDuration) {
+            fs::remove(entry.path(), ec);
+            ec.clear();
+            continue;
+        }
+
+        const auto size = entry.file_size(ec);
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        files.push_back({entry.path(), writeTime,
+                         static_cast<uint64_t>(size)});
+    }
+
+    std::sort(files.begin(), files.end(),
+        [](const LogFileInfo& left, const LogFileInfo& right) {
+            return left.writeTime < right.writeTime;
+        });
+
+    uint64_t totalSize = 0;
+    for (const auto& file : files) totalSize += file.size;
+    for (const auto& file : files) {
+        if (totalSize <= m_maxTotalSizeBytes) break;
+        if (fs::remove(file.path, ec)) {
+            totalSize = file.size <= totalSize ? totalSize - file.size : 0;
+        }
+        ec.clear();
+    }
+}
+
+void Logger::CheckDiskSpaceLocked() {
+    namespace fs = std::filesystem;
+    if (m_logDir.empty() || m_diskWarningFreeBytes == 0) return;
+    std::error_code ec;
+    const auto info = fs::space(
+        fs::path(PathHelper::Utf8ToWide(m_logDir)), ec);
+    if (!ec && info.available < m_diskWarningFreeBytes) {
+        char warning[256];
+        snprintf(warning, sizeof(warning),
+                 "[日志磁盘预警] 日志盘剩余空间不足：available_mb=%llu, threshold_mb=%llu\n",
+                 static_cast<unsigned long long>(info.available / 1024ULL / 1024ULL),
+                 static_cast<unsigned long long>(m_diskWarningFreeBytes / 1024ULL / 1024ULL));
+        if (m_file) {
+            fputs(warning, m_file);
+            ++m_pendingLines;
+            FlushLocked();
+        }
+        OutputDebugStringW(PathHelper::Utf8ToWide(warning).c_str());
+    }
+}
+
+void Logger::FlushLocked() {
+    if (m_file) fflush(m_file);
+    m_pendingLines = 0;
+    m_lastFlushTick = GetTickCount64();
 }
 
 void Logger::Log(LogLevel level, const char* module, const char* function, const char* fmt, ...) {
@@ -122,18 +258,24 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
     std::string desiredLogPath = GetLogFilePath();
     if (!m_file || desiredLogPath != m_currentLogPath) {
         if (m_file) {
+            FlushLocked();
             fclose(m_file);
             m_file = nullptr;
+            m_currentLogPath.clear();
         }
 
         std::wstring wLogDir = PathHelper::Utf8ToWide(m_logDir);
         CreateDirectoryW(wLogDir.c_str(), nullptr);
+        CleanupOldLogsLocked();
 
         std::wstring wLogPath = PathHelper::Utf8ToWide(desiredLogPath);
         m_file = _wfsopen(wLogPath.c_str(), L"a", _SH_DENYNO);
         if (m_file) {
-            setvbuf(m_file, nullptr, _IONBF, 0);
+            setvbuf(m_file, nullptr, _IOFBF, 64 * 1024);
             m_currentLogPath = desiredLogPath;
+            m_pendingLines = 0;
+            m_lastFlushTick = GetTickCount64();
+            CheckDiskSpaceLocked();
         } else {
             m_currentLogPath.clear();
         }
@@ -141,7 +283,13 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
 
     if (m_file) {
         fputs(lineBuf, m_file);
-        fflush(m_file);
+        ++m_pendingLines;
+        const ULONGLONG elapsed = GetTickCount64() - m_lastFlushTick;
+        if (level == LogLevel::Error ||
+            m_pendingLines >= m_flushBatchSize ||
+            elapsed >= static_cast<ULONGLONG>(m_flushIntervalMs)) {
+            FlushLocked();
+        }
     }
     LeaveCriticalSection(&m_cs);
 

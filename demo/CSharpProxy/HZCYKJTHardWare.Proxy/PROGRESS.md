@@ -1,5 +1,80 @@
 # 项目进度记录
 
+# release/1.2.6 P0 架构与长稳修复（2026-07-10）
+
+## 当前阶段
+
+- [x] 修复前基线已提交并推送到 `origin/release/1.2.6`，提交 `283883a9`。
+- [x] P0-1：DLL `/terminal/switch` 仅在 Proxy 实际提交终端路由后返回成功。
+- [x] P0-2：不可逆释放失败后不再恢复为 Running，进入 `Faulted` 并拒绝继续调用。
+- [x] P0-3：事件终端信息优先使用请求 Session 快照，无 Session 时加锁读取全局上下文。
+- [x] P0-5：人脸、指纹固定文件改为同目录临时写入和 `MoveFileEx` 原子替换。
+- [x] P0-6：DLL 回调默认绑定 loopback，Proxy 严格校验终端回调来源 IP。
+- [x] P0-7：日志增加保留天数、总容量、磁盘阈值和批量刷新；按用户要求不修改日志业务字段、不做脱敏。
+- [x] P0-8：Native/C# VLC 改用绝对路径 `LoadLibraryEx`，不再修改进程级 DLL 搜索路径。
+- [ ] P0-9：真实终端是否要求 `/process/end` 待协议确认；当前不擅自改变终端行为。
+- [ ] P0-10：真实双终端 24～72 小时资源长稳测试待现场执行。
+
+## 本次修改内容
+
+1. `/terminal/switch` 复用 `SwitchCoordinator.SwitchToAsync()`，等待预览停止和 `TerminalManager.SwitchTo()` 完成；预览恢复仍在后台执行。
+2. SDK 生命周期新增 `Faulted`。只有尚未进入不可逆清理的失败才能恢复 Running；CallbackServer 退出超时后完成其余清理并进入故障态。
+3. `EventDispatcher` 根据 `request_id` 解析请求创建时的终端快照，避免切换过程中并发读取 `std::string` 和跨终端标记。
+4. `FileSaver` 使用同目录临时文件、`Flush(true)` 和 `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` 发布完整图片。
+5. `callback_server.listen_any` 默认改为 `false`；无法映射到两台配置终端的回调来源直接拒绝。
+6. DLL 和 Proxy 日志新增兼容配置：`retention_days`、`max_total_size_mb`、`disk_warning_free_mb`、`flush_interval_ms`、`flush_batch_size`。
+7. Native 和 C# VLC 使用 `LOAD_WITH_ALTERED_SEARCH_PATH` 加载绝对路径，失败分支释放已加载模块。
+
+## 涉及文件
+
+- `src/exports.cpp`、`src/sdk_runtime.*`：同步切换配合与 SDK 生命周期。
+- `src/event_dispatcher.cpp`：终端 Session 快照和线程安全读取。
+- `src/config_manager.*`、`src/logger.*`、`HZCYKJTHardWare.json`：监听及日志治理配置。
+- `src/libvlc_rtsp_renderer.cpp`：Native VLC 安全加载。
+- `Server/DllCommandHandler.cs`、`Server/TerminalCallbackHandler.cs`：同步切换和来源 IP 校验。
+- `Storage/FileSaver.cs`：图片原子替换。
+- `Infrastructure/AppConfig.cs`、`Infrastructure/Logger.cs`：Proxy 日志治理。
+- `Preview/VlcPreviewPlayer.cs`：C# VLC 安全加载。
+- `HZCYKJTHardWare.Proxy.Tests`：切换、回调来源和文件保存回归测试。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数顺序、`__stdcall`、结构体、错误码和回调 JSON：未修改。
+- C# Demo UTF-8 封送和 Delphi 示例：未修改。
+- `/terminal/switch` 响应 JSON 不变，但成功响应改为表示“路由已提交”，调用耗时会反映真实切换耗时。
+- 日志内容不脱敏；只改变保留、容量和刷新策略。
+- 新日志配置均有默认值，旧配置文件仍可读取。
+
+## 风险与注意事项
+
+1. DLL 回调仅绑定 loopback，符合当前 DLL 与 Proxy 同机部署；如果未来改为跨机器部署，需要显式恢复 LAN 监听配置。
+2. Proxy 终端回调要求来源 IP 与终端配置一致；DHCP、NAT 或错误网卡配置会被明确拒绝。
+3. INFO 日志最多延后约 500ms 或 50 条刷新；Error 立即刷新。异常断电可能丢失最后少量普通日志。
+4. SDK 进入 `Faulted` 后必须重启宿主进程，这是为了避免半释放状态继续接单。
+5. VLC 编译已通过，但 plugins 加载、实际 RTSP 出画面和重复启停仍需现场验证。
+
+## 验证状态
+
+- [x] C# Proxy + Tests `Release|net46`：0 警告、0 错误。
+- [x] DLL `Release|Win32`：0 警告、0 错误。
+- [x] DLL 产物：PE32/x86，24 个导出函数名称和 `__stdcall` 装饰保持不变。
+- [x] 非 Integration 单元测试：75/75 通过。
+- [x] 新增文件原子替换、无效 Base64 保留旧文件和 BMP 覆盖测试：通过。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 提示。
+- [ ] 当前测试宿主的 7 项 `HttpListener` Integration：环境不支持，待正式 Windows 测试宿主执行。
+- [ ] 真实双终端切换、VLC 预览、终端回调来源和 24～72 小时长稳：待现场验证。
+
+## 下一步计划
+
+- [ ] 获取真实终端协议，确认 `/process/end` 是否必须下发及幂等语义。
+- [ ] 执行连续终端切换后立即 `StartProcess`、抓拍和回调联调。
+- [ ] 采集 Private Bytes、GC、句柄、线程、TCP、日志目录和队列指标完成长稳门禁。
+
+## 回退方式
+
+- 完整回退基线：`release/1.2.6` 分支提交 `283883a9`。
+- 分项回退时按本节“涉及文件”恢复对应模块；不得只回退 DLL 或只回退 Proxy 的终端切换语义。
+
 # 试验性回退：StartProcess 切换等待串行逻辑（2026-07-09）
 
 ## 当前阶段

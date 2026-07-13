@@ -48,7 +48,7 @@
   "callback_server": {
     "host": "",
     "auto_bind_lan_ip": true,
-    "listen_any": true,
+    "listen_any": false,
     "port": 39091,
     "base_path": "/HZCYKJTHardWare/callback"
   },
@@ -104,6 +104,11 @@
   },
   "log": {
     "dir": "HZCYKJTHardWareDLL_Logs",
-    "level": "info"
+    "level": "info",
+    "retention_days": 30,
+    "max_total_size_mb": 2048,
+    "disk_warning_free_mb": 2048,
+    "flush_interval_ms": 500,
+    "flush_batch_size": 50
   }
 }
