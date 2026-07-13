@@ -73,10 +73,18 @@ namespace HZCYKJTHardWare.Proxy.Parsing
 
         public static OcrCallbackResult ParseOcrDocument(string bodyUtf8)
         {
+            var parsedBody = ParsedJsonBody.Parse(bodyUtf8);
+            return ParseOcrDocument(parsedBody.Root, parsedBody.RawBody);
+        }
+
+        internal static OcrCallbackResult ParseOcrDocument(JObject obj, string bodyUtf8)
+        {
             var result = new OcrCallbackResult();
             try
             {
-                var obj = JObject.Parse(bodyUtf8);
+                if (obj == null)
+                    return result;
+
                 result.RequestId = obj["request_id"]?.ToString() ?? "";
                 result.Mrz = obj["mrz"]?.ToString() ?? "";
 

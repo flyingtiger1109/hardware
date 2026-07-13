@@ -2202,3 +2202,84 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 - 恢复 `CallbackParser.cs` 和 `BizOperationHandler.cs` 可回退单次响应解析。
 - 恢复 `FileSaver.WriteBmpFile()` 可回退到整图 `Convert.FromBase64String` 解码。
 - 恢复 C# Demo 的默认文本和路径规范化方法，可回退到目录下时间戳文件行为。
+
+# P1-1 请求与 OCR 单次 JSON 解析（2026-07-13）
+
+## 当前阶段
+
+- [x] 上一批人脸/指纹解析与文件保存优化已建立独立 Git 基线：`b19c2fea`。
+- [x] DLL 请求入口改为每个正常请求只构造一次 `JObject`。
+- [x] OCR 元数据、证据图片和 `MRZ.json` 共用同一棵解析树。
+- [x] Proxy/Test `Release|x86|net46` 编译和非集成回归完成。
+- [ ] 真实 OCR、授权、预览和双终端联调待执行。
+
+## 修改动机
+
+1. `DllCommandHandler.HandleAsync` 此前分别调用 `JsonHelper.ExtractString` 读取 `request_id`、`save_dir` 和 `callback_url`，授权请求又为七个业务字段重复调用，每次调用都会重新执行 `JObject.Parse`。
+2. OCR 回调此前先由 `CallbackParser.ParseOcrDocument` 解析元数据，保存证据图片时再次解析完整回调并逐项解析图片 JSON，生成 `MRZ.json` 时又第三次解析完整回调。
+3. 当前系统虽然只有一个本机第三方客户端，但授权、预览和抓拍会长期重复进入同一入口；统一解析上下文可以减少短命 `JObject/JToken`，并让字段默认值和异常行为集中维护。
+
+## 本次修改内容
+
+1. 新增内部 `ParsedJsonBody`，保存原始请求文本及唯一 `JObject`；正常 JSON 的字符串和整数均从同一解析树读取。
+2. 非法 JSON 不重复尝试解析；字符串字段继续使用原 `JsonHelper` 手工提取兜底，整数字段继续返回 `0`，保持原有兼容语义。
+3. `DllCommandHandler` 将同一解析上下文传给终端切换、抓拍、流程、授权、终端预览和车牌预览处理；授权转发及请求登记继续保留原始 JSON 文本。
+4. `CallbackParser.ParseOcrDocument` 增加内部已解析对象入口，原字符串入口继续保留并保持调用行为不变。
+5. `TerminalCallbackHandler` 的 OCR 元数据、证据图片和 `MRZ.json` 改为读取同一个 `JObject`；`ocr_result.json` 仍保存终端原始 `bodyUtf8`，不重新序列化。
+6. 证据图片字段继续兼容 `imageData/image_data/image_base64`、`lampType/lamp_type`、`imageType/image_type`；首张可见光、红外光、紫外光和人像去重规则未改变。
+
+## 涉及文件
+
+- `Parsing/ParsedJsonBody.cs`：单次解析上下文及非法 JSON 兼容兜底。
+- `Parsing/JsonHelper.cs`：增加对已解析 `JObject` 的字段读取重载。
+- `Server/DllCommandHandler.cs`：入口解析一次并向各业务处理器传递上下文。
+- `Parsing/CallbackParser.cs`：OCR 复用已解析对象。
+- `Server/TerminalCallbackHandler.cs`：OCR 证据图片和 MRZ 保存复用解析树。
+- `HZCYKJTHardWare.Proxy.Tests/Core/ParsedJsonBodyTests.cs`：正常、非法、OCR 元数据及证据图片兼容测试。
+- `PROGRESS.md`：本次进度记录。
+
+## 兼容性说明
+
+- DLL 导出函数、参数、返回值、调用约定、错误码和回调签名：未改变。
+- DLL 与 Proxy 的 HTTP 路径、请求 JSON、响应 JSON 和终端协议：未改变。
+- 授权请求原文、OCR 原始 JSON、证据图片名称、MRZ 文件结构及保存路径：未改变。
+- C# Proxy 继续保持 `net46`、`x86`，未新增依赖。
+- C# Demo 和 Delphi 示例：本批未修改。
+
+## 风险与注意事项
+
+1. 解析上下文只在单次 HTTP 请求或 OCR 回调期间持有，不进入静态缓存和长期队列。
+2. 正常 JSON 行为由同一个 `JObject` 提供；非法 JSON 的字符串手工兜底与原实现一致，但非法输入仍不保证完整业务处理成功。
+3. OCR 证据图片仍会持有终端回调中的 Base64 字符串直到本次回调保存完成；本次目标是消除重复解析，不改变终端报文格式。
+4. 工作区既有 `src/http_client.cpp` 和 `todo.md` 修改未纳入本批，也未被覆盖。
+
+## x64 Proxy 评估
+
+- 当前项目文件只声明 `x86`，本次生成的 Proxy 为 PE32/x86。
+- 使用命令行临时覆盖 `PlatformTarget=x64` 的探测构建返回 `NETSDK1047`，当前还原资产只有 `net46/win-x86`，说明 x64 不是只改一个编译开关，还需要独立的 x64 项目配置和依赖还原。
+- 当前随程序分发的 `vlc/libvlc.dll` 和 `vlc/libvlccore.dll` 均为 x86；直接把 Proxy 改成 x64 会导致 VLC 加载失败，RTSP/车牌等依赖 VLC 的预览不可用。
+- DLL 和 Proxy 通过本机 HTTP 通信，因此 DLL 保持 x86、Proxy 单独改成 x64 在架构上可行；但必须同时准备完整 x64 VLC 及插件目录，并验证 HWND 数值、预览窗口跨进程绑定和所有 native 调用。
+- x64 的主要收益是扩大虚拟地址空间、降低 LOH 碎片导致内存耗尽的风险；不会降低终端硬件 HTTP 耗时，也不会自动减少 JSON/Base64 分配或 GC 次数。
+- 当前 2.5 天压力测试内存能够回落且功能正常，因此本版本不建议直接切换 x64；应先完成当前 x86 优化和 24～72 小时长稳验证，再建立独立 x64 验证版本。
+
+## 验证状态
+
+- [x] Proxy `Release|x86|net46` 隔离输出编译：0 警告、0 错误。
+- [x] Tests `Release|x86|net46` 隔离输出编译：0 警告、0 错误。
+- [x] 新增单次解析定向测试：4/4 通过。
+- [x] 非集成回归测试：88/88 通过。
+- [ ] `HttpListener` 集成测试：已尝试 7 项，但当前 VSTest 宿主在测试初始化阶段抛出 `PlatformNotSupportedException`，尚未进入业务断言，待正式 Windows 测试宿主验证。
+- [ ] C# Demo 真实终端 OCR、授权、抓拍、预览和双终端切换：待验证。
+- [ ] 2 小时短稳和 24～72 小时长稳：待验证。
+
+## 下一步计划
+
+- [ ] 使用 C# Demo 验证授权请求原文、普通证件 OCR、ID 卡 OCR、证据图片和 `MRZ.json`。
+- [ ] 回归人脸、指纹、终端切换以及三路预览启动/停止。
+- [ ] P1-1 验证完成后进入 P2-1：WinHTTP 临时句柄 RAII。
+
+## 回退方式
+
+- 本批将作为独立 Git 提交；回退该提交即可恢复到 `b19c2fea`。
+- 若只回退请求入口，可恢复 `ParsedJsonBody.cs`、`JsonHelper.cs` 和 `DllCommandHandler.cs`。
+- 若只回退 OCR，可恢复 `CallbackParser.cs` 和 `TerminalCallbackHandler.cs`。

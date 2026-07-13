@@ -74,15 +74,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             // Flat plate-camera routing: Proxy never interprets Direction. Each route owns
             // one camera/session, and the third-party caller chooses CJ or RJ2+RJ3.
             if (path == "/preview/plate/cj/start")
-                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateCJ, "cj");
+                return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
+                    PreviewResourceType.PlateCJ, "cj");
             if (path == "/preview/plate/cj/stop")
                 return HandlePreviewStop(PreviewResourceType.PlateCJ);
             if (path == "/preview/plate/rj2/start")
-                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateRJ2, "rj2");
+                return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
+                    PreviewResourceType.PlateRJ2, "rj2");
             if (path == "/preview/plate/rj2/stop")
                 return HandlePreviewStop(PreviewResourceType.PlateRJ2);
             if (path == "/preview/plate/rj3/start")
-                return HandlePlatePreviewStart(bodyUtf8, PreviewResourceType.PlateRJ3, "rj3");
+                return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
+                    PreviewResourceType.PlateRJ3, "rj3");
             if (path == "/preview/plate/rj3/stop")
                 return HandlePreviewStop(PreviewResourceType.PlateRJ3);
 
@@ -93,10 +96,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
                 return TerminalSwitchingResult;
 
-            // Parse request fields
-            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
-            var saveDir = JsonHelper.ExtractString(bodyUtf8, "save_dir");
-            var callbackUrl = JsonHelper.ExtractString(bodyUtf8, "callback_url");
+            // Parse the request body exactly once and reuse it across route handlers.
+            var request = ParsedJsonBody.Parse(bodyUtf8);
+            var requestId = request.GetString("request_id");
+            var saveDir = request.GetString("save_dir");
+            var callbackUrl = request.GetString("callback_url");
             if (string.IsNullOrEmpty(saveDir))
                 saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
@@ -105,7 +109,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 // === Terminal Switch (highest priority, wait for route commit) ===
                 case "/terminal/switch":
-                    return await HandleSwitch(bodyUtf8).ConfigureAwait(false);
+                    return await HandleSwitch(request).ConfigureAwait(false);
 
                 // === Sync captures (wait for result, pass saveDir from third-party) ===
                 case "/capture/face":
@@ -113,7 +117,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 case "/capture/fingerprint":
                     {
-                        var saveDirHk = JsonHelper.ExtractString(bodyUtf8, "save_dir_hk");
+                        var saveDirHk = request.GetString("save_dir_hk");
                         return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch, saveDir, saveDirHk);
                     }
 
@@ -133,13 +137,13 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // === Previews (replace mode, immediate "accepted") ===
                 case "/preview/camera/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Camera, routeEpoch);
+                    return await HandlePreviewStart(request, PreviewResourceType.Camera, routeEpoch);
 
                 case "/preview/fingerprint/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Fingerprint, routeEpoch);
+                    return await HandlePreviewStart(request, PreviewResourceType.Fingerprint, routeEpoch);
 
                 case "/preview/iris/start":
-                    return await HandlePreviewStart(bodyUtf8, PreviewResourceType.Iris, routeEpoch);
+                    return await HandlePreviewStart(request, PreviewResourceType.Iris, routeEpoch);
 
                 case "/preview/camera/stop":
                     return HandlePreviewStop(PreviewResourceType.Camera);
@@ -158,11 +162,11 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // === Process and authorization ===
                 case "/process/start":
-                    return await HandleProcessStart(bodyUtf8, routeEpoch, saveDir);
+                    return await HandleProcessStart(requestId, routeEpoch, saveDir);
                 case "/process/end":
                     return HandleProcessEnd();
                 case "/authorize":
-                    return await EnqueueAuthorize(routeEpoch, bodyUtf8, requestId, callbackUrl);
+                    return await EnqueueAuthorize(routeEpoch, request, requestId, callbackUrl);
 
                 default:
                     return "{\"error\":true,\"code\":\"not_found\"}";
@@ -274,19 +278,19 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        private async Task<string> EnqueueAuthorize(TerminalRouteEpochSnapshot routeEpoch, string bodyUtf8,
-            string requestId, string callbackUrl)
+        private async Task<string> EnqueueAuthorize(TerminalRouteEpochSnapshot routeEpoch,
+            ParsedJsonBody request, string requestId, string callbackUrl)
         {
             if (string.IsNullOrEmpty(requestId))
                 requestId = Guid.NewGuid().ToString("N").Substring(0, 16);
 
-            var authIdNo = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "ZJHM"));
-            var authDocType = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "ZJLB"));
-            var authNationality = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "GJDQDM"));
-            var authName = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "XM"));
-            var authSex = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "XB"));
-            var authBirthday = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "CSRQ"));
-            var authPortCode = JsonHelper.ToLogValue(JsonHelper.ExtractString(bodyUtf8, "KADM"));
+            var authIdNo = JsonHelper.ToLogValue(request.GetString("ZJHM"));
+            var authDocType = JsonHelper.ToLogValue(request.GetString("ZJLB"));
+            var authNationality = JsonHelper.ToLogValue(request.GetString("GJDQDM"));
+            var authName = JsonHelper.ToLogValue(request.GetString("XM"));
+            var authSex = JsonHelper.ToLogValue(request.GetString("XB"));
+            var authBirthday = JsonHelper.ToLogValue(request.GetString("CSRQ"));
+            var authPortCode = JsonHelper.ToLogValue(request.GetString("KADM"));
             _log("[授权] 收到DLL授权请求：请求ID=" + JsonHelper.ToLogValue(requestId) +
                 "，终端=" + routeEpoch.Route.TerminalIndex +
                 "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
@@ -303,7 +307,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var data = new AuthorizeTaskData
             {
                 Tcs = tcs,
-                BodyUtf8 = bodyUtf8,
+                BodyUtf8 = request.RawBody,
                 RequestId = requestId,
                 CallbackUrl = callbackUrl,
                 RouteEpoch = routeEpoch
@@ -317,7 +321,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var context = _requestRegistry.Register(requestId, ProxyResourceTypes.Protocol,
                 resolvedSaveDir, callbackUrl, routeEpoch.Generation,
                 terminalIndex: routeEpoch.Route.TerminalIndex,
-                originalRequestBodyUtf8: bodyUtf8);
+                originalRequestBodyUtf8: request.RawBody);
             if (context == null)
                 return "{\"error\":true,\"code\":\"registry_full\"}";
             context.TryMarkQueued();
@@ -415,9 +419,9 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // ====== Switch (response after terminal route commit) ======
 
-        private async Task<string> HandleSwitch(string bodyUtf8)
+        private async Task<string> HandleSwitch(ParsedJsonBody request)
         {
-            var terminalIndex = (int)JsonHelper.ExtractInt(bodyUtf8, "terminal_index");
+            var terminalIndex = request.GetInt("terminal_index");
             if (terminalIndex < 1 || terminalIndex > 2)
                 return "{\"error\":true,\"code\":\"invalid_terminal_index\"}";
 
@@ -437,10 +441,9 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // ====== Process control ======
 
-        private async Task<string> HandleProcessStart(string bodyUtf8,
+        private async Task<string> HandleProcessStart(string requestId,
             TerminalRouteEpochSnapshot routeEpoch, string saveDir)
         {
-            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
             if (string.IsNullOrEmpty(requestId))
                 requestId = "PROCESS_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
 
@@ -537,13 +540,13 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // ====== Preview Start (replace mode, immediate "accepted") ======
 
-        private async Task<string> HandlePreviewStart(string bodyUtf8,
+        private async Task<string> HandlePreviewStart(ParsedJsonBody request,
             PreviewResourceType resType, TerminalRouteEpochSnapshot routeEpoch)
         {
-            var hwndValue = JsonHelper.ExtractInt(bodyUtf8, "hwnd");
+            var hwndValue = request.GetInt("hwnd");
             var hwnd = new IntPtr(hwndValue);
-            var callbackUrl = JsonHelper.ExtractString(bodyUtf8, "callback_url");
-            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+            var callbackUrl = request.GetString("callback_url");
+            var requestId = request.GetString("request_id");
 
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             {
@@ -635,13 +638,13 @@ namespace HZCYKJTHardWare.Proxy.Server
             return "{\"status\":\"ok\"}";
         }
 
-        private string HandlePlatePreviewStart(string bodyUtf8,
+        private string HandlePlatePreviewStart(ParsedJsonBody request,
             PreviewResourceType resourceType, string plateCode)
         {
-            var hwndValue = JsonHelper.ExtractInt(bodyUtf8, "hwnd");
+            var hwndValue = request.GetInt("hwnd");
             var hwnd = new IntPtr(hwndValue);
-            var callbackUrl = JsonHelper.ExtractString(bodyUtf8, "callback_url");
-            var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
+            var callbackUrl = request.GetString("callback_url");
+            var requestId = request.GetString("request_id");
             var previewUrl = AppConfig.Instance.GetPlatePreviewUrl(plateCode);
 
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))

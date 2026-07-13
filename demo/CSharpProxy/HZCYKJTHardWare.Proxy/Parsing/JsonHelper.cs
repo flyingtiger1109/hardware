@@ -11,8 +11,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             try
             {
                 var obj = JObject.Parse(json);
-                var token = obj[key];
-                return token?.ToString() ?? "";
+                return ExtractString(obj, key);
             }
             catch
             {
@@ -27,11 +26,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             try
             {
                 var obj = JObject.Parse(json);
-                var token = obj[key];
-                if (token == null) return 0;
-                if (token.Type == JTokenType.Integer) return token.Value<int>();
-                int.TryParse(token.ToString(), out int result);
-                return result;
+                return ExtractInt(obj, key);
             }
             catch
             {
@@ -115,8 +110,33 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             return $"\"{EscapeString(name)}\":{(value ? "true" : "false")}";
         }
 
-        private static string ExtractStringManual(string json, string key)
+        internal static string ExtractString(JObject obj, string key)
         {
+            if (obj == null || string.IsNullOrEmpty(key)) return "";
+            var token = obj[key];
+            return token?.ToString() ?? "";
+        }
+
+        internal static int ExtractInt(JObject obj, string key)
+        {
+            if (obj == null || string.IsNullOrEmpty(key)) return 0;
+            try
+            {
+                var token = obj[key];
+                if (token == null) return 0;
+                if (token.Type == JTokenType.Integer) return token.Value<int>();
+                int.TryParse(token.ToString(), out int result);
+                return result;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        internal static string ExtractStringManual(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return "";
             var searchKey = "\"" + key + "\"";
             var idx = json.IndexOf(searchKey);
             if (idx < 0) return "";
