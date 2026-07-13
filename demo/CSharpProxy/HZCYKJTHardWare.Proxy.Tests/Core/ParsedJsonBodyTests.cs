@@ -40,6 +40,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
         }
 
         [TestMethod]
+        public void Parse_WindowHandle_PreservesInt64ValueForX64Proxy()
+        {
+            const string body = "{\"hwnd\":4294967295}";
+
+            var parsed = ParsedJsonBody.Parse(body);
+
+            Assert.IsTrue(parsed.IsValid);
+            Assert.AreEqual(4294967295L, parsed.GetInt64("hwnd"));
+        }
+
+        [TestMethod]
         public void ParseOcrDocument_ParsedRootPreservesMetadataAndEvidenceCompatibility()
         {
             const string body = "{\"request_id\":\"OCR-1\",\"data\":{" +

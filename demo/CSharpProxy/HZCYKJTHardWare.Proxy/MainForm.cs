@@ -473,6 +473,10 @@ namespace HZCYKJTHardWare.Proxy
         {
             UpdateHeaderStatus();
             Logger.Info("应用程序启动中...");
+            Logger.Info("[运行环境] 进程架构=" +
+                (Environment.Is64BitProcess ? "x64" : "x86") +
+                ", 操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
+                ", CLR=" + Environment.Version);
             memoLog.ScrolledToTop += OnLogScrolledToTop;
             memoLog.ScrolledToBottom += OnLogScrolledToBottom;
             chkAutoScroll.CheckedChanged += (s, ev) =>

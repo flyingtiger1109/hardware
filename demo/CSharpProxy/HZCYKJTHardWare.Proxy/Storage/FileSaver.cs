@@ -119,7 +119,7 @@ namespace HZCYKJTHardWare.Proxy.Storage
 
         /// <summary>
         /// Decode directly to disk with a fixed-size buffer. This avoids a second
-        /// image-sized byte[] allocation on the LOH in the x86 process.
+        /// image-sized byte[] allocation on the LOH in the managed process.
         /// A temporary file prevents invalid Base64 from damaging an existing file.
         /// </summary>
         private static long WriteBase64ToFile(string base64Str, string filePath)

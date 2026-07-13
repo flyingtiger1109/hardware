@@ -2283,3 +2283,82 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 - 本批将作为独立 Git 提交；回退该提交即可恢复到 `b19c2fea`。
 - 若只回退请求入口，可恢复 `ParsedJsonBody.cs`、`JsonHelper.cs` 和 `DllCommandHandler.cs`。
 - 若只回退 OCR，可恢复 `CallbackParser.cs` 和 `TerminalCallbackHandler.cs`。
+
+# Proxy x64 独立迁移方案 A（2026-07-13）
+
+## 当前阶段
+
+- [x] 保留现有 `Release|x86|net46` 构建与 x86 VLC 发布链。
+- [x] 新增独立 `Debug/Release|x64|net46` 构建配置。
+- [x] 新增同版本、同文件清单的 x64 VLC 自包含依赖。
+- [x] 完成 x86/x64 编译、非集成回归和 PE 架构校验。
+- [ ] x64 Proxy 真实终端、跨进程预览窗口及长稳验证待执行。
+
+## 修改动机
+
+1. x86 Proxy 在长时间处理 JSON、Base64 图片和预览资源时受约 2 GB 用户地址空间限制；x64 迁移可降低地址空间耗尽和大对象堆碎片导致进程失败的风险。
+2. DLL 与 Proxy 通过本机 HTTP 通信，DLL、C# Demo 和第三方程序可以继续保持 x86，Proxy 可作为独立进程单独提供 x64 发布版本。
+3. x64 不会降低终端硬件 HTTP 响应时间，也不会自动消除 JSON/Base64 分配，因此本次只建立独立可回退的发布链，不替换正在运行的 x86 版本。
+
+## 本次修改内容
+
+1. Proxy 与测试项目增加条件化 `PlatformTarget`、`x86;x64` 平台清单和 `Prefer32Bit=false`；两个 Proxy solution 同步增加 Debug/Release x64 映射。
+2. x86 构建继续从项目 `vlc` 目录发布依赖；x64 构建从 `vlc-x64` 读取，并显式映射到输出目录 `vlc`，保持 `VlcPreviewPlayer` 的运行时加载路径不变。
+3. `vlc-x64` 采用本机 `D:\VLC` 的 VLC 3.0.23，按现有 x86 VLC 清单复制 326 个文件；继续排除已知不支持的 `plugins/access/libsftp_plugin.dll`。
+4. Proxy 内部将预览 `hwnd` 从 32 位整数读取调整为 64 位整数读取，避免 x64 Proxy 截断窗口句柄；HTTP 字段名、JSON 数值格式和 DLL 请求协议均未改变。
+5. 启动日志增加进程架构、操作系统架构和 CLR 版本，便于现场确认实际运行的是 x86 还是 x64 发布包。
+6. 内存边界和流式保存注释调整为架构中性表述，原有 16 MB 请求体上限及文件保存行为不变。
+
+## 涉及文件
+
+- `HZCYKJTHardWare.Proxy.csproj`：双平台配置及 x86/x64 VLC 条件发布。
+- `HZCYKJTHardWare.Proxy.Tests.csproj`：测试项目双平台配置。
+- 两个 `HZCYKJTHardWare.Proxy.sln`：增加 Debug/Release x64 solution 映射。
+- `vlc-x64/`：VLC 3.0.23 x64 自包含运行文件。
+- `Parsing/JsonHelper.cs`、`Parsing/ParsedJsonBody.cs`：内部 64 位整数读取。
+- `Server/DllCommandHandler.cs`：预览 HWND 使用 64 位解析结果。
+- `MainForm.cs`：启动架构日志。
+- `Server/HttpProtocolHandler.cs`、`Storage/FileSaver.cs`：架构中性注释。
+- `HZCYKJTHardWare.Proxy.Tests/Core/ParsedJsonBodyTests.cs`：64 位 HWND 数值回归测试。
+- `PROGRESS.md`：本次迁移记录。
+
+## 兼容性说明
+
+- DLL 导出函数、参数、调用约定、结构体、错误码和回调签名：未改变；DLL 继续为 x86。
+- C# Demo 与 Delphi 第三方程序：未修改，继续为 x86；通过 HTTP 调用 x64 Proxy 不受进程位数限制。
+- Proxy HTTP 路径、请求/响应 JSON、终端协议和配置文件：未改变。
+- TargetFramework：继续为 `net46`，实际部署在已安装 .NET Framework 4.8 的 Windows 10 x64 上，不引入新的运行库要求。
+- 发布方式：x86 和 x64 为两个独立输出目录，不应混合复制 Proxy EXE、VLC 核心或插件。
+
+## 风险与注意事项
+
+1. x64 VLC 依赖约 103 MB；部署时必须整体复制输出目录中的 `vlc`，不得与旧 x86 `vlc` 合并覆盖。
+2. 跨进程 HWND 在 DLL 请求中仍保持原 JSON 数值字段；本次已避免 Proxy 侧 32 位截断，但真实的 `SetParent/MoveWindow`、窗口销毁时序和高 DPI 表现仍需现场验证。
+3. 所有 VLC DLL 已静态校验为 AMD64，但仅靠 PE 校验不能替代真实 RTSP/车牌预览启动、停止、终端切换和 Proxy 退出验证。
+4. 当前 x86 Proxy 压力测试进程占用默认 Release 文件，x86 回归使用隔离输出完成，未结束或替换正在运行的实例。
+5. x64 扩大的是地址空间余量；终端接口约 300 ms 的硬件处理耗时、网络抖动和业务串行规则不会因位数变化而直接加速。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64|net46`：编译通过。
+- [x] x64 非集成回归：89/89 通过。
+- [x] Proxy + Tests `Release|x86|net46` 隔离输出：编译通过，0 警告、0 错误。
+- [x] x86 非集成回归：89/89 通过。
+- [x] PE 架构：x86 Proxy=`0x014C`，x64 Proxy=`0x8664`。
+- [x] VLC 文件清单：x86/x64 均 326 个文件、324 个 DLL；x86 DLL 全部 `0x014C`，x64 DLL 全部 `0x8664`，异常混用 0 个。
+- [x] VLC 核心版本：x86/x64 均为 3.0.23；两端输出均无 `libsftp_plugin.dll`。
+- [ ] `HttpListener` 集成测试：x64 已尝试 7 项，但当前 VSTest 宿主在创建 Mock Server 时抛出 `PlatformNotSupportedException`，尚未进入 Proxy 业务断言。
+- [ ] x64 Proxy 启动、真实双终端业务和预览窗口嵌入：待现场验证。
+- [ ] x64 2 小时短稳及 24～72 小时长稳：待执行。
+
+## 下一步计划
+
+- [ ] 在不替换生产 x86 目录的前提下，将 x64 Release 整体复制到独立测试目录并启动，确认日志显示 `进程架构=x64`。
+- [ ] 使用现有 x86 C# Demo 回归终端切换、人脸、指纹、OCR、授权及流程开始/结束。
+- [ ] 分别验证 RTSP/车牌等 VLC 预览启动、停止、窗口切换、重复初始化和 Proxy 正常退出。
+- [ ] 完成 2 小时短稳后再执行 24～72 小时长稳，对比 Private Bytes、Managed Heap、Gen2 GC、线程、句柄和 GDI/USER 句柄趋势。
+
+## 回退方式
+
+- 本批作为独立 Git 提交；整体回退该提交即可恢复为仅 x86 Proxy 的构建和发布方式。
+- 部署回退只需停止 x64 Proxy 并重新启动原 x86 发布目录，不需要替换 DLL、C# Demo、配置文件或修改第三方调用。

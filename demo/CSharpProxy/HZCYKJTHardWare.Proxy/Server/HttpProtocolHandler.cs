@@ -16,8 +16,8 @@ namespace HZCYKJTHardWare.Proxy.Server
     internal static class HttpProtocolHandler
     {
         private const int MaxHeaderBytes = 64 * 1024;
-        // The process is x86. Keep concurrent callback bodies bounded so a burst
-        // of large Base64 images cannot exhaust the 2 GB address space.
+        // Keep concurrent callback bodies bounded so a burst of large Base64 images
+        // cannot cause excessive managed-memory pressure in either process architecture.
         private const int MaxBodyBytes = 16 * 1024 * 1024;
 
         /// <summary>

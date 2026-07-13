@@ -51,5 +51,10 @@ namespace HZCYKJTHardWare.Proxy.Parsing
         {
             return Root != null ? JsonHelper.ExtractInt(Root, key) : 0;
         }
+
+        internal long GetInt64(string key)
+        {
+            return Root != null ? JsonHelper.ExtractInt64(Root, key) : 0;
+        }
     }
 }

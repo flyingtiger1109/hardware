@@ -134,6 +134,23 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             }
         }
 
+        internal static long ExtractInt64(JObject obj, string key)
+        {
+            if (obj == null || string.IsNullOrEmpty(key)) return 0;
+            try
+            {
+                var token = obj[key];
+                if (token == null) return 0;
+                if (token.Type == JTokenType.Integer) return token.Value<long>();
+                long.TryParse(token.ToString(), out long result);
+                return result;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         internal static string ExtractStringManual(string json, string key)
         {
             if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return "";

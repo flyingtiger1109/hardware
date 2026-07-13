@@ -543,7 +543,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private async Task<string> HandlePreviewStart(ParsedJsonBody request,
             PreviewResourceType resType, TerminalRouteEpochSnapshot routeEpoch)
         {
-            var hwndValue = request.GetInt("hwnd");
+            var hwndValue = request.GetInt64("hwnd");
             var hwnd = new IntPtr(hwndValue);
             var callbackUrl = request.GetString("callback_url");
             var requestId = request.GetString("request_id");
@@ -641,7 +641,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private string HandlePlatePreviewStart(ParsedJsonBody request,
             PreviewResourceType resourceType, string plateCode)
         {
-            var hwndValue = request.GetInt("hwnd");
+            var hwndValue = request.GetInt64("hwnd");
             var hwnd = new IntPtr(hwndValue);
             var callbackUrl = request.GetString("callback_url");
             var requestId = request.GetString("request_id");
