@@ -212,68 +212,88 @@ namespace HZCYKJTHardWare.Proxy.Storage
         private static string WriteBmpFile(string base64Str, string filePath,
             int width, int height)
         {
-            var decoded = Convert.FromBase64String(base64Str);
-            var expectedLen = width * height;
-            if (decoded.Length != expectedLen)
-            {
-                Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decoded.Length}");
-            }
+            if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
+            if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+
+            var expectedLen = checked(width * height);
+            var rowSize = checked(((width + 3) / 4) * 4);
+            var pixelDataSize = checked(rowSize * height);
+            const int paletteSize = 256 * 4;
+            const int headerSize = 14 + 40 + paletteSize;
+            var fileSize = checked(headerSize + pixelDataSize);
 
             // 原子写入：先写临时文件，再覆盖目标，避免第三方读到未写完的半截文件
             var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
                 using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
-                    FileShare.None, 64 * 1024, FileOptions.SequentialScan))
-                using (var bw = new BinaryWriter(fs))
+                    FileShare.None, 64 * 1024, FileOptions.RandomAccess))
                 {
-                    int rowSize = ((width * 8 + 31) / 32) * 4;
-                    int pixelDataSize = rowSize * height;
-                    int paletteSize = 256 * 4;
-                    int headerSize = 14 + 40 + paletteSize;
-                    int fileSize = headerSize + pixelDataSize;
-
-                    // BITMAPFILEHEADER (14 bytes)
-                    bw.Write((short)0x4D42);
-                    bw.Write(fileSize);
-                    bw.Write((short)0);
-                    bw.Write((short)0);
-                    bw.Write(headerSize);
-
-                    // BITMAPINFOHEADER (40 bytes)
-                    bw.Write(40);
-                    bw.Write(width);
-                    bw.Write(height);
-                    bw.Write((short)1);
-                    bw.Write((short)8);
-                    bw.Write(0);
-                    bw.Write(pixelDataSize);
-                    bw.Write(0);
-                    bw.Write(0);
-                    bw.Write(256);
-                    bw.Write(0);
-
-                    // Grayscale palette: 256 entries (B, G, R, 0)
-                    for (int i = 0; i < 256; i++)
+                    // Pre-size the file so untouched padding and missing source rows
+                    // remain zero-filled, matching the previous implementation.
+                    fs.SetLength(fileSize);
+                    fs.Position = 0;
+                    using (var bw = new BinaryWriter(fs, Encoding.UTF8, true))
                     {
-                        bw.Write((byte)i);
-                        bw.Write((byte)i);
-                        bw.Write((byte)i);
-                        bw.Write((byte)0);
-                    }
+                        // BITMAPFILEHEADER (14 bytes)
+                        bw.Write((short)0x4D42);
+                        bw.Write(fileSize);
+                        bw.Write((short)0);
+                        bw.Write((short)0);
+                        bw.Write(headerSize);
 
-                    // Pixel data (bottom-up)
-                    for (int y = height - 1; y >= 0; y--)
-                    {
-                        int srcOffset = y * width;
-                        int copyLen = Math.Min(width, decoded.Length - srcOffset);
-                        if (copyLen > 0)
-                            bw.Write(decoded, srcOffset, copyLen);
-                        for (int p = copyLen; p < rowSize; p++)
+                        // BITMAPINFOHEADER (40 bytes)
+                        bw.Write(40);
+                        bw.Write(width);
+                        bw.Write(height);
+                        bw.Write((short)1);
+                        bw.Write((short)8);
+                        bw.Write(0);
+                        bw.Write(pixelDataSize);
+                        bw.Write(0);
+                        bw.Write(0);
+                        bw.Write(256);
+                        bw.Write(0);
+
+                        // Grayscale palette: 256 entries (B, G, R, 0)
+                        for (int i = 0; i < 256; i++)
+                        {
+                            bw.Write((byte)i);
+                            bw.Write((byte)i);
+                            bw.Write((byte)i);
                             bw.Write((byte)0);
+                        }
+                        bw.Flush();
                     }
 
-                    bw.Flush();
+                    long decodedLength;
+                    var pixelWriter = new BottomUpBmpPixelStream(fs, headerSize,
+                        width, height, rowSize);
+                    using (var transform = new FromBase64Transform(
+                        FromBase64TransformMode.IgnoreWhiteSpaces))
+                    using (var decoder = new CryptoStream(pixelWriter, transform,
+                        CryptoStreamMode.Write))
+                    {
+                        var inputBuffer = new byte[32 * 1024];
+                        var offset = 0;
+                        while (offset < base64Str.Length)
+                        {
+                            var charCount = Math.Min(inputBuffer.Length,
+                                base64Str.Length - offset);
+                            var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
+                                charCount, inputBuffer, 0);
+                            decoder.Write(inputBuffer, 0, byteCount);
+                            offset += charCount;
+                        }
+                        decoder.FlushFinalBlock();
+                        decodedLength = pixelWriter.TotalDecodedBytes;
+                    }
+
+                    if (decodedLength != expectedLen)
+                    {
+                        Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decodedLength}");
+                    }
+
                     fs.Flush(true);
                 }
 
@@ -285,6 +305,116 @@ namespace HZCYKJTHardWare.Proxy.Storage
             {
                 try { if (File.Exists(tempPath)) File.Delete(tempPath); }
                 catch { }
+            }
+        }
+
+        /// <summary>
+        /// Receives decoded raw pixels in top-down source order and writes each
+        /// completed row into the matching bottom-up BMP position. Only one row
+        /// is retained, avoiding an image-sized LOH allocation while preserving
+        /// the historical positive-height BMP layout byte-for-byte.
+        /// </summary>
+        private sealed class BottomUpBmpPixelStream : Stream
+        {
+            private readonly FileStream _output;
+            private readonly long _pixelDataOffset;
+            private readonly int _width;
+            private readonly int _height;
+            private readonly int _rowSize;
+            private readonly byte[] _rowBuffer;
+            private int _rowBufferCount;
+            private int _sourceRow;
+            private bool _completed;
+
+            internal BottomUpBmpPixelStream(FileStream output, long pixelDataOffset,
+                int width, int height, int rowSize)
+            {
+                _output = output ?? throw new ArgumentNullException(nameof(output));
+                _pixelDataOffset = pixelDataOffset;
+                _width = width;
+                _height = height;
+                _rowSize = rowSize;
+                _rowBuffer = new byte[width];
+            }
+
+            internal long TotalDecodedBytes { get; private set; }
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => TotalDecodedBytes;
+
+            public override long Position
+            {
+                get => TotalDecodedBytes;
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+                if (offset < 0 || count < 0 || offset > buffer.Length - count)
+                    throw new ArgumentOutOfRangeException();
+                if (_completed) throw new ObjectDisposedException(nameof(BottomUpBmpPixelStream));
+
+                TotalDecodedBytes += count;
+                while (count > 0 && _sourceRow < _height)
+                {
+                    var copyLength = Math.Min(_width - _rowBufferCount, count);
+                    Buffer.BlockCopy(buffer, offset, _rowBuffer, _rowBufferCount,
+                        copyLength);
+                    _rowBufferCount += copyLength;
+                    offset += copyLength;
+                    count -= copyLength;
+
+                    if (_rowBufferCount == _width)
+                        WriteCurrentRow();
+                }
+            }
+
+            internal void Complete()
+            {
+                if (_completed) return;
+                if (_rowBufferCount > 0 && _sourceRow < _height)
+                    WriteCurrentRow();
+                _completed = true;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                    Complete();
+                base.Dispose(disposing);
+            }
+
+            private void WriteCurrentRow()
+            {
+                var destinationRow = _height - 1 - _sourceRow;
+                _output.Position = _pixelDataOffset +
+                    ((long)destinationRow * _rowSize);
+                _output.Write(_rowBuffer, 0, _rowBufferCount);
+                Array.Clear(_rowBuffer, 0, _rowBuffer.Length);
+                _rowBufferCount = 0;
+                _sourceRow++;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void SetLength(long value)
+            {
+                throw new NotSupportedException();
             }
         }
 

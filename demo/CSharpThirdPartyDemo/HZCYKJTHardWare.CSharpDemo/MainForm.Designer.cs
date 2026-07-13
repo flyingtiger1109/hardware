@@ -226,7 +226,7 @@ namespace HZCYKJTHardWare.CSharpDemo
             //
             this.lblSaveDirHk.AutoSize = true;
             this.lblSaveDirHk.Location = new Point(382, 45);
-            this.lblSaveDirHk.Text = "无畸变目录";
+            this.lblSaveDirHk.Text = "无畸变文件";
             //
             // txtSaveDirHk
             //
@@ -234,7 +234,7 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.txtSaveDirHk.Name = "txtSaveDirHk";
             this.txtSaveDirHk.Size = new Size(300, 22);
             this.txtSaveDirHk.TabIndex = 7;
-            this.txtSaveDirHk.Text = @".\captures_hk";
+            this.txtSaveDirHk.Text = @".\captures_hk\fingerprint_undistorted.bmp";
             //
             // btnCameraPreview
             //

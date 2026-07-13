@@ -2128,3 +2128,77 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 
 - 第二批将作为独立 Git 提交；整体回退该提交即可恢复到 P0 + ID 卡兼容版本。
 - 若只回退某一项，可分别恢复 `TerminalHealthChecker`、`OperationTimeouts` 调用点、`DllCallbackSender`、预览生命周期或 `RuntimeMetricsReporter` 对应文件。
+
+# 指纹抓拍 GC 与固定覆盖优化（2026-07-13）
+
+## 当前阶段
+
+- [x] 人脸、指纹终端响应改为一次 JSON 解析并复用轻量结果模型。
+- [x] 无畸变指纹 Base64 改为固定缓冲区解码，不再创建整图 LOH `byte[]`。
+- [x] C# Demo 的无畸变目录输入自动转换为固定 BMP 文件路径。
+- [x] 编译与非集成回归验证完成。
+- [ ] 真实终端性能和 24～72 小时 GC/内存曲线待验证。
+
+## 修改动机
+
+1. 终端 2 压力日志显示，15:25～15:30 新增 95 次指纹抓拍时 Gen2 GC 增加 96 次，说明大 JSON/Base64 数据对 x86 进程形成明显完整代 GC 压力。
+2. 指纹响应此前可能先通过 `ResultParser` 读取 `save_path`，再通过 `CallbackParser` 读取主图，保存无畸变图时又重新解析同一个响应。
+3. 无畸变图此前通过 `Convert.FromBase64String` 创建 352×544、约 191KB 的整图数组，直接进入 LOH。
+4. C# Demo 默认传入 `save_dir_hk=.\captures_hk` 目录，Proxy 因此按时间戳生成新文件，不符合当前循环覆盖测试目标。
+
+## 本次修改内容
+
+1. `ImageCallbackResult` 增加 `SavePath` 和 `UndistortedImageBase64`，`CallbackParser.ParseImageCapture()` 在同一次 `JObject.Parse` 中提取主图、保存路径和无畸变图。
+2. 保持原有兼容顺序：无畸变字段优先读取顶层 `undistorted_image_base64`，为空时读取 `data.undistorted_image_base64`；`save_path` 继续只读取顶层字段。
+3. 人脸、指纹同步抓拍各自只解析一次终端响应，后续保存逻辑复用同一结果对象。
+4. 无畸变 BMP 使用 32KB Base64 输入缓冲区和单行像素缓冲区，按定位写入方式继续输出正高度、bottom-up、8 位灰度、256 级调色板 BMP。
+5. 保留临时文件 + `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` 原子替换；无效 Base64 或写入失败时不破坏已有目标文件。
+6. C# Demo 默认无畸变路径改为 `.\captures_hk\fingerprint_undistorted.bmp`；若用户输入没有扩展名的目录，抓拍前自动追加该固定文件名并回写文本框。
+
+## 涉及文件
+
+- `Parsing/CallbackParser.cs`：抓拍轻量结果模型和单次响应解析。
+- `Server/Coordinator/BizOperationHandler.cs`：人脸、指纹保存逻辑复用解析结果。
+- `Storage/FileSaver.cs`：无畸变 BMP 分块解码、单行缓冲和原子覆盖。
+- `HZCYKJTHardWare.Proxy.Tests/Core/ImageCallbackParserTests.cs`：字段兼容与单模型解析测试。
+- `HZCYKJTHardWare.Proxy.Tests/Storage/FileSaverTests.cs`：真实尺寸、方向、布局、原子覆盖及失败保留测试。
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`、`MainForm.Designer.cs`：固定无畸变文件路径。
+- `PROGRESS.md`：本次进度记录。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、调用约定、结构体、错误码和回调签名：未改变。
+- Proxy HTTP 路径、请求/响应 JSON、终端协议和配置项：未改变。
+- 主指纹图、人脸图、无畸变 BMP 的尺寸、方向和文件格式：未改变。
+- Proxy 仍保留“调用方直接传目录时生成时间戳无畸变文件”的旧能力；本次只让 C# Demo 默认并自动传入完整文件路径，不影响其他第三方调用方。
+- C# Proxy 和 Demo 继续保持 `net46`、`x86`，未新增第三方依赖。
+
+## 风险与注意事项
+
+1. 本次消除了无畸变图约 191KB 的解码数组及重复 JSON 解析，但终端原始响应字符串、主图 Base64 字符串仍是大对象，不能保证完全消除 Gen2 GC。
+2. 流式 BMP 通过单行缓冲和随机定位保持原有正高度 bottom-up 字节布局；已用 2×2 和 352×544 数据验证首尾行方向。
+3. 运行中的 Proxy 占用了默认 `bin\x86\Release\net46\HZCYKJTHardWare.Proxy.exe`，未强制结束压力测试进程；x86 Release 改用隔离输出目录完成编译验证。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86|net46` 隔离目录编译：通过，0 警告、0 错误。
+- [x] C# 测试项目 `Release|x86|net46` 隔离目录编译：通过，0 警告、0 错误。
+- [x] C# Demo `Release|x86|net46` 默认目录编译：通过，0 警告、0 错误。
+- [x] 本次定向测试：8/8 通过。
+- [x] 非集成回归测试：84/84 通过。
+- [ ] `HttpListener` 集成测试：7 项因当前 VSTest 宿主抛出 `PlatformNotSupportedException` 未运行成功，待正式 Windows 测试宿主验证。
+- [ ] 真实终端主图与无畸变图循环覆盖：待现场验证。
+- [ ] 修改后指纹 P50/P95/P99 和 Gen2 GC 增量：待重新压力测试。
+- [ ] 24～72 小时长稳验证：待执行。
+
+## 下一步计划
+
+- [ ] 当前压力进程自然结束后，将新 Proxy 和 C# Demo 部署到正式 x86 Release 目录。
+- [ ] 连续抓拍至少 100 次，确认只保留 `fingerprint.jpg` 和 `fingerprint_undistorted.bmp` 两个固定结果文件。
+- [ ] 对比同等请求数量下 `[长稳指标]` 的 Gen2 GC 增量、Private Bytes 和指纹耗时分位数。
+
+## 回退方式
+
+- 恢复 `CallbackParser.cs` 和 `BizOperationHandler.cs` 可回退单次响应解析。
+- 恢复 `FileSaver.WriteBmpFile()` 可回退到整图 `Convert.FromBase64String` 解码。
+- 恢复 C# Demo 的默认文本和路径规范化方法，可回退到目录下时间戳文件行为。

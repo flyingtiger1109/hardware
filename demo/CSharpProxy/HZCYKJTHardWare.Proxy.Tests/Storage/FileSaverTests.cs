@@ -73,6 +73,69 @@ namespace HZCYKJTHardWare.Proxy.Tests.Storage
                 Assert.IsTrue(actual.Length > pixels.Length);
                 Assert.AreEqual((byte)'B', actual[0]);
                 Assert.AreEqual((byte)'M', actual[1]);
+                Assert.AreEqual(2, BitConverter.ToInt32(actual, 18));
+                Assert.AreEqual(2, BitConverter.ToInt32(actual, 22));
+                CollectionAssert.AreEqual(
+                    new byte[] { 128, 255, 0, 0, 0, 64, 0, 0 },
+                    actual.Skip(1078).ToArray());
+                Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
+            }
+            finally
+            {
+                DeleteDirectory(directory);
+            }
+        }
+
+        [TestMethod]
+        public void SaveRawGrayscaleAsBmpToFile_LargeImagePreservesBottomUpRows()
+        {
+            var directory = CreateTempDirectory();
+            try
+            {
+                const int width = 352;
+                const int height = 544;
+                const int pixelOffset = 1078;
+                var target = Path.Combine(directory, "fingerprint.bmp");
+                var pixels = Enumerable.Range(0, width * height)
+                    .Select(index => (byte)(index % 251))
+                    .ToArray();
+
+                var result = FileSaver.SaveRawGrayscaleAsBmpToFile(
+                    Convert.ToBase64String(pixels), target, width, height);
+
+                Assert.AreEqual(target, result);
+                var actual = File.ReadAllBytes(target);
+                Assert.AreEqual(pixelOffset + pixels.Length, actual.Length);
+                CollectionAssert.AreEqual(
+                    pixels.Skip((height - 1) * width).Take(width).ToArray(),
+                    actual.Skip(pixelOffset).Take(width).ToArray());
+                CollectionAssert.AreEqual(
+                    pixels.Take(width).ToArray(),
+                    actual.Skip(pixelOffset + ((height - 1) * width))
+                        .Take(width).ToArray());
+                Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
+            }
+            finally
+            {
+                DeleteDirectory(directory);
+            }
+        }
+
+        [TestMethod]
+        public void SaveRawGrayscaleAsBmpToFile_InvalidBase64PreservesExistingFile()
+        {
+            var directory = CreateTempDirectory();
+            try
+            {
+                var target = Path.Combine(directory, "fingerprint.bmp");
+                var original = new byte[] { 7, 6, 5, 4 };
+                File.WriteAllBytes(target, original);
+
+                var result = FileSaver.SaveRawGrayscaleAsBmpToFile(
+                    "not-base64", target, 352, 544);
+
+                Assert.AreEqual(string.Empty, result);
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(target));
                 Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
             }
             finally

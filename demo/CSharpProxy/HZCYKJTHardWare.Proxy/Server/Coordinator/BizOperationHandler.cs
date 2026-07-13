@@ -180,20 +180,19 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 .ConfigureAwait(false);
             if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
 
+            var result = CallbackParser.ParseImageCapture(response, "face_image");
             string savePath = "";
             if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
             {
-                var result = CallbackParser.ParseImageCapture(response, "face_image");
                 if (!string.IsNullOrEmpty(result.ImageBase64))
                     savePath = FileSaver.SaveBase64ImageToFile(result.ImageBase64,
                         PathHelper.ResolveExactSaveFile(saveDir));
             }
             else
             {
-                savePath = ResultParser.ExtractSavePath(response);
+                savePath = result.SavePath;
                 if (string.IsNullOrEmpty(savePath))
                 {
-                    var result = CallbackParser.ParseImageCapture(response, "face_image");
                     if (!string.IsNullOrEmpty(result.ImageBase64))
                     {
                         var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/bmp";
@@ -229,20 +228,19 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 .ConfigureAwait(false);
             if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
 
+            var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
             string savePath = "";
             if (!string.IsNullOrEmpty(saveDir) && System.IO.Path.HasExtension(saveDir))
             {
-                var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
                 if (!string.IsNullOrEmpty(result.ImageBase64))
                     savePath = FileSaver.SaveBase64ImageToFile(result.ImageBase64,
                         PathHelper.ResolveExactSaveFile(saveDir));
             }
             else
             {
-                savePath = ResultParser.ExtractSavePath(response);
+                savePath = result.SavePath;
                 if (string.IsNullOrEmpty(savePath))
                 {
-                    var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
                     if (!string.IsNullOrEmpty(result.ImageBase64))
                     {
                         var mimeType = !string.IsNullOrEmpty(result.ImageMimeType) ? result.ImageMimeType : "image/jpeg";
@@ -253,7 +251,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             // 无畸变图保存（独立于主图，失败不影响主流程）
             string undistortedPath = "";
             if (!string.IsNullOrEmpty(saveDirHk))
-                undistortedPath = SaveUndistortedFingerprintImage(response, saveDirHk, requestId);
+                undistortedPath = SaveUndistortedFingerprintImage(
+                    result.UndistortedImageBase64, saveDirHk, requestId);
 
             if (!string.IsNullOrEmpty(savePath))
             {
@@ -270,16 +269,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             return (!string.IsNullOrEmpty(savePath), savePath);
         }
 
-        private string SaveUndistortedFingerprintImage(string terminalJson, string saveDirHk, string requestId)
+        private string SaveUndistortedFingerprintImage(string undistortedB64,
+            string saveDirHk, string requestId)
         {
             try
             {
-                var undistortedB64 = JsonHelper.ExtractString(terminalJson, "undistorted_image_base64");
-                if (string.IsNullOrEmpty(undistortedB64))
-                {
-                    var dataJson = JsonHelper.ExtractObject(terminalJson, "data");
-                    undistortedB64 = JsonHelper.ExtractString(dataJson, "undistorted_image_base64");
-                }
                 if (string.IsNullOrEmpty(undistortedB64))
                 {
                     _log("[无畸变] 图片保存跳过：终端响应中无 data.undistorted_image_base64 字段");

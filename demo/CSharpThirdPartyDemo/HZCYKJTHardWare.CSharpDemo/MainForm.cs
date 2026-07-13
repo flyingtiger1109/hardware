@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -215,14 +216,31 @@ namespace HZCYKJTHardWare.CSharpDemo
 
         private void ExecuteWithFingerprintSaveDirs(string name, Func<IntPtr, IntPtr, int> action)
         {
+            var saveDirText = txtSaveDir.Text;
+            var saveDirHkText = NormalizeFingerprintUndistortedPath(txtSaveDirHk.Text);
+            if (!string.Equals(txtSaveDirHk.Text, saveDirHkText,
+                StringComparison.Ordinal))
+            {
+                txtSaveDirHk.Text = saveDirHkText;
+            }
+
             ExecuteDllCall(name, () =>
             {
-                using (var saveDir = new Utf8NativeString(txtSaveDir.Text))
-                using (var saveDirHk = new Utf8NativeString(txtSaveDirHk.Text))
+                using (var saveDir = new Utf8NativeString(saveDirText))
+                using (var saveDirHk = new Utf8NativeString(saveDirHkText))
                 {
                     LogRet(name, action(saveDir.Pointer, saveDirHk.Pointer));
                 }
             });
+        }
+
+        private static string NormalizeFingerprintUndistortedPath(string path)
+        {
+            var normalized = (path ?? string.Empty).Trim();
+            if (normalized.Length == 0 || Path.HasExtension(normalized))
+                return normalized;
+
+            return Path.Combine(normalized, "fingerprint_undistorted.bmp");
         }
 
         private void RunPreviewDllCallAsync(string name, IntPtr targetHwnd, Func<IntPtr, int> action)

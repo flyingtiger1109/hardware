@@ -32,7 +32,9 @@ namespace HZCYKJTHardWare.Proxy.Parsing
     {
         public string RequestId { get; set; }
         public string ResourceType { get; set; }
+        public string SavePath { get; set; }
         public string ImageBase64 { get; set; }
+        public string UndistortedImageBase64 { get; set; }
         public string ImageMimeType { get; set; }
         public bool Valid { get; set; }
     }
@@ -236,6 +238,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             {
                 var obj = JObject.Parse(bodyUtf8);
                 result.RequestId = obj["request_id"]?.ToString() ?? "";
+                result.SavePath = GetStringField(obj, "save_path") ?? "";
                 if (string.IsNullOrEmpty(result.ResourceType))
                     result.ResourceType = obj["resource_type"]?.ToString() ?? "";
 
@@ -257,6 +260,13 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                         ?? GetStringField(obj, "image_base64")
                         ?? GetStringField(data, "fingerprint_capture")
                         ?? GetStringField(obj, "fingerprint_capture")
+                        ?? "";
+
+                    // Preserve the historical lookup order used by
+                    // SaveUndistortedFingerprintImage: top-level first, then data.
+                    result.UndistortedImageBase64 =
+                        GetStringField(obj, "undistorted_image_base64")
+                        ?? GetStringField(data, "undistorted_image_base64")
                         ?? "";
                 }
                 else if (result.ResourceType == "iris_image")
@@ -294,6 +304,8 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             }
             catch
             {
+                // Preserve the previous malformed-JSON fallback for save_path.
+                result.SavePath = JsonHelper.ExtractString(bodyUtf8, "save_path");
                 result.Valid = false;
             }
             return result;
