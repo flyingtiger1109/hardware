@@ -61,7 +61,18 @@ namespace HZCYKJTHardWare.Proxy.Server
         private static string BuildOcrCallbackBody(string requestId, string mrz,
             string savePath, OcrCallbackResult ocrResult)
         {
-            var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"mrz\":\"{JsonHelper.EscapeString(mrz)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"";
+            var callbackMrz = mrz ?? "";
+            if (ocrResult?.CardType == 30)
+            {
+                callbackMrz = "$" + (ocrResult.CardId ?? "") +
+                    "^" + ocrResult.AuthenScore +
+                    "^" + (ocrResult.Birthday ?? "") +
+                    "^" + (ocrResult.DateOfIssue ?? "") +
+                    "^" + (ocrResult.Name ?? "") +
+                    "^" + (ocrResult.Sex ?? "");
+            }
+
+            var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(requestId)}\",\"mrz\":\"{JsonHelper.EscapeString(callbackMrz)}\",\"save_path\":\"{JsonHelper.EscapeString(savePath)}\"";
             if (ocrResult?.CardType == 30)
             {
                 body += $",\"card_type\":30" +

@@ -84,12 +84,33 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
 
                 Assert.AreEqual(CallbackDeliveryResult.Delivered, result);
                 var body = JObject.Parse(handler.Body);
+                Assert.AreEqual("$A123456(7)^1000^20000101^20260101^CHAN TAI MAN^M",
+                    body["mrz"].Value<string>());
                 Assert.AreEqual(30, body["card_type"].Value<int>());
                 Assert.AreEqual("CHAN TAI MAN", body["name"].Value<string>());
                 Assert.AreEqual("A123456(7)", body["cardId"].Value<string>());
                 Assert.AreEqual("20260101", body["dateOfissue"].Value<string>());
                 Assert.AreEqual(1000, body["authen_score"].Value<int>());
                 Assert.AreEqual(0, body["optical_check_result"].Value<int>());
+            }
+        }
+
+        [TestMethod]
+        public async Task IdCardOcr_MissingFields_PreservesCompatibilitySlots()
+        {
+            var handler = new CapturingHandler();
+            var ocr = new OcrCallbackResult { CardType = 30 };
+            using (var client = new HttpClient(handler))
+            using (var sender = new DllCallbackSender(client, "http://127.0.0.1:39091"))
+            using (var timeout = new CancellationTokenSource(5000))
+            {
+                var result = await sender.SendOcrResult("ocr-id-empty", "ignored", @"C:\ocr",
+                    ocr, timeout.Token);
+
+                Assert.AreEqual(CallbackDeliveryResult.Delivered, result);
+                var body = JObject.Parse(handler.Body);
+                Assert.AreEqual("$^-1^^^^", body["mrz"].Value<string>());
+                Assert.AreEqual(-1, body["authen_score"].Value<int>());
             }
         }
 

@@ -258,11 +258,16 @@ namespace HZCYKJTHardWare.CSharpDemo
             var mrz = ExtractJsonString(json, "mrz");
             var icNumber = ExtractJsonString(json, "ic_number");
             var savePath = ExtractJsonString(json, "save_path");
+            var cardType = resourceType == "ocr_document"
+                ? ExtractJsonInt(json, "card_type", -1)
+                : -1;
 
             Log(string.Format("[事件] 类型={0} 状态={1} 资源={2}", eventType, FormatResultCode(status), FormatResourceType(resourceType)));
             if (!string.IsNullOrEmpty(mrz))
             {
-                Log("  MRZ: " + mrz);
+                Log(cardType == 30 && mrz.StartsWith("$", StringComparison.Ordinal)
+                    ? "  ID卡兼容串: " + mrz
+                    : "  MRZ: " + mrz);
             }
             if (!string.IsNullOrEmpty(icNumber))
             {
@@ -278,7 +283,6 @@ namespace HZCYKJTHardWare.CSharpDemo
             }
             if (resourceType == "ocr_document")
             {
-                var cardType = ExtractJsonInt(json, "card_type", -1);
                 if (cardType == 30)
                 {
                     var authenScore = ExtractJsonInt(json, "authen_score", -1);
