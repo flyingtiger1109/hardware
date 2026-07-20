@@ -49,4 +49,4 @@ private:
     std::vector<std::string> m_candidates;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

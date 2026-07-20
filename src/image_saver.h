@@ -41,4 +41,4 @@ public:
                                      bool createRequestFolder);
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

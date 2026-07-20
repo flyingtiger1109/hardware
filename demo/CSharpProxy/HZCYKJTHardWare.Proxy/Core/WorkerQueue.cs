@@ -7,12 +7,12 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// A task item with terminal switch batch tracking.
+    /// 带终端切换批次信息的任务项。
     /// </summary>
     public class QueueTask<T>
     {
         public T Data { get; set; }
-        public int Generation { get; set; }  // Terminal switch batch when enqueued
+        public int Generation { get; set; }  // 入队时的终端切换批次
         public DateTime EnqueueTime { get; set; }
     }
 
@@ -23,12 +23,12 @@ namespace HZCYKJTHardWare.Proxy.Core
     }
 
     /// <summary>
-    /// Fixed-size worker queue with one dedicated thread.
-    /// - maxLength is the total outstanding limit, including the executing task
-    /// - Replace mode keeps the executing/next task and replaces only a pending task
-    /// - With maxLength=2, the model is one executing plus one latest pending task
-    /// - Terminal switch batch tracking for filtering old requests
-    /// - Statistics: enqueued, dropped, completed, timed out
+    /// 使用单个专用线程的定长工作队列。
+    /// - maxLength 表示未完成任务总上限，包含正在执行的任务
+    /// - Replace 模式保留正在执行或即将执行的任务，仅替换后续等待任务
+    /// - maxLength=2 时，队列模型为 1 个任务执行并保留 1 个最新待执行任务
+    /// - 通过终端切换批次过滤旧请求
+    /// - 统计入队、丢弃、完成和超时数量
     /// </summary>
     public class WorkerQueue<T> : IDisposable
     {
@@ -42,14 +42,14 @@ namespace HZCYKJTHardWare.Proxy.Core
         private volatile bool _disposed;
         private int _stopLogged;
 
-        // Queue using Monitor.Wait/Pulse for blocking consumer (no CPU spin)
+        // 使用 Monitor.Wait/Pulse 阻塞消费线程，避免空闲轮询占用 CPU
         private QueueTask<T>[] _buffer;
         private int _head;
         private int _tail;
         private int _count;
         private bool _executing;
 
-        // Statistics
+        // 队列统计
         private long _enqueued;
         private long _dropped;
         private long _completed;
@@ -92,9 +92,8 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Enqueue a task. Returns false if all outstanding slots are occupied and
-        /// there is no pending task that may be replaced. In replace mode, a new
-        /// request replaces the pending task but never interrupts the executing task.
+        /// 将任务加入队列。全部未完成名额均被占用且不存在可替换的等待任务时返回 false。
+        /// Replace 模式下，新请求仅替换等待任务，不中断正在执行的任务。
         /// </summary>
         public bool Enqueue(T data, int generation)
         {
@@ -119,8 +118,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 {
                     if (_replaceOld && _count > 0)
                     {
-                        // If no task is executing yet, the head item is the protected
-                        // next-to-run task. Replace the first item behind it instead.
+                        // 尚无任务执行时，队首为受保护的下一执行任务，应改为替换其后的第一个任务。
                         var replaceIndex = _executing || _count == 1
                             ? _head
                             : (_head + 1) % _buffer.Length;
@@ -145,7 +143,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 Monitor.Pulse(_lock);  // Wake up worker
             }
 
-            // Complete outside the queue lock so a custom result sink cannot re-enter it.
+            // 在队列锁外完成结果通知，防止自定义结果接收器重入队列锁。
             if (replacedTask != null)
             {
                 TryCompleteTask(replacedTask, "queue_replaced");
@@ -155,7 +153,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Worker loop: blocks on Monitor.Wait when idle, no CPU spin.
+        /// 工作线程循环：空闲时通过 Monitor.Wait 阻塞，不进行 CPU 空转。
         /// </summary>
         private void Run()
         {
@@ -166,7 +164,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 {
                     while (_count == 0 && !_disposed)
                     {
-                        Monitor.Wait(_lock, 1000);  // Wake every 1s to check disposed
+                Monitor.Wait(_lock, 1000);  // 每秒唤醒一次以检查释放状态
                     }
                     if (_disposed) break;
                     if (_count > 0)
@@ -203,9 +201,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                // The HTTP waiter may time out while this item is pending. Do
-                // not start a hardware operation after its caller has already
-                // received a terminal queue result.
+                // HTTP 等待方可能在任务排队期间超时；调用方已收到队列终态后，不再启动硬件操作。
                 var resultSink = task.Data as IQueueResultSink;
                 if (resultSink != null && resultSink.IsQueueResultCompleted)
                 {
@@ -222,8 +218,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                     return;
                 }
 
-                // The queue already owns a dedicated worker thread. Running the handler
-                // directly avoids leaking ThreadPool tasks when a timed-out handler keeps running.
+                // 队列已持有专用工作线程。直接执行处理函数可避免超时处理函数持续运行时遗留 ThreadPool 任务。
                 _handler(task);
                 Interlocked.Increment(ref _completed);
                 sw.Stop();

@@ -85,4 +85,4 @@ public:
     static std::string ExtractPreviewUrl(const std::string& json);
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

@@ -18,15 +18,14 @@
 #include "image_saver.h"
 #include <tlhelp32.h>
 
-// Export function implementations use small body helpers so SEH wrappers do not
-// span C++ object lifetimes.
+// 导出函数通过小型主体辅助函数实现，避免 SEH 包装范围跨越 C++ 对象生命周期
 
 using HZCYKJTHardWare::HzsjkjtContext;
 using HZCYKJTHardWare::PlatePreviewCameraConfig;
 using HZCYKJTHardWare::PlatePreviewChannel;
 using HZCYKJTHardWare::PlatePreviewState;
 
-// (BusyGuard removed — C# Proxy Scheduler handles concurrency)
+// BusyGuard 已移除，并发控制由 C# Proxy Scheduler 负责
 
 struct SwitchPendingScope {
     std::atomic<bool>& flag;
@@ -72,7 +71,7 @@ static std::string LogValue(const char* value, size_t maxLength = 256) {
     return LogValue(std::string(value ? value : ""), maxLength);
 }
 
-// Business queuing is owned exclusively by the C# Proxy Scheduler.
+// 业务排队统一由 C# Proxy Scheduler 管理
 
 class IrisPreviewRestoreWorker {
 public:
@@ -173,6 +172,28 @@ static std::string GenerateSyncRequestId(const char* prefix) {
     char seqBuf[16];
     snprintf(seqBuf, sizeof(seqBuf), "%03d", currentSeq);
     return std::string(prefix) + "_" + HZCYKJTHardWare::PathHelper::GetTimestampString() + "_" + seqBuf;
+}
+
+static std::string GetThirdPartyInputEncoding() {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    auto lock = HZCYKJTHardWare::ReadLock();
+    return ctx.third_party_input_encoding;
+}
+
+static bool NormalizeThirdPartyInput(const char* value,
+                                     const char* fieldName,
+                                     const std::string& encodingMode,
+                                     std::string& result) {
+    if (HZCYKJTHardWare::PathHelper::NormalizeExternalTextToUtf8(
+            value, encodingMode, result)) {
+        return true;
+    }
+
+    LOG_ERROR("输入编码",
+              "第三方输入编码转换失败：field=%s，mode=%s",
+              fieldName ? fieldName : "unknown",
+              encodingMode.c_str());
+    return false;
 }
 
 static std::string ResolveSaveRoot(const char* saveDir) {
@@ -617,8 +638,8 @@ static ExternalPreviewLeaseSnapshot CaptureExternalPreviewLeases() {
 class ExternalPreviewLeaseMonitor {
 public:
     static ExternalPreviewLeaseMonitor& Instance() {
-        // Deliberately process-lifetime: joining a worker from CRT teardown while
-        // the Windows loader lock is held can deadlock. ReleaseSdk stops it explicitly.
+        // 实例保留至进程结束。CRT 清理期间持有 Windows 加载器锁时等待工作线程可能死锁，
+        // 因此由 ReleaseSdk 显式停止线程。
         static ExternalPreviewLeaseMonitor* monitor = new ExternalPreviewLeaseMonitor();
         return *monitor;
     }
@@ -911,6 +932,7 @@ static int InitSdkBody() {
         ctx.fingerprint_capture_timeout_ms = cfg.GetFingerprintCaptureTimeoutMs();
         ctx.ocr_timeout_ms = cfg.GetOcrTimeoutMs();
         ctx.authorize_timeout_ms = cfg.GetAuthorizeTimeoutMs();
+        ctx.third_party_input_encoding = cfg.GetThirdPartyInputEncoding();
 
         ctx.save_default_root = cfg.GetSaveDefaultRoot();
         ctx.save_camera_default_path = cfg.GetCameraDefaultPath();
@@ -933,6 +955,9 @@ static int InitSdkBody() {
         loadPlateConfig(ctx.plate_preview_rj2, PlatePreviewChannel::RJ2);
         loadPlateConfig(ctx.plate_preview_rj3, PlatePreviewChannel::RJ3);
     }
+
+    LOG_INFO("配置管理", "第三方输入编码模式：%s",
+             cfg.GetThirdPartyInputEncoding().c_str());
 
     auto warnInvalidPlateConfig = [&cfg](PlatePreviewChannel channel) {
         const PlatePreviewCameraConfig& config = cfg.GetPlatePreviewConfig(channel);
@@ -1035,10 +1060,9 @@ static int ReleaseSdkBody(bool& canResumeRunning) {
 
     ctx.switch_pending.store(true);
 
-    // Refuse release from a blocked or re-entrant third-party callback before
-    // dismantling the remaining runtime. The caller can retry after it returns.
-    // Mark the operation irreversible before entering Stop so an unexpected
-    // exception cannot incorrectly restore a partially stopped runtime.
+    // 拆除其余运行时资源前，拒绝从阻塞或重入的第三方回调中释放。
+    // 回调返回后调用方可重试。进入 Stop 前将操作标记为不可逆，
+    // 避免异常情况下错误恢复已部分停止的运行时。
     canResumeRunning = false;
     if (!EventDispatcher::Instance().Stop(1000)) {
         canResumeRunning = true;
@@ -1138,7 +1162,7 @@ static int SwitchTerminalBody(int terminalIndex) {
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (terminalIndex <= 0) return HZCYKJTHardWare_RET_TERMINAL_INDEX_INVALID;
 
-    // Same terminal — skip
+    // 目标与当前终端相同，跳过切换
     {
         auto lock = ReadLock();
         if (ctx.current_terminal_index == terminalIndex) {
@@ -1230,10 +1254,17 @@ static int StartProcessBody(const char* saveDir) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
+    std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PROCESS");
 
-    // Build callbacks JSON for async operations
+    // 为异步操作构建回调 JSON
     std::string ocrCallback = BuildCallbackUrl(ctx, "/ocr");
     std::string nfcCallback = BuildCallbackUrl(ctx, "/nfc-card");
     std::string irisCallback = BuildCallbackUrl(ctx, "/iris");
@@ -1254,11 +1285,6 @@ static int StartProcessBody(const char* saveDir) {
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    {
-        auto lock = WriteLock();
-        ctx.process_active = true;
-    }
-
     LOG_INFO("接口", "开始流程已受理");
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1269,25 +1295,22 @@ static int EndProcessBody() {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
-    RequestSessionManager::Instance().CancelAll();
+    const std::string requestId =
+        GenerateSyncRequestId("HZCYKJTHardWare_FLOW_END");
     DelphiProxy proxy(ctx.delphi_server_url);
-    bool ok = proxy.ProcessEnd();
-
-    {
-        auto lock = WriteLock();
-        ctx.process_active = false;
-    }
+    bool ok = proxy.ProcessEnd(requestId);
 
     if (!ok) {
-        LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
+                  requestId.c_str(), ctx.delphi_server_url.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
-    LOG_INFO("接口", "结束流程已处理");
+    LOG_INFO("接口", "结束流程已处理：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
-// ---- 棰勮 ----
+// ---- 预览 ----
 
 static int StartCameraPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
@@ -1712,7 +1735,7 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     return HZCYKJTHardWare_RET_OK;
 }
 
-// ---- 鎶撴媿 ----
+// ---- 采集 ----
 
 static int CaptureCameraImageDirect(const char* saveDir) {
     using namespace HZCYKJTHardWare;
@@ -1720,8 +1743,15 @@ static int CaptureCameraImageDirect(const char* saveDir) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FACE");
-    std::string saveRoot = ResolveCaptureTargetPath(saveDir, true);
+    std::string saveRoot = ResolveCaptureTargetPath(normalizedSaveDir.c_str(), true);
     std::string savePath;
 
     if (IsSwitchPending()) {
@@ -1760,8 +1790,18 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    std::string normalizedSaveDirHk;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir) ||
+        !NormalizeThirdPartyInput(
+            saveDirHk, "saveDirHk", inputEncoding, normalizedSaveDirHk)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP");
-    std::string saveRoot = ResolveCaptureTargetPath(saveDir, false);
+    std::string saveRoot = ResolveCaptureTargetPath(normalizedSaveDir.c_str(), false);
     std::string savePath;
 
     if (IsSwitchPending()) {
@@ -1770,8 +1810,8 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     bool ok;
-    if (saveDirHk != nullptr && saveDirHk[0] != '\0') {
-        std::string saveDirHkRoot = saveDirHk;
+    if (!normalizedSaveDirHk.empty()) {
+        std::string saveDirHkRoot = normalizedSaveDirHk;
         ok = proxy.CaptureFingerprint(requestId, saveRoot, saveDirHkRoot, savePath,
                                       ctx.fingerprint_capture_timeout_ms);
     } else {
@@ -1799,8 +1839,15 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
     int timeoutMs = ctx.face_capture_timeout_ms;
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, saveRoot, timeoutMs);
 
@@ -1858,7 +1905,14 @@ static int RequestOCRDirect(const char* saveDir) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
+    std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, saveRoot, ctx.ocr_timeout_ms);
 
@@ -1916,8 +1970,15 @@ static int RequestNfcCardDirect(const char* saveDir) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string normalizedSaveDir;
+    if (!NormalizeThirdPartyInput(
+            saveDir, "saveDir", inputEncoding, normalizedSaveDir)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
     int timeoutMs = ctx.ocr_timeout_ms;
-    std::string saveRoot = ResolveSaveRoot(saveDir);
+    std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_NFC_CARD, saveRoot, timeoutMs);
 
@@ -1979,19 +2040,30 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
+    const std::string inputEncoding = GetThirdPartyInputEncoding();
+    std::string authZJHM;
+    std::string authZJLB;
+    std::string authGJDQDM;
+    std::string authXM;
+    std::string authXB;
+    std::string authCSRQ;
+    std::string authKADM;
+    if (!NormalizeThirdPartyInput(ZJHM, "ZJHM", inputEncoding, authZJHM) ||
+        !NormalizeThirdPartyInput(ZJLB, "ZJLB", inputEncoding, authZJLB) ||
+        !NormalizeThirdPartyInput(GJDQDM, "GJDQDM", inputEncoding, authGJDQDM) ||
+        !NormalizeThirdPartyInput(XM, "XM", inputEncoding, authXM) ||
+        !NormalizeThirdPartyInput(XB, "XB", inputEncoding, authXB) ||
+        !NormalizeThirdPartyInput(CSRQ, "CSRQ", inputEncoding, authCSRQ) ||
+        !NormalizeThirdPartyInput(KADM, "KADM", inputEncoding, authKADM)) {
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
     int timeoutMs = ctx.authorize_timeout_ms;
-    int httpTimeoutMs = 5000;  // HTTP request to proxy (fast accept, not full signing time)
+    int httpTimeoutMs = 5000;  // Proxy HTTP 请求仅等待快速受理，不覆盖完整签名时长
     std::string requestId = RequestSessionManager::Instance().CreateSession(
         HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
-    std::string authZJHM = ZJHM ? ZJHM : "";
-    std::string authZJLB = ZJLB ? ZJLB : "";
-    std::string authGJDQDM = GJDQDM ? GJDQDM : "";
-    std::string authXM = XM ? XM : "";
-    std::string authXB = XB ? XB : "";
-    std::string authCSRQ = CSRQ ? CSRQ : "";
-    std::string authKADM = KADM ? KADM : "";
     LOG_INFO("授权", "第三方调用授权请求：请求ID=%s，回调地址=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
              requestId.c_str(), LogValue(callbackUrl).c_str(),
              LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
@@ -2067,12 +2139,22 @@ static int RegisterEventCallbackBody(THZCYKJTHardWareEventCallback callback) {
     return HZCYKJTHardWare_RET_OK;
 }
 
+static void LogActiveCallDrainTimeout(int waitMs) {
+    const std::string activeCallDetails =
+        HZCYKJTHardWare::SdkRuntime::Instance().DescribeActiveCalls();
+    LOG_ERROR("接口", "释放SDK等待在途调用超时：active=%d，wait_ms=%d",
+              HZCYKJTHardWare::SdkRuntime::Instance().ActiveCalls(),
+              waitMs);
+    LOG_ERROR("SDK", "ReleaseSdk active call details: %s",
+              activeCallDetails.c_str());
+}
+
 // ============================================================================
-// Exported functions. Keep SEH wrappers outside C++ object lifetimes.
+// 导出函数；SEH 包装范围不得跨越 C++ 对象生命周期
 // ============================================================================
 
 #define HZCY_GUARDED_EXPORT(bodyCall)                                      \
-    if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCall()) return 0; \
+    if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCall(__FUNCTION__)) return 0; \
     int guardedResult = 0;                                                 \
     __try { guardedResult = ((bodyCall) == HZCYKJTHardWare_RET_OK) ? 1 : 0; } \
     __except(EXCEPTION_EXECUTE_HANDLER) { guardedResult = 0; }             \
@@ -2099,7 +2181,7 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_InitSdk(void) {
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_ReleaseSdk(void) {
-    const ULONGLONG startedAt = GetTickCount64();
+    const int activeCallDrainTimeoutMs = 20000;
     bool shouldRelease = false;
     if (!HZCYKJTHardWare::SdkRuntime::Instance().BeginRelease(
             shouldRelease, 5000)) {
@@ -2107,13 +2189,8 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_ReleaseSdk(void) 
     }
     if (!shouldRelease) return 1;
 
-    const ULONGLONG elapsed = GetTickCount64() - startedAt;
-    const int activeWaitMs = elapsed < 3500
-        ? static_cast<int>(3500 - elapsed)
-        : 0;
-    if (!HZCYKJTHardWare::SdkRuntime::Instance().WaitForActiveCalls(activeWaitMs)) {
-        LOG_ERROR("接口", "释放SDK等待在途调用超时：active=%d，wait_ms=%d",
-                  HZCYKJTHardWare::SdkRuntime::Instance().ActiveCalls(), activeWaitMs);
+    if (!HZCYKJTHardWare::SdkRuntime::Instance().WaitForActiveCalls(activeCallDrainTimeoutMs)) {
+        LogActiveCallDrainTimeout(activeCallDrainTimeoutMs);
         HZCYKJTHardWare::SdkRuntime::Instance().CompleteRelease(false, true);
         return 0;
     }
@@ -2226,9 +2303,8 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestAuthorize(
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RegisterEventCallback(
     THZCYKJTHardWareEventCallback callback)
 {
-    // Preserve the historical behavior that permits callback registration
-    // before InitSdk, while still excluding InitSdk/ReleaseSdk races.
-    if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCallbackRegistration()) return 0;
+    // 保留 InitSdk 前允许注册回调的既有行为，同时避免与 InitSdk/ReleaseSdk 发生竞争。
+    if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCallbackRegistration(__FUNCTION__)) return 0;
     int guardedResult = 0;
     __try { guardedResult = (RegisterEventCallbackBody(callback) == HZCYKJTHardWare_RET_OK) ? 1 : 0; }
     __except(EXCEPTION_EXECUTE_HANDLER) { guardedResult = 0; }

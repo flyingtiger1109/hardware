@@ -59,7 +59,7 @@ private:
     std::string m_lastCleanupDate;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束
 
 // 便捷宏
 #define LOG_DEBUG(mod, fmt, ...) HZCYKJTHardWare::Logger::Instance().Debug(mod, __FUNCTION__, fmt, ##__VA_ARGS__)

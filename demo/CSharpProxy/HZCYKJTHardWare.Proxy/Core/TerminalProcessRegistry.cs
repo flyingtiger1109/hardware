@@ -3,29 +3,28 @@ using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace HZCYKJTHardWare.Proxy.Core
 {
     internal enum TerminalProcessState
     {
-        Starting = 0,
-        Active = 1,
-        Stopped = 2,
-        Failed = 3
+        Registering = 0,
+        Confirmed = 1,
+        Retained = 2,
+        Stopped = 3
     }
 
     /// <summary>
-    /// Persistent process subscription owned by one hardware terminal. Unlike a
-    /// one-shot request, one process can produce multiple OCR/NFC callbacks.
+    /// StartProcess 向终端声明的回调路由元数据。
+    /// 此对象不作为本地回调准入开关，EndProcess 不会将其取消。
+    /// 已被替代或未经确认的绑定会短暂保留，以便安全路由终端已经发出的回调。
     /// </summary>
     internal sealed class TerminalProcessSession
     {
         private int _state;
+        private long _retainedAtUtcTicks;
         private readonly CancellationTokenSource _lifetimeCancellation =
             new CancellationTokenSource();
-        private readonly TaskCompletionSource<bool> _activation =
-            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TerminalProcessSession(int terminalIndex, string terminalBaseUrl,
             string processRequestId, string saveDir, int routeGeneration)
@@ -36,7 +35,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             SaveDir = saveDir ?? "";
             RouteGeneration = routeGeneration;
             CreatedAtUtc = DateTime.UtcNow;
-            _state = (int)TerminalProcessState.Starting;
+            _state = (int)TerminalProcessState.Registering;
         }
 
         internal int TerminalIndex { get; }
@@ -45,44 +44,56 @@ namespace HZCYKJTHardWare.Proxy.Core
         internal string SaveDir { get; }
         internal int RouteGeneration { get; }
         internal DateTime CreatedAtUtc { get; }
+        internal DateTime RetainedAtUtc
+        {
+            get
+            {
+                var ticks = Volatile.Read(ref _retainedAtUtcTicks);
+                return ticks > 0 ? new DateTime(ticks, DateTimeKind.Utc) : CreatedAtUtc;
+            }
+        }
         internal TerminalProcessState State =>
             (TerminalProcessState)Volatile.Read(ref _state);
+        internal bool IsRoutable => State != TerminalProcessState.Stopped;
         internal CancellationToken CancellationToken => _lifetimeCancellation.Token;
 
-        internal bool TryActivate()
+        internal bool TryConfirm()
         {
-            if (Interlocked.CompareExchange(ref _state,
-                (int)TerminalProcessState.Active,
-                (int)TerminalProcessState.Starting) !=
-                (int)TerminalProcessState.Starting)
-                return State == TerminalProcessState.Active;
-
-            _activation.TrySetResult(true);
-            return true;
+            return Interlocked.CompareExchange(ref _state,
+                (int)TerminalProcessState.Confirmed,
+                (int)TerminalProcessState.Registering) ==
+                (int)TerminalProcessState.Registering;
         }
 
-        internal async Task<bool> WaitUntilActiveAsync(int timeoutMs)
+        internal bool TryRetain()
         {
-            var state = State;
-            if (state == TerminalProcessState.Active) return true;
-            if (state != TerminalProcessState.Starting) return false;
-
-            var completed = await Task.WhenAny(_activation.Task,
-                Task.Delay(Math.Max(1, timeoutMs))).ConfigureAwait(false);
-            return completed == _activation.Task &&
-                await _activation.Task.ConfigureAwait(false);
+            while (true)
+            {
+                var current = State;
+                if (current == TerminalProcessState.Retained)
+                {
+                    Interlocked.CompareExchange(ref _retainedAtUtcTicks,
+                        DateTime.UtcNow.Ticks, 0);
+                    return true;
+                }
+                if (current == TerminalProcessState.Stopped)
+                    return false;
+                if (Interlocked.CompareExchange(ref _state,
+                    (int)TerminalProcessState.Retained,
+                    (int)current) == (int)current)
+                {
+                    Interlocked.Exchange(ref _retainedAtUtcTicks,
+                        DateTime.UtcNow.Ticks);
+                    return true;
+                }
+            }
         }
 
-        internal void Stop(bool failed)
+        internal void Stop()
         {
-            var target = failed ? TerminalProcessState.Failed : TerminalProcessState.Stopped;
-            var previous = (TerminalProcessState)Interlocked.Exchange(
-                ref _state, (int)target);
-            if (previous == TerminalProcessState.Stopped ||
-                previous == TerminalProcessState.Failed)
+            if ((TerminalProcessState)Interlocked.Exchange(ref _state,
+                (int)TerminalProcessState.Stopped) == TerminalProcessState.Stopped)
                 return;
-
-            _activation.TrySetResult(false);
             try { _lifetimeCancellation.Cancel(); }
             catch (ObjectDisposedException) { }
         }
@@ -90,31 +101,29 @@ namespace HZCYKJTHardWare.Proxy.Core
 
     internal sealed class ProcessStartRegistration
     {
-        internal ProcessStartRegistration(TerminalProcessSession candidate,
-            TerminalProcessSession previous)
+        internal ProcessStartRegistration(TerminalProcessSession candidate)
         {
             Candidate = candidate;
-            Previous = previous;
         }
 
         internal TerminalProcessSession Candidate { get; }
-        internal TerminalProcessSession Previous { get; }
     }
 
     /// <summary>
-    /// Stores long-lived StartProcess bindings separately from RequestRegistry.
-    /// Sessions survive terminal switches and are removed only by replacement,
-    /// EndProcess, shutdown or an explicit start failure.
+    /// 存储 StartProcess 创建的有界回调路由绑定。
+    /// 是否发出回调以终端硬件状态为准；本注册表仅验证请求来源与路由，并对即时传输重试进行去重。
     /// </summary>
     internal sealed class TerminalProcessRegistry : IDisposable
     {
         private static readonly TimeSpan DuplicateEventWindow = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan RetainedBindingWindow = TimeSpan.FromMinutes(10);
+        private const int MaxRetainedBindings = 256;
         private const int MaxRecentEvents = 8192;
 
         private readonly object _sync = new object();
-        private readonly Dictionary<int, TerminalProcessSession> _activeByTerminal =
+        private readonly Dictionary<int, TerminalProcessSession> _currentByTerminal =
             new Dictionary<int, TerminalProcessSession>();
-        private readonly Dictionary<int, TerminalProcessSession> _startingByTerminal =
+        private readonly Dictionary<int, TerminalProcessSession> _registeringByTerminal =
             new Dictionary<int, TerminalProcessSession>();
         private readonly Dictionary<string, TerminalProcessSession> _byRequestId =
             new Dictionary<string, TerminalProcessSession>(StringComparer.Ordinal);
@@ -126,9 +135,14 @@ namespace HZCYKJTHardWare.Proxy.Core
         private long _deliverySequence;
         private int _disposed;
 
-        internal int ActiveCount
+        internal int CurrentCount
         {
-            get { lock (_sync) return _activeByTerminal.Count; }
+            get { lock (_sync) return _currentByTerminal.Count; }
+        }
+
+        internal int BindingCount
+        {
+            get { lock (_sync) return _byRequestId.Count; }
         }
 
         internal ProcessStartRegistration Prepare(int terminalIndex,
@@ -140,17 +154,17 @@ namespace HZCYKJTHardWare.Proxy.Core
 
             lock (_sync)
             {
+                PruneRetainedBindingsLocked(DateTime.UtcNow);
                 if (Volatile.Read(ref _disposed) != 0 ||
-                    _startingByTerminal.ContainsKey(terminalIndex) ||
+                    _registeringByTerminal.ContainsKey(terminalIndex) ||
                     _byRequestId.ContainsKey(processRequestId))
                     return null;
 
-                _activeByTerminal.TryGetValue(terminalIndex, out var previous);
                 var candidate = new TerminalProcessSession(terminalIndex,
                     terminalBaseUrl, processRequestId, saveDir, routeGeneration);
-                _startingByTerminal[terminalIndex] = candidate;
+                _registeringByTerminal[terminalIndex] = candidate;
                 _byRequestId[processRequestId] = candidate;
-                return new ProcessStartRegistration(candidate, previous);
+                return new ProcessStartRegistration(candidate);
             }
         }
 
@@ -162,38 +176,37 @@ namespace HZCYKJTHardWare.Proxy.Core
             lock (_sync)
             {
                 var candidate = registration.Candidate;
-                if (!_startingByTerminal.TryGetValue(candidate.TerminalIndex,
-                    out var current) || !ReferenceEquals(current, candidate))
+                if (!_registeringByTerminal.TryGetValue(candidate.TerminalIndex,
+                    out var current) || !ReferenceEquals(current, candidate) ||
+                    !candidate.TryConfirm())
                     return false;
 
-                _startingByTerminal.Remove(candidate.TerminalIndex);
-                _activeByTerminal.TryGetValue(candidate.TerminalIndex, out previous);
-                _activeByTerminal[candidate.TerminalIndex] = candidate;
+                _registeringByTerminal.Remove(candidate.TerminalIndex);
+                _currentByTerminal.TryGetValue(candidate.TerminalIndex, out previous);
+                _currentByTerminal[candidate.TerminalIndex] = candidate;
                 if (previous != null && !ReferenceEquals(previous, candidate))
-                    _byRequestId.Remove(previous.ProcessRequestId);
+                    previous.TryRetain();
+                PruneRetainedBindingsLocked(DateTime.UtcNow);
             }
-
-            var activated = registration.Candidate.TryActivate();
-            if (previous != null && !ReferenceEquals(previous, registration.Candidate))
-                previous.Stop(false);
-            return activated;
+            return true;
         }
 
-        internal void Rollback(ProcessStartRegistration registration)
+        /// <summary>
+        /// StartProcess 响应未获确认时临时保留回调路由，因为终端仍可能已接受命令。
+        /// 该绑定不会提升为当前保存目录或默认状态。
+        /// </summary>
+        internal void RetainUnconfirmed(ProcessStartRegistration registration)
         {
             if (registration == null) return;
             var candidate = registration.Candidate;
             lock (_sync)
             {
-                if (_startingByTerminal.TryGetValue(candidate.TerminalIndex,
+                if (_registeringByTerminal.TryGetValue(candidate.TerminalIndex,
                     out var current) && ReferenceEquals(current, candidate))
-                    _startingByTerminal.Remove(candidate.TerminalIndex);
-
-                if (_byRequestId.TryGetValue(candidate.ProcessRequestId,
-                    out var mapped) && ReferenceEquals(mapped, candidate))
-                    _byRequestId.Remove(candidate.ProcessRequestId);
+                    _registeringByTerminal.Remove(candidate.TerminalIndex);
+                candidate.TryRetain();
+                PruneRetainedBindingsLocked(DateTime.UtcNow);
             }
-            candidate.Stop(true);
         }
 
         internal bool TryGetByRequestId(string processRequestId,
@@ -205,53 +218,65 @@ namespace HZCYKJTHardWare.Proxy.Core
                 return false;
             }
             lock (_sync)
-                return _byRequestId.TryGetValue(processRequestId, out session);
+            {
+                PruneRetainedBindingsLocked(DateTime.UtcNow);
+                return _byRequestId.TryGetValue(processRequestId, out session) &&
+                    session.IsRoutable;
+            }
         }
 
-        internal bool TryGetActive(int terminalIndex,
+        internal bool TryGetCurrent(int terminalIndex,
             out TerminalProcessSession session)
         {
             lock (_sync)
-                return _activeByTerminal.TryGetValue(terminalIndex, out session) &&
-                    session.State == TerminalProcessState.Active;
+                return _currentByTerminal.TryGetValue(terminalIndex, out session) &&
+                    session.State == TerminalProcessState.Confirmed;
         }
 
-        internal string GetActiveSaveDir(int terminalIndex)
+        internal string GetCurrentSaveDir(int terminalIndex)
         {
-            return TryGetActive(terminalIndex, out var session)
+            return TryGetCurrent(terminalIndex, out var session)
                 ? session.SaveDir
                 : "";
         }
 
-        internal bool IsActive(int terminalIndex)
+        /// <summary>
+        /// 记录终端成功确认 EndProcess，仅更新 UI 和默认状态。
+        /// 请求 ID 绑定仍可用于路由传输中的数据。
+        /// </summary>
+        internal void RecordEndAcknowledged(int terminalIndex)
         {
-            return TryGetActive(terminalIndex, out _);
+            TerminalProcessSession previous = null;
+            lock (_sync)
+            {
+                if (_currentByTerminal.TryGetValue(terminalIndex, out previous))
+                    _currentByTerminal.Remove(terminalIndex);
+                previous?.TryRetain();
+                PruneRetainedBindingsLocked(DateTime.UtcNow);
+            }
         }
 
-        /// <summary>
-        /// Reserve one persistent process event. Exact transport retries within
-        /// two seconds are suppressed, while later legitimate scans remain valid.
-        /// A unique delivery request id prevents the DLL's one-shot de-dup table
-        /// from collapsing multiple events produced by one process id.
-        /// </summary>
         internal bool TryReserveEvent(TerminalProcessSession session,
             string resourceType, string callbackBody, out string deliveryRequestId)
         {
             deliveryRequestId = "";
-            if (session == null || session.State != TerminalProcessState.Active)
+            if (session == null || !session.IsRoutable)
                 return false;
 
             var bodyHash = ComputeSha256(callbackBody ?? "");
             var eventKey = session.ProcessRequestId + "\n" +
                 ProxyResourceTypes.Normalize(resourceType) + "\n" + bodyHash;
-            var nowTicks = DateTime.UtcNow.Ticks;
+            var now = DateTime.UtcNow;
+            var nowTicks = now.Ticks;
             var cutoffTicks = nowTicks - DuplicateEventWindow.Ticks;
             long sequence;
 
             lock (_sync)
             {
-                if (!_activeByTerminal.TryGetValue(session.TerminalIndex,
-                    out var active) || !ReferenceEquals(active, session))
+                PruneRetainedBindingsLocked(now);
+                if (!_byRequestId.TryGetValue(session.ProcessRequestId,
+                    out var mapped) || !ReferenceEquals(mapped, session) ||
+                    !session.IsRoutable)
                     return false;
 
                 PruneRecentEventsLocked(cutoffTicks);
@@ -284,18 +309,68 @@ namespace HZCYKJTHardWare.Proxy.Core
             lock (_sync)
             {
                 var unique = new HashSet<TerminalProcessSession>();
-                foreach (var item in _activeByTerminal.Values) unique.Add(item);
-                foreach (var item in _startingByTerminal.Values) unique.Add(item);
+                foreach (var item in _byRequestId.Values) unique.Add(item);
+                foreach (var item in _currentByTerminal.Values) unique.Add(item);
+                foreach (var item in _registeringByTerminal.Values) unique.Add(item);
                 sessions = new List<TerminalProcessSession>(unique);
-                _activeByTerminal.Clear();
-                _startingByTerminal.Clear();
+                _currentByTerminal.Clear();
+                _registeringByTerminal.Clear();
                 _byRequestId.Clear();
                 _recentEvents.Clear();
                 _recentEventOrder.Clear();
             }
 
             foreach (var session in sessions)
-                session.Stop(false);
+                session.Stop();
+        }
+
+        private void PruneRetainedBindingsLocked(DateTime nowUtc)
+        {
+            var cutoff = nowUtc - RetainedBindingWindow;
+            var removable = new List<TerminalProcessSession>();
+            foreach (var session in _byRequestId.Values)
+            {
+                if (IsCurrentOrRegisteringLocked(session))
+                    continue;
+                if (session.RetainedAtUtc < cutoff)
+                    removable.Add(session);
+            }
+            foreach (var session in removable)
+                RemoveBindingLocked(session);
+
+            if (_byRequestId.Count <= MaxRetainedBindings)
+                return;
+
+            removable.Clear();
+            foreach (var session in _byRequestId.Values)
+            {
+                if (!IsCurrentOrRegisteringLocked(session))
+                    removable.Add(session);
+            }
+            removable.Sort((left, right) =>
+                left.RetainedAtUtc.CompareTo(right.RetainedAtUtc));
+            foreach (var session in removable)
+            {
+                if (_byRequestId.Count <= MaxRetainedBindings)
+                    break;
+                RemoveBindingLocked(session);
+            }
+        }
+
+        private bool IsCurrentOrRegisteringLocked(TerminalProcessSession session)
+        {
+            return (_currentByTerminal.TryGetValue(session.TerminalIndex,
+                        out var current) && ReferenceEquals(current, session)) ||
+                (_registeringByTerminal.TryGetValue(session.TerminalIndex,
+                        out var registering) && ReferenceEquals(registering, session));
+        }
+
+        private void RemoveBindingLocked(TerminalProcessSession session)
+        {
+            if (_byRequestId.TryGetValue(session.ProcessRequestId, out var mapped) &&
+                ReferenceEquals(mapped, session))
+                _byRequestId.Remove(session.ProcessRequestId);
+            session.Stop();
         }
 
         private void PruneRecentEventsLocked(long cutoffTicks)

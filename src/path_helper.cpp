@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "path_helper.h"
 #include "hzsjkjt_context.h"
+#include <algorithm>
 #include <shlobj.h>
 
 namespace HZCYKJTHardWare {
@@ -123,4 +124,77 @@ std::wstring PathHelper::Utf8ToWide(const std::string& str) {
     return result;
 }
 
-} // namespace HZCYKJTHardWare
+bool PathHelper::NormalizeExternalTextToUtf8(const char* value,
+                                             const std::string& encodingMode,
+                                             std::string& result) {
+    result = value ? value : "";
+    if (result.empty()) return true;
+
+    // ASCII 在 UTF-8 与 GBK 中字节完全一致，不需要分配转换缓冲区。
+    const bool asciiOnly = std::all_of(
+        result.begin(), result.end(),
+        [](unsigned char ch) { return ch <= 0x7F; });
+    if (asciiOnly) return true;
+
+    auto isStrictUtf8 = [](const std::string& input) {
+        return MultiByteToWideChar(
+                   CP_UTF8, MB_ERR_INVALID_CHARS,
+                   input.data(), static_cast<int>(input.size()),
+                   nullptr, 0) > 0;
+    };
+
+    if (encodingMode == "utf8" || encodingMode == "auto") {
+        if (isStrictUtf8(result)) return true;
+        if (encodingMode == "utf8") {
+            result.clear();
+            return false;
+        }
+    }
+
+    if (encodingMode != "gbk" && encodingMode != "auto") {
+        result.clear();
+        return false;
+    }
+
+    const int wideLength = MultiByteToWideChar(
+        936, MB_ERR_INVALID_CHARS,
+        result.data(), static_cast<int>(result.size()),
+        nullptr, 0);
+    if (wideLength <= 0) {
+        result.clear();
+        return false;
+    }
+
+    std::wstring wide(static_cast<size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(
+            936, MB_ERR_INVALID_CHARS,
+            result.data(), static_cast<int>(result.size()),
+            wide.data(), wideLength) != wideLength) {
+        result.clear();
+        return false;
+    }
+
+    const int utf8Length = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS,
+        wide.data(), wideLength,
+        nullptr, 0, nullptr, nullptr);
+    if (utf8Length <= 0) {
+        result.clear();
+        return false;
+    }
+
+    std::string utf8(static_cast<size_t>(utf8Length), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8, WC_ERR_INVALID_CHARS,
+            wide.data(), wideLength,
+            utf8.data(), utf8Length,
+            nullptr, nullptr) != utf8Length) {
+        result.clear();
+        return false;
+    }
+
+    result.swap(utf8);
+    return true;
+}
+
+} // HZCYKJTHardWare 命名空间结束

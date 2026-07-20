@@ -42,8 +42,14 @@ public:
     // 转换为宽字符串
     static std::wstring Utf8ToWide(const std::string& str);
 
+    // 将 DLL 外部 char* 输入归一化为 UTF-8。
+    // encodingMode 支持 auto / gbk / utf8；auto 先严格校验 UTF-8，失败后按 CP936 转换。
+    static bool NormalizeExternalTextToUtf8(const char* value,
+                                            const std::string& encodingMode,
+                                            std::string& result);
+
 private:
     PathHelper() = default;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

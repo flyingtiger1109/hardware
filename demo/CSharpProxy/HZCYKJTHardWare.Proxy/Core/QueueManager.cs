@@ -5,17 +5,16 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// Manages all fixed worker queues and terminal switch batch tracking.
-    /// Queues:
-    ///   switchQueue:          1 executing, no pending replacement
-    ///   business queues:      1 executing + 1 latest pending
+    /// 管理所有固定工作队列及终端切换批次。
+    /// 队列模型：
+    ///   switchQueue：仅允许 1 个任务执行，不保留待替换任务
+    ///   业务队列：1 个任务执行，并保留 1 个最新待执行任务
     ///
-    /// Terminal switch is the highest priority. Each switch increments a batch number;
-    /// queued tasks from an older batch are discarded.
+    /// 终端切换具有最高优先级。每次切换递增批次号，旧批次中的排队任务将被丢弃。
     /// </summary>
     public class QueueManager : IDisposable
     {
-        // Terminal switch batch number. Tasks enqueued before the switch are discarded.
+        // 终端切换批次号；切换前入队的任务将被丢弃
         private int _terminalGeneration;
         private volatile bool _switchingTerminal;
         private int _disposed;
@@ -32,8 +31,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         public bool SwitchingTerminal => _switchingTerminal;
 
         /// <summary>
-        /// Increment the terminal generation counter and return the new value.
-        /// Used by SwitchCoordinator during terminal switch.
+        /// 递增终端代次计数器并返回新值，供 SwitchCoordinator 执行终端切换时使用。
         /// </summary>
         public int IncrementGeneration()
         {
@@ -41,14 +39,14 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Set the switching flag. Used by SwitchCoordinator.
+        /// 设置终端切换标志，供 SwitchCoordinator 使用。
         /// </summary>
         public void SetSwitching(bool value)
         {
             _switchingTerminal = value;
         }
 
-        // Accessors for each queue
+        // 各工作队列的访问入口
         public WorkerQueue<object> SwitchQueue => _switchQueue;
         public WorkerQueue<object> FaceCaptureQueue => _faceCapQueue;
         public WorkerQueue<object> FingerprintCaptureQueue => _fingerCapQueue;
@@ -59,10 +57,10 @@ namespace HZCYKJTHardWare.Proxy.Core
 
         public QueueManager()
         {
-            // Switch queue: max 1, highest priority
+            // 切换队列：最大容量为 1，优先级最高
             _switchQueue = new WorkerQueue<object>("切换终端", 1, ExecuteSwitch, false, 30000);
 
-            // Business queues: one executing + one latest pending task.
+            // 业务队列：1 个任务执行，并保留 1 个最新待执行任务
             _faceCapQueue = new WorkerQueue<object>("人脸抓拍", 2, ExecuteFaceCapture, true, 15000);
             _fingerCapQueue = new WorkerQueue<object>("指纹抓拍", 2, ExecuteFingerprintCapture, true, 15000);
             _irisQueue = new WorkerQueue<object>("虹膜抓拍", 2, ExecuteIris, true, 20000);
@@ -74,7 +72,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Enqueue a switch already admitted and versioned by SwitchCoordinator.
+        /// 将已由 SwitchCoordinator 准入并分配版本的切换任务加入队列。
         /// </summary>
         internal bool EnqueueSwitch(SwitchRequest request)
         {
@@ -83,7 +81,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Clear switching flag after switch completes.
+        /// 终端切换完成后清除切换标志。
         /// </summary>
         public void ClearSwitching()
         {
@@ -92,8 +90,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Check if a task belongs to the current terminal switch batch.
-        /// If its batch is stale (< current), the task should be discarded.
+        /// 检查任务是否属于当前终端切换批次。批次号小于当前值时应丢弃该任务。
         /// </summary>
         public bool IsGenerationValid(int taskGeneration)
         {
@@ -113,7 +110,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             );
         }
 
-        // ====== Worker handlers (to be wired by ProxyServer) ======
+        // ====== 工作线程处理函数（由 ProxyServer 绑定）======
 
         public Action<SwitchRequest> SwitchHandler { get; set; }
         public Action<QueueTask<object>> FaceCaptureHandler { get; set; }
@@ -185,8 +182,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 _ocrQueue, _nfcQueue, _authorizeQueue
             };
 
-            // Signal every worker first, then share one global wait budget. This
-            // prevents ten sequential Join(3000) calls from turning into 30 seconds.
+            // 先通知全部工作线程，再共享同一等待时限，避免多次顺序 Join(3000) 累积为过长的关闭等待。
             foreach (var queue in queues)
                 queue?.RequestStop();
 

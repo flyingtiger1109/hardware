@@ -41,6 +41,8 @@ private:
 }
 
 PreviewManager& PreviewManager::Instance() {
+    // 审查风险：不同预览接口可能并发首次调用，裸指针惰性初始化存在重复构造和内存泄漏风险。
+    // 建议使用 C++11 线程安全的函数局部静态初始化，并结合 DLL 卸载顺序确定析构策略。
     if (!g_pPreviewMgr) g_pPreviewMgr = new PreviewManager();
     return *g_pPreviewMgr;
 }
@@ -403,4 +405,4 @@ bool PreviewManager::IsCameraPreviewRunning() const { return m_cameraRunning; }
 bool PreviewManager::IsFingerprintPreviewRunning() const { return m_fingerprintRunning; }
 bool PreviewManager::IsIrisPreviewRunning() const { return m_irisRunning; }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

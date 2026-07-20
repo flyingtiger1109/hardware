@@ -3,8 +3,7 @@
 
 namespace HZCYKJTHardWare {
 
-// DLL -> Delphi HTTP proxy. The exported API layer should not know endpoint
-// details or Delphi response parsing rules.
+// DLL 到 Delphi 的 HTTP 代理；导出 API 层不感知端点细节和 Delphi 响应解析规则
 class DelphiProxy {
 public:
     explicit DelphiProxy(const std::string& baseUrl);
@@ -15,7 +14,7 @@ public:
     bool ProcessStart(const std::string& requestId,
                       const std::string& saveDir,
                       const std::string& callbacksJson = "{}");
-    bool ProcessEnd();
+    bool ProcessEnd(const std::string& requestId, int timeoutMs = 4500);
 
     bool SwitchTerminal(int terminalIndex);
 
@@ -46,7 +45,7 @@ public:
     bool GetFingerprintPreviewUrl(const std::string& requestId, std::string& outPreviewUrl);
     bool GetIrisPreviewUrl(const std::string& requestId, std::string& outPreviewUrl);
 
-    // Legacy server-rendered preview endpoints retained for mixed-version deployment.
+    // 为混合版本部署保留的旧版服务端渲染预览端点
     bool StartCameraPreview(const std::string& requestId,
                             intptr_t thirdPartyHwnd,
                             const std::string& callbackUrl,
@@ -112,4 +111,4 @@ private:
     std::string BuildUrl(const std::string& path) const;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

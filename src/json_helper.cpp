@@ -207,4 +207,4 @@ std::string JsonHelper::BuildJson(const std::map<std::string, std::string>& fiel
     return s;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Storage;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -48,6 +50,69 @@ namespace HZCYKJTHardWare.Proxy.Tests.Storage
                 CollectionAssert.AreEqual(original, File.ReadAllBytes(target));
                 Assert.IsFalse(Directory.EnumerateFiles(directory)
                     .Any(path => path.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)));
+            }
+            finally
+            {
+                DeleteDirectory(directory);
+            }
+        }
+
+        [TestMethod]
+        public void SaveBase64ImageToFile_ConcurrentSamePathWritesRemainComplete()
+        {
+            var directory = CreateTempDirectory();
+            try
+            {
+                var target = Path.Combine(directory, "face.jpg");
+                var payloads = Enumerable.Range(1, 12)
+                    .Select(value => Enumerable.Repeat((byte)value, 512 * 1024).ToArray())
+                    .ToArray();
+                var start = new ManualResetEventSlim(false);
+
+                var tasks = payloads.Select(payload => Task.Run(() =>
+                {
+                    start.Wait();
+                    return FileSaver.SaveBase64ImageToFile(
+                        Convert.ToBase64String(payload), target);
+                })).ToArray();
+
+                start.Set();
+                Task.WaitAll(tasks);
+
+                Assert.IsTrue(tasks.All(task => task.Result == target));
+                var actual = File.ReadAllBytes(target);
+                Assert.IsTrue(payloads.Any(payload => payload.SequenceEqual(actual)));
+                Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
+            }
+            finally
+            {
+                DeleteDirectory(directory);
+            }
+        }
+
+        [TestMethod]
+        public void SaveBase64ImageToFile_TargetTemporarilyLocked_RetriesAndSucceeds()
+        {
+            var directory = CreateTempDirectory();
+            try
+            {
+                var target = Path.Combine(directory, "face.jpg");
+                File.WriteAllBytes(target, new byte[] { 1, 2, 3 });
+                var expected = Enumerable.Repeat((byte)9, 64 * 1024).ToArray();
+                Task<string> saveTask;
+
+                using (new FileStream(target, FileMode.Open, FileAccess.Read,
+                    FileShare.Read))
+                {
+                    saveTask = Task.Run(() => FileSaver.SaveBase64ImageToFile(
+                        Convert.ToBase64String(expected), target));
+                    Thread.Sleep(45);
+                }
+
+                Assert.IsTrue(saveTask.Wait(TimeSpan.FromSeconds(5)));
+                Assert.AreEqual(target, saveTask.Result);
+                CollectionAssert.AreEqual(expected, File.ReadAllBytes(target));
+                Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
             }
             finally
             {

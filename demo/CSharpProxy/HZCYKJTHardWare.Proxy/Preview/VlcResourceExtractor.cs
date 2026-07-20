@@ -7,11 +7,9 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Preview
 {
     /// <summary>
-    /// Extracts embedded VLC libraries to a fixed temp directory at runtime.
-    /// Uses a deterministic directory name (not GUID) so that:
-    ///  - On normal exit: ProcessExit handler cleans up.
-    ///  - On crash/kill: NEXT startup cleans up the orphaned directory before re-extracting.
-    /// This prevents temp directory accumulation over time.
+    /// 运行时将嵌入的 VLC 库提取到固定临时目录。
+    /// 使用确定性目录名而非 GUID：正常退出时由 ProcessExit 处理函数清理；
+    /// 进程崩溃或被终止时，由下次启动在重新提取前清理遗留目录，避免临时目录持续累积。
     /// </summary>
     public static class VlcResourceExtractor
     {
@@ -20,16 +18,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const string VlcDirName = "HZCYKJTHardWare_VLC";
 
         /// <summary>
-        /// Gets the directory where VLC files have been extracted.
-        /// Returns null if extraction hasn't happened yet.
+        /// 获取 VLC 文件提取目录；尚未执行提取时返回 null。
         /// </summary>
         public static string ExtractedDirectory => _extractedDir;
 
         /// <summary>
-        /// Extracts all embedded resources with prefix "vlc." to the fixed temp directory.
-        /// On first run, cleans up any orphaned directory from a previous crash.
-        /// Returns the extraction directory path, or null on failure.
-        /// Thread-safe: only extracts once.
+        /// 将名称以 "vlc." 开头的嵌入资源提取到固定临时目录。
+        /// 首次执行时清理上次异常退出遗留的目录。成功时返回提取目录，失败时返回 null。
+        /// 此方法线程安全，提取操作最多执行一次。
         /// </summary>
         public static string EnsureExtracted()
         {
@@ -54,10 +50,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         return null;
                     }
 
-                    // Use deterministic directory path (not GUID) so crash cleanup works
+                    // 使用确定性目录路径而非 GUID，便于异常退出后的遗留目录清理
                     var tempDir = Path.Combine(Path.GetTempPath(), VlcDirName);
 
-                    // Clean up orphaned directory from previous crash/kill
+                    // 清理上次进程崩溃或被终止后遗留的目录
                     if (Directory.Exists(tempDir))
                     {
                         try
@@ -97,13 +93,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _extractedDir = Path.Combine(tempDir, "vlc");
                     if (!Directory.Exists(_extractedDir))
                     {
-                        // If no "vlc" subdirectory in resources, use tempDir directly
+                        // 资源中不存在 "vlc" 子目录时直接使用 tempDir
                         _extractedDir = tempDir;
                     }
 
                     Logger.Info($"VLC已解压到 {_extractedDir}");
 
-                    // Register graceful cleanup — but also handle crash via startup cleanup above
+                    // 注册正常退出清理；异常退出遗留内容由下次启动清理
                     AppDomain.CurrentDomain.ProcessExit += (s, e) => Cleanup();
 
                     return _extractedDir;
@@ -117,8 +113,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Converts embedded resource name to file path.
-        /// "vlc.libvlc.dll" -> "vlc\libvlc.dll"
+        /// 将嵌入资源名称转换为文件路径。
+        /// 示例："vlc.libvlc.dll" -> "vlc\libvlc.dll"
         /// </summary>
         private static string ResourceNameToPath(string resourceName)
         {
@@ -135,8 +131,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Cleans up the extracted temp directory on graceful shutdown.
-        /// Crash/kill cleanup is handled by EnsureExtracted() on next startup.
+        /// 正常关闭时清理提取目录。崩溃或进程被终止后的遗留目录由下次启动的 EnsureExtracted() 清理。
         /// </summary>
         public static void Cleanup()
         {
@@ -144,6 +139,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             try
             {
+                // 审查风险：资源不含 "vlc" 子目录时 _extractedDir 已是提取根目录，
+                // Path.GetDirectoryName 会返回系统临时目录；递归删除可能误删其他临时文件。
+                // 建议单独保存提取根目录，并仅删除名称严格等于 VlcDirName 的目录。
                 var tempDir = Path.GetDirectoryName(_extractedDir);
                 if (tempDir != null && Directory.Exists(tempDir))
                 {

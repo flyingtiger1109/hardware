@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "config_manager.h"
 #include <algorithm>
+#include <cctype>
 #include "include/HZCYKJTHardWare_types.h"
 #include "logger.h"
 #include "path_helper.h"
@@ -63,7 +64,7 @@ void ParsePlatePreviewCamera(const std::string& plateObj,
         config.stream_channel = 101;
 }
 
-} // namespace
+} // 匿名命名空间结束
 
 int ConfigManager::Load(const std::string& dllDir) {
     // 始终先填充默认值，后续由 JSON 文件中存在的字段覆盖
@@ -109,6 +110,25 @@ int ConfigManager::Load(const std::string& dllDir) {
 }
 
 int ConfigManager::ParseJson(const std::string& json) {
+    if (JsonHelper::HasKey(json, "third_party_input_encoding")) {
+        m_thirdPartyInputEncoding = JsonHelper::GetString(
+            json, "third_party_input_encoding");
+        std::transform(m_thirdPartyInputEncoding.begin(),
+                       m_thirdPartyInputEncoding.end(),
+                       m_thirdPartyInputEncoding.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if (m_thirdPartyInputEncoding != "auto" &&
+            m_thirdPartyInputEncoding != "gbk" &&
+            m_thirdPartyInputEncoding != "utf8") {
+            LOG_ERROR("配置管理",
+                      "third_party_input_encoding 配置无效：value=%s，仅支持 auto/gbk/utf8",
+                      m_thirdPartyInputEncoding.c_str());
+            return HZCYKJTHardWare_RET_CONFIG_INVALID;
+        }
+    }
+
     // delphi_server 配置：字段名保持兼容，当前 DLL 转发到 C# Proxy。
     std::string delphiObj = JsonHelper::GetJsonObject(json, "delphi_server");
     if (!delphiObj.empty()) {
@@ -313,8 +333,7 @@ int ConfigManager::ParseJson(const std::string& json) {
         if (JsonHelper::HasKey(previewObj, "rtsp_transport"))
             m_rtspTransport = JsonHelper::GetString(previewObj, "rtsp_transport");
 
-        // Plate cameras are deliberately flat. Direction-to-camera composition belongs
-        // to the third-party caller, not to the DLL or C# Proxy.
+        // 车牌相机采用扁平化配置。方向与相机的组合关系由第三方调用方维护，不由 DLL 或 C# Proxy 解析。
         std::string plateObj = JsonHelper::GetJsonObject(previewObj, "plate");
         if (!plateObj.empty()) {
             ParsePlatePreviewCamera(plateObj, "cj", m_platePreviewCJ);
@@ -385,6 +404,7 @@ void ConfigManager::ApplyDefaults() {
     m_fingerprintCaptureTimeoutMs = 5000;
     m_ocrTimeoutMs = 10000;
     m_authorizeTimeoutMs = 60000;
+    m_thirdPartyInputEncoding = "auto";
 
     m_saveDefaultRoot = ".\\captures";
     m_cameraDefaultPath = ".\\captures\\camera.jpg";
@@ -441,6 +461,7 @@ int ConfigManager::GetFaceCaptureTimeoutMs() const { return m_faceCaptureTimeout
 int ConfigManager::GetFingerprintCaptureTimeoutMs() const { return m_fingerprintCaptureTimeoutMs; }
 int ConfigManager::GetOcrTimeoutMs() const { return m_ocrTimeoutMs; }
 int ConfigManager::GetAuthorizeTimeoutMs() const { return m_authorizeTimeoutMs; }
+const std::string& ConfigManager::GetThirdPartyInputEncoding() const { return m_thirdPartyInputEncoding; }
 const std::string& ConfigManager::GetSaveDefaultRoot() const { return m_saveDefaultRoot; }
 const std::string& ConfigManager::GetCameraDefaultPath() const { return m_cameraDefaultPath; }
 const std::string& ConfigManager::GetFingerprintDefaultPath() const { return m_fingerprintDefaultPath; }
@@ -490,4 +511,4 @@ int ConfigManager::GetLogFlushIntervalMs() const { return m_logFlushIntervalMs; 
 int ConfigManager::GetLogFlushBatchSize() const { return m_logFlushBatchSize; }
 bool ConfigManager::HasConfigFile() const { return m_hasConfigFile; }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

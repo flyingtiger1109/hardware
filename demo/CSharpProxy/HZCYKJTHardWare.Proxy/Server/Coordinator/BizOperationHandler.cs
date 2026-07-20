@@ -11,10 +11,10 @@ using HZCYKJTHardWare.Proxy.Terminal;
 namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 {
     /// <summary>
-    /// All business operations — fully async.
-    /// Extracted from ProxyServer. Zero GetAwaiter().GetResult() calls.
+    /// 业务操作处理器，全部操作采用异步实现。
+    /// 从 ProxyServer 拆分，内部不调用 GetAwaiter().GetResult()。
     ///
-    /// This is the public API surface that ProxyServer delegates to.
+    /// ProxyServer 的公共 API 转发到此处理器。
     /// </summary>
     public sealed class BizOperationHandler
     {
@@ -30,6 +30,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         private readonly Func<string> _getIrisCallbackUrl;
         private readonly Action<bool> _onProcessStateChanged;
         private readonly SwitchCoordinator _switchCoordinator;
+        private readonly ProcessEndCoordinator _processEndCoordinator;
         private readonly DllCallbackSender _dllCallback;
 
         public class AuthorizeRequestResult
@@ -52,6 +53,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             Func<string> getIrisCallbackUrl,
             Action<bool> onProcessStateChanged,
             SwitchCoordinator switchCoordinator,
+            ProcessEndCoordinator processEndCoordinator,
             DllCallbackSender dllCallback)
         {
             _terminalManager = terminalManager;
@@ -66,10 +68,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             _getIrisCallbackUrl = getIrisCallbackUrl;
             _onProcessStateChanged = onProcessStateChanged;
             _switchCoordinator = switchCoordinator;
+            _processEndCoordinator = processEndCoordinator;
             _dllCallback = dllCallback;
         }
 
-        // ====== Process Control ======
+        // ====== 流程控制 ======
 
         internal async Task<string> StartProcessAsync(string saveDir)
         {
@@ -122,29 +125,22 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 finally
                 {
                     if (!committed)
-                        _processRegistry.Rollback(registration);
+                        _processRegistry.RetainUnconfirmed(registration);
                 }
             }
         }
 
-        internal string EndProcess()
+        internal async Task<string> EndProcessAsync()
         {
-            using (var controlLease = _controlGate.TryEnter("end_process"))
-            {
-                if (controlLease == null)
-                    return "Busy";
-
-                _processRegistry.ClearAll();
-                _terminalManager.ProcessActive = false;
-                _onProcessStateChanged?.Invoke(false);
-                _terminalManager.ProcessSaveDir = "";
-                _requestRegistry.CancelAll();
-                _log("[流程] 流程已结束");
-                return "OK";
-            }
+            var outcome = await _processEndCoordinator.EndCurrentAsync("")
+                .ConfigureAwait(false);
+            if (outcome.Success) return "OK";
+            return outcome.Code == "busy" || outcome.Code == "terminal_switching"
+                ? "Busy"
+                : "Failed";
         }
 
-        // ====== Terminal Switch ======
+        // ====== 终端切换 ======
 
         internal async Task<string> SwitchTerminalAsync(int index)
         {
@@ -157,7 +153,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             return ok ? $"已切换到终端 {index}" : "切换失败";
         }
 
-        // ====== Sync Captures ======
+        // ====== 同步采集 ======
 
         internal async Task<(bool ok, string path)> CaptureFaceAsync(string saveDir)
         {
@@ -295,7 +291,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             return "";
         }
 
-        // ====== Async Resources ======
+        // ====== 异步资源 ======
 
         internal async Task<string> RequestOCRAsync(string saveDir)
         {
@@ -426,7 +422,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 "，出生日期=" + JsonHelper.ToLogValue(birthday));
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.Protocol,
-                _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex),
+                _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex),
                 AppConfig.Instance.GetDllCallbackBaseUrl() + "/authorize", routeEpoch,
                 originalAuthBody))
                 return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "registry full" };
@@ -466,7 +462,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = detail };
         }
 
-        // ====== Previews ======
+        // ====== 预览 ======
 
         private static bool TryResolvePlatePreview(string resourceType,
             out PreviewResourceType previewType, out string plateCode)
@@ -537,7 +533,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             _previewManager.StopPreview(resType, PreviewSessionType.Local);
         }
 
-        // ====== Private Helpers ======
+        // ====== 私有辅助方法 ======
 
         private bool RegisterDirectRequest(string requestId, string resourceType,
             string saveDir, string callbackUrl, TerminalRouteEpochSnapshot routeEpoch,
@@ -547,7 +543,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 return false;
             var terminalIndex = routeEpoch.Route.TerminalIndex;
             if (string.IsNullOrEmpty(saveDir))
-                saveDir = _processRegistry.GetActiveSaveDir(terminalIndex);
+                saveDir = _processRegistry.GetCurrentSaveDir(terminalIndex);
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
             var context = _requestRegistry.Register(requestId, resourceType,
                 PathHelper.SafeResolveSaveDir(saveDir), callbackUrl,

@@ -10,16 +10,16 @@ using HZCYKJTHardWare.Proxy.Terminal;
 namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 {
     /// <summary>
-    /// Orchestrates terminal switch with proper ordering:
-    ///   1. Set switching flag
-    ///   2. Increment generation batch
-    ///   3. Cancel old-generation requests in Registry
-    ///   4. Stop all active previews (preserving restart info)
-    ///   5. Switch terminal in TerminalManager
-    ///   6. Clear switching flag
-    ///   7. Restart previews on new terminal in background
+    /// 按以下顺序协调终端切换：
+    ///   1. 设置切换标志
+    ///   2. 递增代次批次
+    ///   3. 在 Registry 中取消旧代次请求
+    ///   4. 停止全部活动预览并保留重启信息
+    ///   5. 在 TerminalManager 中切换终端
+    ///   6. 清除切换标志
+    ///   7. 在后台使用新终端重启预览
     ///
-    /// Both UI and DLL requests enter through this coordinator.
+    /// UI 与 DLL 请求均通过此协调器进入切换流程。
     /// </summary>
     public sealed class SwitchCoordinator
     {
@@ -42,8 +42,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         public int CurrentGeneration => _queueManager.TerminalGeneration;
 
         /// <summary>
-        /// Atomically captures the terminal route and generation used by one
-        /// admitted operation. A switch cancels the token before changing route.
+        /// 原子捕获单次准入操作使用的终端路由和代次。切换操作在变更路由前取消令牌。
         /// </summary>
         internal bool TryCaptureRoute(out TerminalRouteEpochSnapshot snapshot)
         {
@@ -86,8 +85,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         }
 
         /// <summary>
-        /// Execute a full terminal switch. Returns false if another switch is
-        /// already in progress.
+        /// 执行完整终端切换。已有切换正在进行时返回 false。
         /// </summary>
         public async Task<bool> SwitchToAsync(int terminalIndex)
         {
@@ -100,9 +98,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         }
 
         /// <summary>
-        /// Request a switch from a queue worker (e.g., from DllCommandHandler).
-        /// Sets the switching flag and increments generation. The actual switch
-        /// execution happens on the dedicated switch worker.
+        /// 从队列工作线程请求切换，例如 DllCommandHandler。
+        /// 此方法设置切换标志并递增代次，实际切换由专用切换工作线程执行。
         /// </summary>
         public bool RequestSwitch(int terminalIndex)
         {

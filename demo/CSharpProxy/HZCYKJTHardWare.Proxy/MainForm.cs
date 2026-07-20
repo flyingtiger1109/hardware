@@ -95,24 +95,24 @@ namespace HZCYKJTHardWare.Proxy
             memoLog.Font = _logFont;
             DisableLogUndoBuffer();
 
-            // 1. 设置工具栏安全高度 (稍微加大到 60，给高 DPI 留足垂直空间)
+            // 1. 将工具栏高度设为 60，为高 DPI 缩放预留垂直空间
             panelLogToolbar.Height = 60;
 
-            // 2. 恢复原生勾选状态，并开启 AutoSize 测量真实文字宽高
+            // 2. 使用原生勾选样式，并通过 AutoSize 测量文本实际尺寸
             chkAutoScroll.Appearance = Appearance.Normal;
             chkErrorOnly.Appearance = Appearance.Normal;
             chkAutoScroll.AutoSize = true;
             chkErrorOnly.AutoSize = true;
 
-            // 动态计算需要的宽度和高度！(核心修复：不再写死 32 高度)
+            // 根据控件首选尺寸动态计算宽高，不固定为 32 像素
             int targetHeight = Math.Max(32, chkAutoScroll.PreferredSize.Height + 12);
             int autoWidth = chkAutoScroll.PreferredSize.Width + 16;
             int errWidth = chkErrorOnly.PreferredSize.Width + 16;
 
-            // 3. 动态创建带边框的 Panel 作为包裹外壳
+            // 3. 创建带边框的 Panel 作为复选框容器
             Panel pnlAuto = new Panel
             {
-                Size = new Size(autoWidth, targetHeight), // 宽度和高度全部动态分配
+                Size = new Size(autoWidth, targetHeight), // 宽高均按实际内容动态计算
                 BorderStyle = BorderStyle.FixedSingle,
                 BackColor = Color.White,
                 Padding = new Padding(8, 0, 0, 0)
@@ -134,7 +134,7 @@ namespace HZCYKJTHardWare.Proxy
             chkErrorOnly.Dock = DockStyle.Fill;
             pnlError.Parent = panelLogToolbar;
 
-            // 4. 动态设置右侧按钮的宽度，高度与前面的复选框外壳保持一致
+            // 4. 动态设置右侧按钮宽度，并与复选框容器保持等高
             btnClearLog.AutoSize = true;
             btnExportLog.AutoSize = true;
             int clearWidth = btnClearLog.PreferredSize.Width + 24;
@@ -155,14 +155,14 @@ namespace HZCYKJTHardWare.Proxy
                 btn.BackColor = Color.White;
             }
 
-            // 5. 绝对对齐与锚定 (排队逻辑)
+            // 5. 设置绝对位置和锚定关系
             pnlAuto.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             pnlError.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             btnClearLog.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             btnExportLog.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 
             int gap = 20;
-            // 核心修复：根据实际算出的高度，动态计算 Y 坐标，确保完美垂直居中，绝不触底！
+            // 根据实际高度计算 Y 坐标，使控件垂直居中且不超出工具栏边界
             int alignY = (panelLogToolbar.Height - targetHeight) / 2;
 
             pnlAuto.Location = new Point(16, alignY);
@@ -237,17 +237,17 @@ namespace HZCYKJTHardWare.Proxy
 
         private void ApplyUIPolish()
         {
-            // 1. Card title separators
+            // 1. 卡片标题分隔线
             AddSeparator(cardService);
             AddSeparator(cardOperation);
             AddSeparator(cardPreviewControl);
 
-            // 2. Force 50/50 columns + percent row heights
+            // 2. 固定为等宽双列，并使用百分比行高
             ResetGridStyles(tlpService, 3);
             ResetGridStyles(tlpOperation, 3);
             tlpPreviewControl.Padding = new Padding(8, 6, 8, 8);
 
-            // 3. Video container
+            // 3. 视频容器
             panelPreview.BackColor = Color.FromArgb(249, 250, 251);
             panelPreview.Padding = new Padding(12, 8, 12, 12);
             panelCamera.Margin = new Padding(0, 0, 0, 6);
@@ -487,7 +487,7 @@ namespace HZCYKJTHardWare.Proxy
             };
             btnClearLog.Click += (s, ev) => ClearLog();
             btnExportLog.Click += (s, ev) => ExportLog();
-            // Auto-start server on launch (direct call for immediate listener startup)
+            // 程序启动时自动启动服务，直接调用以立即启动监听器
             btnStartServer_Click(null, null);
         }
 
@@ -688,8 +688,7 @@ namespace HZCYKJTHardWare.Proxy
                 return;
             }
 
-            // Match the v0.9 external-preview behavior: remove the Proxy top-level
-            // window from the taskbar so an embedded child cannot activate it.
+            // 保持 v0.9 外部预览行为：从任务栏移除 Proxy 顶层窗口，避免嵌入子窗口将其激活。
             HideToTray();
         }
 
@@ -883,11 +882,11 @@ namespace HZCYKJTHardWare.Proxy
                 }
                 catch (ObjectDisposedException)
                 {
-                    // The application is shutting down; no UI update is required.
+                    // 应用程序正在关闭，无需更新 UI
                 }
                 catch (InvalidOperationException)
                 {
-                    // The form handle was destroyed while the switch worker completed.
+                    // 切换工作线程完成时窗体句柄已销毁
                 }
                 return;
             }
@@ -1060,7 +1059,7 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
-        // --- Terminal operations ---
+        // --- 终端操作 ---
 
         private async void btnStartProcess_Click(object sender, EventArgs e)
         {
@@ -1126,7 +1125,7 @@ namespace HZCYKJTHardWare.Proxy
             AppendLog("虹膜抓拍已下发, request_id: " + requestId);
         }
 
-        // --- Preview operations ---
+        // --- 预览操作 ---
 
         private async Task<bool> StartLocalPreviewFromUiAsync(
             string resourceType,
@@ -1308,7 +1307,7 @@ namespace HZCYKJTHardWare.Proxy
                 AppendLog("授权下发失败: " + result.Message + ", request_id: " + result.RequestId);
         }
 
-        // --- Logging ---
+        // --- 日志处理 ---
 
         private void AppendLog(string message)
         {
@@ -1401,9 +1400,9 @@ namespace HZCYKJTHardWare.Proxy
                 AppendLogToMemo(sb.ToString());
         }
 
-        private const int MaxActiveLogLines = 3000;  // Realtime window size.
+        private const int MaxActiveLogLines = 3000;  // 实时日志窗口最大行数
         private const int TrimActiveLogLinesBatch = 300;
-        private const int MaxHistoryLogLines = 5000; // Prevent unbounded history prepend memory growth.
+        private const int MaxHistoryLogLines = 5000; // 限制历史日志前插导致的内存增长
 
         private void AppendLogToMemo(string text)
         {
@@ -1446,7 +1445,7 @@ namespace HZCYKJTHardWare.Proxy
             }
             catch
             {
-                // Log area must never crash the program
+                // 日志区域异常不得导致程序退出
             }
         }
 
@@ -1562,7 +1561,7 @@ namespace HZCYKJTHardWare.Proxy
             }
             catch
             {
-                // Undo is not used by the read-only log view; failure is non-fatal.
+                // 只读日志视图不使用撤销功能，禁用失败不影响运行
             }
         }
 
@@ -1643,7 +1642,7 @@ namespace HZCYKJTHardWare.Proxy
             }
         }
 
-        // --- History loading from log file ---
+        // --- 从日志文件加载历史记录 ---
 
         private const int HistoryLoadBatch = 500;
         private const int WM_SETREDRAW = 0x000B;

@@ -24,4 +24,4 @@ public:
 // 工厂函数：创建 libVLC RTSP 渲染器
 std::unique_ptr<IRtspRenderer> CreateLibVlcRtspRenderer();
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

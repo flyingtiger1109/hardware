@@ -124,6 +124,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         public async Task SendPreviewReady(string requestId, string resourceType, IntPtr renderHwnd, IntPtr delphiHostHwnd)
         {
+            // 审查风险：requestId 和 resourceType 未进行 JSON 转义，包含引号或控制字符时会生成无效载荷。
+            // 建议统一调用 JsonHelper.EscapeString，或改用 JSON 序列化器构建载荷。
             var body = $"{{\"request_id\":\"{requestId}\",\"resource_type\":\"{resourceType}\",\"render_hwnd\":{renderHwnd.ToInt64()},\"delphi_host_hwnd\":{delphiHostHwnd.ToInt64()}}}";
             await PostCallbackWithRetry("/preview-ready", body, _shutdown.Token).ConfigureAwait(false);
         }
@@ -131,6 +133,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         public async Task SendAuthorizeResult(string requestId, string authResult, string message,
             string idNo, string docType, string nationality, string name, string sex, string birthday)
         {
+            // 审查风险：requestId 和 authResult 未进行 JSON 转义；建议与其余字符串字段采用相同转义策略。
             var body = $"{{\"request_id\":\"{requestId}\",\"resource_type\":\"authorization\",\"auth_result\":\"{authResult}\"," +
                 $"\"message\":\"{JsonHelper.EscapeString(message)}\"," +
                 $"\"id_no\":\"{JsonHelper.EscapeString(idNo)}\",\"doc_type\":\"{JsonHelper.EscapeString(docType)}\"," +
@@ -244,7 +247,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Post a raw callback payload to a specific path (used by /authorize which sends pre-built payload).
+        /// 将原始回调载荷提交到指定路径，供发送预构建载荷的 /authorize 使用。
         /// </summary>
         public async Task PostCallbackRaw(string path, string bodyUtf8)
         {

@@ -2362,3 +2362,746 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 
 - 本批作为独立 Git 提交；整体回退该提交即可恢复为仅 x86 Proxy 的构建和发布方式。
 - 部署回退只需停止 x64 Proxy 并重新启动原 x86 发布目录，不需要替换 DLL、C# Demo、配置文件或修改第三方调用。
+
+# P1 GC 压力优化：抓拍响应流式解析（方案 B，2026-07-14，已回退）
+
+## 当前阶段
+
+- [x] 2026-07-15 根据约 18 小时真实压力测试结果，停止采用方案 B 并恢复原抓拍响应路径。
+- [x] 人脸、指纹同步抓拍改为 HTTP 响应流直接解析。
+- [x] 去除抓拍成功路径中的完整响应字符串和 `JObject/JToken` 对象树。
+- [x] 保持现有 Base64 流式文件写入、原子覆盖和双终端路由逻辑。
+- [x] 完成 x86/x64 Release 编译和非集成回归测试。
+- [ ] 真实终端短压测和 24～72 小时 GC/内存长稳对比待执行。
+
+## 本次修改内容
+
+1. `TerminalClient` 新增抓拍专用 `PostImageCaptureAsync`，使用 `HttpCompletionOption.ResponseHeadersRead`，不再通过 `ReadAsStringAsync` 缓冲完整成功响应。
+2. 新增 `ImageCaptureStreamParser`，通过 `JsonTextReader` 从终端响应流解析轻量 `ImageCallbackResult`；Base64 字段仍交给现有流式文件写入逻辑。
+3. 保留历史字段优先级：人脸优先 `data.face_capture`；指纹主图优先 `data.image_base64`；无畸变图仍优先根字段；MIME 默认值保持不变。
+4. 非 2xx 响应只读取最多 1024 字节作为日志预览，并继续受抓拍超时/终端批次取消令牌约束，避免响应头返回后错误响应体无限等待。
+5. 指纹主图保存完成后立即解除主 Base64 字符串引用，再处理无畸变图，缩短大字符串存活时间和跨代晋升窗口。
+6. OCR、授权、预览、健康检查等通用 `PostJsonAsync/GetJsonAsync` 未修改，降低本批回归范围。
+
+## 涉及文件
+
+- `Parsing/ImageCaptureStreamParser.cs`：抓拍响应流式轻量解析和历史字段优先级。
+- `Terminal/TerminalClient.cs`：抓拍专用 `ResponseHeadersRead` 请求、超时和错误预览边界。
+- `Server/Coordinator/BizOperationHandler.cs`：人脸/指纹切换至抓拍专用请求路径，并缩短指纹主图字符串生命周期。
+- `HZCYKJTHardWare.Proxy.Tests/Core/ImageCallbackParserTests.cs`：指纹、人脸字段优先级及非法 JSON 尾部兼容测试。
+- `PROGRESS.md`：本阶段实施和验证记录。
+
+## 兼容性说明
+
+- DLL 导出函数、参数、调用约定、结构体、错误码、回调签名：未改变。
+- 第三方 Delphi/C# 调用方式、Proxy 本机 HTTP 路径和 JSON 格式：未改变。
+- 终端请求路径、请求体、字段名、字段优先级、超时配置：未改变。
+- 图片命名、`save_dir/save_dir_hk` 目录或精确文件行为、循环覆盖和原子替换：未改变。
+- x86/x64 Proxy 共用同一托管代码路径；TargetFramework 继续为 `net46`，未新增依赖。
+
+## 风险与注意事项
+
+1. `JsonTextReader` 仍需为每个 Base64 JSON 字段创建一个字符串；本批消除的是完整 HTTP 响应字符串副本和 JSON DOM，并非完全消除 LOH 分配。
+2. 非法 JSON 只能保留解析异常前已经读取到的字段；正常终端 JSON 行为及历史字段优先级已由测试覆盖。
+3. 真正的 Gen0/Gen1/Gen2 降幅取决于终端图片大小和字段组合，不能用单元测试结果替代真实压力数据。
+4. 本批没有使用 `GC.Collect`、大数组对象池或扩大抓拍队列，也没有改变终端硬件串行处理规则，因此不应预期终端 300～700 ms 硬件耗时显著下降。
+5. 工作区原有 `src/http_client.cpp`、`todo.md` 和其他未跟踪文件未被覆盖，也不属于本批修改。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x86|net46`：0 warning，0 error。
+- [x] Proxy + Tests `Release|x64|net46`：0 warning，0 error。
+- [x] x86 非集成回归：92/92 通过。
+- [x] x64 非集成回归：92/92 通过。
+- [x] 新增流式解析定向测试：3/3 通过。
+- [ ] 7 项 `HttpListener` 集成测试：已执行，但测试宿主在 `MockTerminalServer` 初始化时抛出 `PlatformNotSupportedException`，未进入业务断言。
+- [ ] C# Demo + 真实双终端的人脸、普通指纹、无畸变指纹、切换和异常超时：待验证。
+- [ ] 使用相同抓拍频率完成至少 2 小时对照测试，并比较每千次请求的 Gen0/Gen1/Gen2、Private Bytes、Managed Heap、P95/P99 和成功率：待验证。
+- [ ] 24～72 小时长稳：待验证。
+
+## 下一步计划
+
+- [ ] 先使用 x86 版本执行与 2026-07-13 基线相同的压力脚本，确认功能和字段兼容。
+- [ ] 以每千次抓拍为单位比较 GC 次数，重点确认 Gen2/请求是否明显下降；30% 为观察目标，不作为未经实测的结论。
+- [ ] x86 短压测通过后，再使用独立 x64 发布目录执行相同测试，避免混用 VLC 依赖。
+- [ ] 单独复核“停止抓拍后 `ReleaseSdk active=1`”生命周期问题，不与本批 GC 代码合并提交。
+
+## 回退方式
+
+- 本批可作为独立 Git 提交整体回退，不需要回退 x64 发布配置提交 `ffda563a`。
+- 单独恢复 `BizOperationHandler` 的两处调用为 `PostJsonAsync + CallbackParser.ParseImageCapture`，并删除抓拍专用方法和流解析文件，即可恢复原抓拍响应路径。
+
+## 实测结论与回退状态（2026-07-15）
+
+1. x86 方案 B 从 2026-07-14 14:28 至 2026-07-15 08:44 连续运行约 18 小时 15 分钟，功能、双终端隔离、队列和句柄状态正常。
+2. 约 135,146 次抓拍期间，Gen0/Gen1/Gen2 增量分别约为 20,762,107 / 372,170 / 221,094；折合每次抓拍约 153.63 / 2.75 / 1.64 次，未达到降低 GC 压力的目标。
+3. 人脸平均耗时约 144 ms；指纹平均耗时约 720 ms、P95 约 1032 ms，方案 B 未形成可确认的响应时间收益。
+4. 已定向恢复人脸和指纹的 `PostJsonAsync + CallbackParser.ParseImageCapture` 路径，删除 `PostImageCaptureAsync`、`ImageCaptureStreamParser` 及其 3 项专用测试。
+5. 本次回退不涉及 DLL ABI、Proxy HTTP 协议、图片命名和覆盖逻辑，也不回退 P0、x64 独立发布、VLC 目录修复或 `ReleaseSdk active=1` 修复。
+6. 方案 B 的历史记录保留用于后续分析，但不再作为当前版本默认实现。
+
+### 验证状态
+
+- [x] Proxy + Tests `Release|x86|net46`：编译通过，0 warning、0 error；非 Integration 回归 91/91 通过。
+- [x] Proxy + Tests `Release|x64|net46`：编译通过，0 error；非 Integration 回归 91/91 通过。NuGet 漏洞数据源不可访问产生 2 个 `NU1900` 环境警告，不影响本地缓存依赖和生成结果。
+- [ ] 真实终端 2 回退后 30～60 分钟短压测：待执行。
+- [ ] 回退版本 24～72 小时长稳：待执行。
+
+### 后续如需重新验证方案 B
+
+- 如后续需要复现实验，只能在独立分支重新应用方案 B，不应直接替换当前发布目录。
+- 恢复实验时需同时恢复流式解析器、专用终端请求方法、Handler 调用和定向测试，避免形成不完整路径。
+
+# x64 VLC 发布与 ReleaseSdk active=1 修复（2026-07-14）
+
+## 当前阶段
+
+- [x] x64 VLC 改为独立 `vlc-x64` 发布目录，避免与 x86 `vlc` 混用。
+- [x] VLC 加载前增加 PE Machine 校验，错误位数的 DLL 不再交给 `LoadLibraryEx`。
+- [x] `ReleaseSdk` 在途调用等待预算由原来的约 3.5 秒调整为 20 秒。
+- [x] 在途调用增加导出函数名、线程 ID 和调用持续时间诊断。
+- [x] 完成 x86/x64 Proxy、Win32 DLL 隔离编译及非集成回归测试。
+- [ ] 真实 x64 VLC 预览和真实 `active=1` 退出时序待现场验证。
+
+## 本次修改内容
+
+1. x86 构建继续将 x86 VLC 发布到输出目录 `vlc`；x64 构建将 x64 VLC 发布到输出目录 `vlc-x64`，不再把两种架构映射为同一个目录名。
+2. x64 Proxy 优先查找 `vlc-x64`，随后保留对旧 `vlc` 目录的兼容探测；所有候选目录均先读取 `libvlccore.dll` 和 `libvlc.dll` 的 PE Machine，只有与当前进程一致时才加载。
+3. x64 进程要求 `0x8664`，x86 进程要求 `0x014C`；不兼容或无效 PE 文件会被跳过并写入清晰诊断，避免再次出现 Windows error 193。
+4. `ReleaseSdk` 进入 Releasing 后继续拒绝新业务调用，但允许已经进入的调用最多用 20 秒自然退出；正常 `active=0` 时不会增加退出等待。
+5. 每个受保护的 DLL 导出调用在内部记录导出函数名、线程 ID 和开始时间；20 秒仍未退出时记录 `active`、函数名、线程 ID 和 `age_ms`，随后恢复 Running 状态，不强制销毁仍被使用的资源。
+
+## 涉及文件
+
+- `HZCYKJTHardWare.Proxy.csproj`：x86/x64 VLC 输出目录隔离及 SFTP 插件删除路径条件化。
+- `Preview/VlcPreviewPlayer.cs`：架构相关目录优先级、PE Machine 校验和错误架构跳过逻辑。
+- `HZCYKJTHardWare.Proxy.Tests/Preview/PlatePreviewConfigurationTests.cs`：目录优先级和交叉架构 PE 校验回归测试。
+- `src/sdk_runtime.h`、`src/sdk_runtime.cpp`：在途导出调用诊断上下文。
+- `src/exports.cpp`：导出函数名登记、20 秒安全排空和超时诊断。
+- `PROGRESS.md`：本次修改与验证记录。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、`__stdcall` 调用约定、返回值、错误码和回调签名：未改变。
+- Proxy HTTP 路径、请求/响应 JSON、终端协议、配置文件和第三方调用方式：未改变。
+- DLL 和 C# Demo 继续保持 x86；Proxy 仍可分别构建 x86/x64，TargetFramework 继续为 `net46`。
+- x86 发布目录行为不变，仍使用 `vlc`；x64 部署时必须整体复制新输出中的 `vlc-x64`，旧 x86 `vlc` 可以保留但不会被错误加载。
+- `ReleaseSdk` 正常退出路径无新增等待；只有确实存在在途调用时才等待，最长 20 秒。
+
+## 风险与注意事项
+
+1. 若第三方在调用 `ReleaseSdk` 时仍持续执行一个真正卡死的导出调用，`ReleaseSdk` 最长会等待 20 秒后返回失败；这是避免并发释放导致崩溃的安全边界，不会强制终止业务线程。
+2. 20 秒超时后 SDK 恢复 Running，调用方可停止对应业务线程后再次执行 `ReleaseSdk`；日志中的函数名、线程 ID 和 `age_ms` 用于定位未退出调用。
+3. x64 发布包目录名已从输出 `vlc` 改为 `vlc-x64`，部署脚本若只复制固定的 `vlc` 目录，需要同步改为复制整个 x64 输出目录。
+4. PE 校验只能证明 DLL 位数匹配，不能替代真实 RTSP/车牌预览的启动、停止、切换和窗口生命周期验证。
+5. 本次隔离构建未替换或停止正在压力测试的 x86 运行目录和进程。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64|net46`：编译通过，0 warning，0 error。
+- [x] x64 非集成回归：94/94 通过。
+- [x] x64 输出布局：存在 `vlc-x64`，不存在项目发布的 `vlc`；`libvlccore.dll` 和 `libvlc.dll` 均为 `0x8664`；无 `libsftp_plugin.dll`。
+- [x] Proxy + Tests `Release|x86|net46`：编译通过，0 warning，0 error。
+- [x] x86 非集成回归：94/94 通过。
+- [x] x86 输出布局：存在 `vlc`，不存在 `vlc-x64`；两个 VLC 核心 DLL 均为 `0x014C`；无 `libsftp_plugin.dll`。
+- [x] DLL `Release|Win32` 隔离编译：通过，0 warning，0 error；产物为 x86。
+- [x] DLL 导出表：24 个既有导出名称和 stdcall 参数装饰保持不变。
+- [ ] x64 Proxy 真实 VLC 预览：待现场验证。
+- [ ] 停止抓拍后立即退出、存在一个在途抓拍时退出、异常断网时退出：待 C# Demo 验证。
+
+## 下一步计划
+
+- [ ] 使用独立 x64 发布目录验证三路 VLC 预览的启动、停止、重复初始化和 Proxy 正常退出。
+- [ ] 在 C# Demo 中分别验证 `active=0` 正常退出、最后一次抓拍仍在返回时退出以及终端断网时退出。
+- [ ] 若仍出现 20 秒超时，根据新增 `details` 日志直接定位具体导出函数和调用线程，再决定是否需要对该调用增加主动取消，不直接扩大 Release 强制清理范围。
+- [ ] 当前 x86 方案 B 压力测试结束后，对比 Gen0/Gen1/Gen2、Private Bytes、Managed Heap、成功率和 P95/P99。
+
+## 回退方式
+
+- VLC 部分可恢复 `HZCYKJTHardWare.Proxy.csproj` 的 x64 输出映射和 `VlcPreviewPlayer` 的目录/PE 校验逻辑，回到旧的统一 `vlc` 输出行为。
+- Release 部分可恢复 `SdkRuntime` 的无名称计数和 `ReleaseSdk` 原等待预算；不涉及 ABI、配置或数据迁移。
+- 部署回退只需停止新 x64 Proxy 并恢复上一版独立 x64 发布目录；DLL、C# Demo 和配置文件无需迁移。
+
+# DLL 日志 UTF-8 BOM 与授权调用方编码核对（2026-07-15）
+
+## 当前阶段
+
+- [x] 对 x64 Proxy 测试产生的 DLL/EXE 日志执行原始字节级编码检查。
+- [x] 确认 DLL 日志主体为无 BOM UTF-8，仅两条授权日志混入 GBK 姓名字节。
+- [x] 确认姓名原始字节 `B8 DB C2 C3 BF CD B6 FE` 按 GBK 解码为“港旅客二”，乱码在 DLL 导出调用边界已经产生，不是 x64 Proxy 转换导致。
+- [x] 确认仓库 C# Demo 从最初提交起即通过 `Utf8NativeString` 为授权参数分配 UTF-8 非托管内存。
+- [x] Native Logger 在创建空白新日志文件时写入 UTF-8 BOM，初始化和跨日轮转路径均覆盖。
+- [ ] 现场实际调用 Demo/压力工具二进制无法在当前工作机访问，待使用重新生成产物的 SHA-256 核对。
+
+## 本次修改内容
+
+1. Native Logger 打开日志文件后检查实际文件长度；仅当长度为 0 时写入 `EF BB BF`。
+2. 已存在且非空的日志继续原样追加，不在文件中间插入 BOM，也不重写历史日志。
+3. C# Demo 源码无需修改；重新生成 x86 Release 产物并提供哈希用于现场核对。
+4. 未对非 UTF-8 `char*` 自动猜测或转换为 GBK，避免在 DLL ABI 边界引入不确定编码行为。
+
+## 涉及文件
+
+- `src/logger.cpp`：空白新日志文件写入 UTF-8 BOM。
+- `PROGRESS.md`、根目录 `todo.md`：编码事实、兼容性和验证记录。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、调用约定、结构体、错误码和回调签名均未改变。
+- Proxy x86/x64、HTTP 请求/响应、终端协议和授权字段格式均未改变。
+- UTF-8 BOM 仅增加在新日志文件开头的 3 个字节，常规 UTF-8/Unicode 日志查看器可直接识别。
+- C# Demo 仍为 x86，并继续显式传入 UTF-8；不增加 Delphi 示例修改。
+
+## 风险与注意事项
+
+1. BOM 只能解决日志查看器编码识别，不能修复调用方已经传入的 GBK数据。
+2. 当前日期已经存在的非空日志不会补写 BOM；需等跨日创建新文件，或停机后归档旧日志再启动验证。
+3. 如果现场实际调用方继续传入 GBK，授权姓名仍会在 DLL→Proxy→终端链路损坏；必须替换为当前 UTF-8 Demo/调用代码，或后续单独确认是否增加显式编码配置。
+4. 不自动将“看起来像 GBK”的字节转码，避免 ASCII、其他代码页或本来合法 UTF-8 被误判。
+
+## 验证状态
+
+- [x] DLL `Release|Win32`：编译通过，0 warning、0 error；产物保持 x86。
+- [x] C# Demo `Release|x86|net46`：隔离编译通过，0 warning、0 error。
+- [x] C# Demo UTF-8 字节验证：“港旅客二”编码为 `E6 B8 AF E6 97 85 E5 AE A2 E4 BA 8C`，UTF-8 反解一致。
+- [x] 空白日志 BOM、已有日志不重复写 BOM：使用新 DLL 在两个独立 32 位进程连续初始化同一日志，文件头为 `EF BB BF`、BOM 总数为 1、严格 UTF-8 解码通过。
+- [x] 现场核对 SHA-256：C# Demo=`B78D958AEBA52BE0230B92295682BC4B20F0F9B9653F5C1C32244603B59B02E9`；DLL=`6ECC8BD7D2F69CC2272C9A727DF306B606487E445FBB4EF2359B9CA03ECD7C2D`。
+- [ ] 使用“港旅客二”执行真实授权，确认 DLL、EXE、终端回调均保持中文：待现场验证。
+
+## 回退方式
+
+- 删除 `src/logger.cpp` 的 `WriteUtf8BomIfEmpty` 及两个调用点即可恢复无 BOM 日志，不涉及日志数据迁移或业务代码回退。
+
+# DLL 第三方输入编码自动兼容（2026-07-15）
+
+## 当前阶段
+
+- [x] 已确认正式 Delphi 第三方传给 DLL 的 `char*` 参数为 GBK。
+- [x] 已确认 DLL 返回第三方的回调 `eventJson` 继续使用 UTF-8，不做 GBK 转换。
+- [x] 采用方案 C：默认自动识别，同时允许显式强制 `gbk` 或 `utf8`。
+
+## 本次修改内容
+
+1. `HZCYKJTHardWare.json` 新增顶层配置 `third_party_input_encoding`，支持：
+   - `auto`：ASCII 原样使用；非 ASCII 先严格校验 UTF-8，失败后按 Windows CP936/GBK 转为 UTF-8。
+   - `gbk`：将非 ASCII 输入按 CP936/GBK 强制转换为 UTF-8。
+   - `utf8`：严格校验 UTF-8，不合法时返回参数错误。
+2. 配置缺失时默认 `auto`，旧配置文件无需立即迁移。
+3. 在 DLL 公开业务接口边界对输入只归一化一次，覆盖：
+   - `StartProcess`、人脸、指纹、虹膜、OCR、NFC 的路径参数；
+   - `RequestAuthorize` 的 `ZJHM`、`ZJLB`、`GJDQDM`、`XM`、`XB`、`CSRQ`、`KADM`。
+4. 转换失败仅记录字段名和编码模式，不记录原始无效字节；不改变回调编码。
+
+## 涉及文件
+
+- `src/config_manager.h/.cpp`：配置默认值、校验和访问器。
+- `src/path_helper.h/.cpp`：严格 UTF-8 校验及 CP936→UTF-8 转换。
+- `src/hzsjkjt_context.h/.cpp`：运行期只读编码模式及 Release 重置。
+- `src/exports.cpp`：公开业务接口输入边界归一化。
+- `HZCYKJTHardWare.json`：默认设置为 `auto`。
+- `todo.md`、本文件：实施和验证记录。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、`__stdcall`、结构体、返回值、错误码和回调签名均未改变。
+- DLL 内部文本、日志、DLL→Proxy HTTP/JSON、Proxy→终端协议以及第三方回调继续统一为 UTF-8。
+- C# Demo 继续传入 UTF-8；默认 `auto` 可直接识别，无需修改源码。
+- 正式 Delphi 第三方可使用默认 `auto`，也可在部署确认后设置为 `gbk` 获得确定性转换。
+- 未修改 Delphi 示例源码及两份 Delphi Demo 配置副本；缺少新字段时自动使用 `auto`。
+
+## 风险与注意事项
+
+1. `char*` 不携带编码元数据；`auto` 采用“严格 UTF-8 优先”规则，极少数恰好构成合法 UTF-8 的 GBK 字节序列理论上仍可能误判。
+2. 正式部署调用方已明确固定为 GBK 时，建议将配置设为 `gbk`，消除自动识别歧义；C# Demo 测试环境保持 `auto` 或 `utf8`。
+3. `gbk` 模式不能用于传入 UTF-8 中文的调用方，否则 UTF-8 字节会被当作 CP936 转换。
+4. `utf8` 模式收到 GBK 中文时会在发起 HTTP 请求前返回失败，并记录字段名，不会把损坏文本发送给 Proxy。
+
+## 验证状态
+
+- [x] `git diff --check`：无空白错误。
+- [x] DLL `Release|Win32`：编译通过，0 warning、0 error。
+- [x] x86 假 Proxy 运行验证：`auto+GBK`，中文路径与“港旅客二”均以严格 UTF-8 到达 HTTP 请求体。
+- [x] x86 假 Proxy 运行验证：`auto+UTF-8`，中文路径与姓名保持不变。
+- [x] x86 假 Proxy 运行验证：`gbk+GBK` 与 `utf8+UTF-8` 均通过。
+- [x] 删除配置字段后验证默认行为：按 `auto` 成功处理 GBK。
+- [ ] 正式 Delphi 第三方 + 真实 Proxy + 终端授权全链路：待现场验证。
+- [ ] 中文保存路径的人脸、指纹、OCR、NFC 文件落盘：待现场验证。
+
+## 下一步计划
+
+- [ ] 正式环境先使用 `auto` 复测日志中的“港旅客二”，确认 DLL 与 EXE 日志均为正常中文。
+- [ ] 若正式第三方始终固定 GBK，将生产配置锁定为 `gbk` 后执行 24～72 小时长稳测试。
+
+## 回退方式
+
+- 配置回退：将 `third_party_input_encoding` 设置为 `utf8`，即可恢复只接受 UTF-8 的行为。
+- 代码回退：移除配置字段、上下文字段、`NormalizeExternalTextToUtf8` 和各导出入口归一化调用；不涉及 ABI、数据文件或 Proxy 回退。
+
+# Start/End 终端推送控制语义修正（2026-07-15）
+
+## 当前阶段
+
+- [x] `Start/End` 定义修正为“通知终端开始/停止向回调地址推送数据”。
+- [x] Proxy 不再把本地 Session 状态作为回调接收开关。
+- [x] DLL 不再在 `EndProcess` 时取消独立 OCR/NFC/虹膜/授权请求，也不再用 `process_active` 拒绝流程回调。
+- [x] 预览、人脸抓拍和指纹抓拍仍与 `Start/End` 完全独立。
+- [ ] 真实双终端、真实 VLC 预览及 24～72 小时长稳待现场执行。
+
+## 本次修改内容
+
+1. `ProcessEndCoordinator` 每次都把当前调用的 `request_id` 同步转发到当前终端，并继续校验 HTTP 202、`status=accepted` 和一致的响应 `request_id`。
+2. 删除 `EndUnknown`、结束前回调围栏以及 `RequestRegistry.CancelByTerminal`；End 失败或超时不建立本地阻塞状态，后续可直接再次 Start 或 End。
+3. `TerminalProcessRegistry` 改为有界的回调路由记录：End 成功只清除当前/UI 默认状态，不删除原 `request_id` 路由；在途回调仍可按来源终端和请求标识转交。
+4. 已被新 Start 替代以及 Start 响应未确认的路由保留 10 分钟，最多保留 256 条；按当前 15～30 秒一个业务的频率，正常窗口约保留 20～40 条。
+5. Start 请求发出后立即建立路由，不等待同步响应才允许匹配；若终端实际受理但响应丢失，后续合法回调仍能被处理。
+6. DLL `EndProcessBody` 删除 `RequestSessionManager.CancelAll()`；`EventDispatcher` 删除 `process_active` fallback 门禁，`process_active` 内部字段一并移除。
+7. 保留回调来源 IP、`request_id`、资源类型和当前终端路由检查；这些属于安全与双终端隔离，不属于 Start/End 接收开关。
+8. 测试 Mock 回调监听地址改为实际使用的 `127.0.0.1`，终端路由测试从运行配置读取终端地址，消除测试顺序污染。
+
+## 涉及文件
+
+- `Core/TerminalProcessRegistry.cs`、`Core/RequestRegistry.cs`：回调路由保留、容量边界和取消语义修正。
+- `Server/Coordinator/ProcessEndCoordinator.cs`：End 纯终端控制转发与响应校验。
+- `Server/TerminalCallbackHandler.cs`：移除本地流程激活等待，保留来源与路由校验。
+- `Server/DllCommandHandler.cs`、`Server/Coordinator/BizOperationHandler.cs`、`Server/ProxyServer.cs`、`Server/Runtime/*`：接入新路由语义和指标名称。
+- `src/exports.cpp`、`src/event_dispatcher.cpp`、`src/hzsjkjt_context.*`、`src/request_session_manager.*`：DLL 侧取消和本地活动门禁修正。
+- `HZCYKJTHardWare.Proxy.Tests`：End 后流程回调、独立 NFC 回调、路由保留和双终端回归。
+
+## 兼容性说明
+
+- Delphi/DLL 导出函数名、参数、`__stdcall`、结构体、错误码和回调签名未改变。
+- DLL 仍为 Win32/x86；Proxy 仍按 x64 独立进程部署，DLL 与 Proxy 的本机 HTTP 路径和 JSON 格式未改变。
+- `HZCYKJTHardWare_EndProcess(void)` 外部签名保持不变；DLL 内部仍生成 `request_id` 并同步等待 Proxy/终端结果。
+- Preview、同步人脸/指纹抓拍、图片落盘和 VLC 生命周期未与 Start/End 绑定。
+- 未增加新依赖、后台 End 重试、全局业务锁、对象池或批处理。
+
+## 风险与注意事项
+
+1. 终端是停止“新回调产生”的唯一状态源；End 后已在网络或处理队列中的合法回调仍会转交第三方，这是本次明确要求的行为。
+2. 为避免跨终端数据混淆，切换到另一终端后，旧终端迟到回调仍会被当前终端路由检查拒绝；End 本身不会触发此拒绝。
+3. Proxy 重启会丢失内存中的 `request_id` 路由，重启前已经在途的流程回调可能无法匹配；本次没有改变部署或持久化协议。
+4. 路由保留为 10 分钟/256 条的有界缓存；如果真实设备可能在十分钟后才发送某一流程回调，需要根据设备实测延长，但不能改成无界保存。
+5. 终端文档“请求体字段无”与示例中的 `request_id` 仍有矛盾；当前继续按示例和必填响应字段实施。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64|net46` 隔离输出编译：0 error；仅 1 个 `NU1900` 环境警告。
+- [x] x64 MSTest：104/104 通过，包含 End 后流程回调和独立 NFC 回调两项新增集成测试。
+- [x] DLL `Release|Win32`：编译通过，0 warning、0 error。
+- [x] DLL 导出检查：24 项导出仍存在；`StartProcess@4`、`EndProcess@0`、`SwitchTerminal@4` 保持不变。
+- [ ] 正式 Delphi + 真实双终端 Start/End 推送控制：待验证。
+- [ ] End 后在途 OCR/NFC/虹膜/授权回调及双终端切换竞争：待真实设备验证。
+- [ ] x64 VLC 三路预览、抓拍延迟基线和 24～72 小时长稳：待验证。
+
+## 下一步计划
+
+- [ ] 真实终端验证：未 Start 时抓拍/预览正常；Start 后开始推送；End 后停止产生新推送；End 后在途回调仍能到达第三方。
+- [ ] 覆盖 End 400、超时、响应丢失、重复 End，以及失败后立即 Start/End。
+- [ ] 双终端交替 1000 个业务循环，确认旧终端回调不会污染当前终端且抓拍延迟无回退。
+- [ ] 完成 2 小时短稳后再执行 24～72 小时长稳，记录路由缓存数量、请求数量、内存、GC、线程、句柄和磁盘趋势。
+
+## 回退方式
+
+- 本次语义修正可按上述文件整体回退；无需修改 Delphi 代码、DLL ABI、终端协议或配置格式。
+- x64 部署回退仍按原方案停止 x64 Proxy，恢复上一版 Proxy 与对应 VLC 目录。
+
+# x86 DLL + x64 Proxy 全流程长稳测试工具（2026-07-16）
+
+## 当前阶段
+
+- [x] 按方案 B 新增独占运行的全流程测试脚本，模拟 Delphi 单客户端的真实同步调用方式。
+- [x] 测试宿主固定为 x86/STA，加载 Win32 DLL；Proxy 单独以 x64 进程运行。
+- [x] 每个业务周期覆盖终端切换、Start、15～20 秒高频抓拍、End 和周期间隔。
+- [x] 预览跨 Start/End 持续运行，并增加 End 后主动人脸/指纹抓拍，验证抓拍不依赖流程状态。
+- [x] 增加调用、周期、回调、资源指标和最终汇总五类 CSV。
+- [ ] 真实双终端 2 小时短稳及 24～72 小时长稳：待现场执行并分析输出。
+
+## 本次修改内容
+
+1. 新增 `scripts/stress_test_full_flow.ps1`：
+   - 自动进入 x86 STA Windows PowerShell，并校验 DLL PE 为 x86、目标/运行中 Proxy PE 为 x64；
+   - 默认每 15～30 秒一个业务周期，每周期高频抓拍 15～20 秒，双终端逐周期交替；
+   - 每周期真实调用 `SwitchTerminal`、`StartProcess` 和 `EndProcess`；Start 结果不确定时仍执行 End 清理；
+   - 相机和指纹预览在首次 Start 前启动并跨周期保留；
+   - 默认每周期 End 后各执行一次人脸和指纹抓拍，单独标记为 `PostEndCapture`；
+   - OCR、NFC、虹膜和授权为显式可选项，可按周期提交并采集回调；
+   - 识别失败回调以及 End 宽限期后到达的终端流程推送，预览事件不计入该违规指标；
+   - 每分钟记录 Proxy/测试宿主 CPU、工作集、私有内存、线程、句柄、GC 内存和磁盘余量；
+   - 成功抓拍默认不逐条输出控制台，调用 CSV 每 1000 条、周期每 10 条、回调每 50 条、资源指标每条落盘。
+2. 修正 `scripts/stress_test_dll.ps1` 的指纹 P/Invoke，使其与公开 ABI 一致，传入 `saveDir` 和 `saveDirHk` 两个参数；旧脚本默认第二参数为 `null`，维持原压测行为。
+3. 新脚本检测 DLL 回调端口占用，防止与 Delphi 第三方或另一 DLL 测试宿主同时操作 Proxy/终端状态。
+
+## 涉及文件
+
+- `scripts/stress_test_full_flow.ps1`：新增全流程长稳测试驱动和 CSV 指标采集。
+- `scripts/stress_test_dll.ps1`：修正指纹抓拍 P/Invoke 双参数签名。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`：记录测试范围、兼容性及验证状态。
+
+## 兼容性说明
+
+- 未修改 DLL 导出函数、参数、`__stdcall`、回调签名、返回值和错误码。
+- 未修改 Proxy HTTP API、终端 API、配置格式和第三方调用行为。
+- Delphi 第三方程序仍为 x86；测试脚本只是独立替代调用方，不能与第三方程序并行执行。
+- Proxy 使用 x64；脚本启动前和连接现有进程时都会检查其 PE 架构，拒绝误用 x86 Proxy。
+- Start/End 仅用于通知终端开始/停止主动推送；预览与主动抓拍不使用本地流程门禁。
+
+## 风险与注意事项
+
+1. 本脚本会真实切换终端、启动/结束采集流程并覆盖抓拍文件，必须独占测试电脑上的 DLL/Proxy/终端调用链。
+2. OCR、NFC、虹膜和授权默认关闭，只有现场具备对应介质、终端状态和合法测试数据时再显式启用；异步请求受理不等于一定产生成功回调。
+3. End 后保留 250ms 默认宽限期，用于区分已在途数据和新的终端推送；是否需要调整应依据终端时间分布，不应直接设为 0。
+4. 抓拍不自动重试，失败会原样计数；增加重试会改变真实压力并可能掩盖设备 busy/timeout。
+5. 当前已经启动的 PowerShell 测试进程不会热加载脚本后续修改；需在安全完成并 Release 后重新启动，才能覆盖 End 后主动抓拍等最新逻辑。
+
+## 验证状态
+
+- [x] `stress_test_full_flow.ps1` 与 `stress_test_dll.ps1`：Windows PowerShell 语法解析通过。
+- [x] 新脚本 `-ValidateOnly`：自动切换 x86/STA、x86 DLL 全部 P/Invoke 编译、x64 Proxy PE 校验通过。
+- [x] 旧脚本 `-ValidateOnly`：x86 DLL PE 和修正后的 P/Invoke 编译通过。
+- [ ] 真实设备功能验证：待验证。
+- [ ] 双终端切换、End 后主动抓拍和 End 后流程推送边界：待验证。
+- [ ] 2 小时短稳及 24～72 小时资源趋势：待验证。
+
+## 下一步计划
+
+- [ ] 先运行 10～30 分钟基线：只启用预览、Start/End、高频人脸/指纹和 End 后抓拍。
+- [ ] 基线无流程错误后，按现场条件加入 `-EnableOcr -EnableNfc -EnableIris -EnableAuthorize`。
+- [ ] 先分析 `full_flow_summary/cycles/calls/callbacks/metrics`，再决定是否进入 24～72 小时长稳。
+
+## 回退方式
+
+- 删除 `scripts/stress_test_full_flow.ps1` 即可移除新测试工具。
+- 将旧脚本指纹 P/Invoke 和包装调用恢复为单参数即可回退该脚本修正；业务 DLL、Proxy 和第三方部署均无需回退。
+
+# x64 Proxy 句柄来源隔离验证（2026-07-16）
+
+## 当前阶段
+
+- [x] 已通过独立负载将句柄增长定位到“预览开启时切换终端”的预览/VLC 生命周期。
+- [x] 已排除静置、`Start/End`、固定终端高频抓拍、无预览终端切换是主要句柄增长源。
+- [ ] Proxy 生产代码尚未修改；预览线程生命周期优化等待方案确认。
+
+## 本次测试工具修改
+
+1. `scripts/stress_test_full_flow.ps1` 新增 `WorkloadMode`：
+   - `Idle`：仅初始化和资源采样；
+   - `SwitchOnly`：仅重复选择/切换终端；
+   - `CaptureOnly`：固定终端执行 `Start -> 高频抓拍 -> End`，不切换终端；
+   - `FullFlow`：保留原有默认整流程行为。
+2. 新增 `SwitchIntervalSeconds` 和 `RestartProxy`，用于控制切换频率并保证每组测试从全新的 x64 Proxy 进程开始。
+3. 新增 `scripts/get_process_handle_type_counts.ps1`，只读统计指定进程的 Windows 句柄类型，用于区分 `Thread`、`Event`、`File` 等资源。
+
+## 隔离验证结果
+
+| 负载 | 时长/规模 | 预览 | 主要结果 |
+|---|---:|---:|---|
+| Idle | 3 分钟 | 关闭 | 句柄 553 起步，随后稳定并下降至约 536；无线性增长 |
+| 同终端 SwitchOnly | 99 次 | 关闭 | 全部成功，句柄最终低于预热值 |
+| 双终端交替 SwitchOnly | 99 次 | 关闭 | 句柄在 575～599 波动并有批量回收，无按切换次数持续累积 |
+| 双终端交替 SwitchOnly | 99 次 | 相机+指纹 | 预热后句柄从 712 增至 942，约 `+230`；趋势约 `+37.4/min` |
+| 固定终端 CaptureOnly | 818 次调用 | 关闭 | 395 次人脸、395 次指纹全部成功；句柄趋势约 `-0.75/min` |
+| 单次预览打开/关闭 | 1 次 | 相机+指纹 | 有一次性资源抬升，但频率远低于切换时重复重建，不是当前主要增长源 |
+
+句柄类型快照对照：预览切换组约有 242 个 `Thread` 句柄，抓拍基线约 39 个，相差约 203 个；`203 / 99 = 2.05` 个 `Thread` 句柄/次切换。该数值与整流程压力测试观察到的约 2.1～2.3 个句柄/次切换一致。
+
+## 代码交叉验证
+
+1. `Preview/VlcPreviewController.cs` 每个控制器创建一个专用 STA `Thread`。
+2. `PreviewManager.StopAllCore(preserveRestartInfo: true)` 在切换时释放两路播放器，然后 `RestartPreviewsOnTerminalSwitch` 为新终端重新创建控制器。
+3. `VlcPreviewController.DisposeAsync` 当前等待“停止动作执行完毕”，但没有等待专用线程的 `ThreadMain` 真正退出，也没有 `Join`/线程退出完成信号。
+4. `_restartInfo` 保存完整 `PreviewSession`，其中仍包含已经释放的 `Player` 引用，延长旧控制器和 `Thread` 对象的可达时间。
+
+因此当前证据支持的精确结论是：增长路径位于预览/VLC 线程生命周期；其中管理线程未被同步等待退出、已释放控制器被短期保留是直接优化点。是否还包含 libVLC 内部线程延迟回收，需要修正后用同一测试做 A/B 才能最终区分。
+
+## 兼容性说明
+
+- 未修改 DLL 导出名称、参数、调用约定、返回值、错误码或回调签名。
+- 未修改 DLL/Proxy HTTP API、终端 API、配置文件和第三方调用行为。
+- `Start/End` 与预览/主动抓拍的既有独立语义保持不变。
+- 测试脚本新增参数均有默认值；原 `FullFlow` 调用方式保持兼容。
+
+## 建议优化顺序
+
+1. P0 最小修正：为 `VlcPreviewController` 增加线程退出完成信号，`DisposeAsync` 有界等待线程真正退出；释放后清空旧 `Player` 引用，并将重启信息改为不持有控制器的轻量数据。
+2. P1 结构优化：每个预览资源保留一个长生命周期 STA 工作线程，切换终端时在线程内替换媒体/URL，不再每次销毁和创建控制器线程。
+3. P1 防护：同终端重复选择直接返回；短时间连续切换做合并，避免无意义重启。不得用强制 `GC.Collect` 或延时休眠代替生命周期修复。
+
+## 验证状态
+
+- [x] Windows PowerShell 语法解析与四种 `ValidateOnly` 模式通过。
+- [x] x64 Proxy 真实双终端隔离测试完成。
+- [x] 高频人脸/指纹抓拍实时性基线通过：0 次失败；人脸 P95 约 162ms，指纹 P95 约 310ms。
+- [x] 句柄类型快照与代码生命周期交叉验证完成。
+- [ ] 生产代码修正、编译和单元测试：未执行，等待确认。
+- [ ] 修正后 99 次预览切换 A/B、2 小时短稳及 24～72 小时长稳：待验证。
+
+## 回退方式
+
+- 本次仅扩展测试工具，没有业务代码回退需求。
+- 如需回退测试工具，移除 `WorkloadMode`、`SwitchIntervalSeconds`、`RestartProxy` 及三个隔离分支，并删除 `scripts/get_process_handle_type_counts.ps1`；原默认 `FullFlow` 行为不受影响。
+
+# 预览句柄释放方案 A 实施与 A/B 验证（2026-07-16）
+
+## 当前阶段
+
+- [x] 已实施预览线程有界退出等待和轻量重启信息。
+- [x] 已完成 x64 Release 编译、单元测试和真实双终端预览切换验证。
+- [ ] 句柄净增长未达到验收标准，等待确认是否进入固定 STA 线程复用方案。
+
+## 本次修改内容
+
+1. `VlcPreviewController.DisposeAsync` 改为等待 `ThreadMain` 的 `finally` 完成，不再只等待停止动作执行。
+2. 启动超时和启动异常路径统一进入有界释放流程。
+3. 重复、并发释放共享同一个线程退出结果，避免首次调用后其他调用方直接返回。
+4. 增加创建线程数、活动线程数和退出超时数诊断日志。
+5. `_restartInfo` 改为轻量 `PreviewRestartInfo`，不再持有旧 `Player`、控制器和 `Thread` 引用。
+6. 测试脚本兼容 x86 测试宿主启动并校验 x64 Proxy；外部已有进程仍执行严格路径和 PE 架构校验。
+
+## 涉及文件
+
+- `Preview/VlcPreviewController.cs`：线程退出信号、幂等释放、异常路径释放和诊断计数。
+- `Preview/PreviewManager.cs`：轻量 `PreviewRestartInfo`。
+- `HZCYKJTHardWare.Proxy.Tests/Preview/PreviewRestartInfoTests.cs`：验证重启信息不保留播放器或会话。
+- `scripts/stress_test_full_flow.ps1`：修正 x86 PowerShell 无法读取 x64 进程模块路径时的自启动进程校验。
+
+## 兼容性说明
+
+- DLL 导出函数、参数、调用约定、结构体、错误码和回调格式均未修改。
+- DLL/Proxy HTTP 协议、终端 API、配置和第三方调用方式均未修改。
+- DLL 继续使用 x86；本次 Proxy 验证构建为 x64 Release、目标框架 `net46`。
+
+## 验证结果
+
+- [x] Proxy x64 Release：0 warning、0 error。
+- [x] Tests x64 Release：编译成功；仅有 NuGet 漏洞源不可访问的 `NU1900`，不影响编译。
+- [x] 新增测试：2/2 通过。
+- [x] 全量测试：96 项通过；10 项 Integration 因 x64 测试宿主构造 `HttpListener` 抛出 `PlatformNotSupportedException` 未执行，与本次预览修改无关。
+- [x] 真实双终端预览切换：89 次切换、97 次 DLL 调用、0 失败。
+- [x] 线程退出超时：0 次。
+- [ ] 句柄指标未通过：预览前 541，预热后约 678，峰值 896，停止预览后 862；后半段趋势约 `+59.29/min`。
+- [ ] 空闲 3 分钟后总句柄约 774，仍有 211 个 `Thread` 句柄，而实际活动线程约 30 个。
+
+验证数据：
+`scripts/stress_results/handle_release_after/handle_switchonly_summary_20260716_194625.csv`
+`scripts/stress_results/handle_release_after/handle_switchonly_metrics_20260716_194625.csv`
+
+## 结论与风险
+
+方案 A 修正了停止顺序、异常释放和旧对象引用，但未消除每次切换创建新 STA 线程造成的线程句柄滞留。日志证明线程均在超时内执行完释放；剩余句柄主要属于已终止线程，依赖 CLR/GC 延迟回收。不得用 `GC.Collect()`、定时重启或额外休眠代替结构修复。
+
+## 下一步计划
+
+- [ ] 经确认后实施固定 STA 工作线程复用：每个预览资源复用工作线程，切换时只替换播放器/URL。
+- [ ] 使用同一脚本再次执行约 100 次预览切换 A/B，验收 `Thread` 句柄净增不超过 5～10。
+- [ ] 通过后执行 2 小时短稳和 24～72 小时长稳。
+
+## 回退方式
+
+- 仅反向撤销上述三个生产/测试代码文件及测试脚本中的本轮差异；不得覆盖工作区其他未提交修改。
+
+# 预览句柄释放方案 B VLC 实验与回退（2026-07-16，结论已更正）
+
+## 当前阶段
+
+- [x] 已按授权实施并验证固定 STA 工作线程复用。
+- [x] 已继续验证 libVLC 实例、media player 和停止状态等待等复用层级。
+- [x] 各层级均未达到句柄验收目标，实验实现已完整回退，仅保留方案 A 的生命周期修正。
+- [x] 后续核对确认人脸、指纹返回 HTTP MJPEG，以下 VLC 实验没有覆盖实际泄漏链路；“4 路 RTSP 常驻”提议已撤回。
+
+> 结论更正：真实压测日志中 RTSP URL 为 0，VLC 记录仅来自 Proxy 启动预热。句柄增长实际来自 `MjpegPreviewController` 在每次终端切换时反复创建渲染线程和读取线程，以及读取线程退出等待不完整。以下数据仅保留为误归因排查记录，不再作为 VLC 泄漏证据。
+
+## 方案 B 实验范围
+
+1. B1：相机、指纹各保留一个长生命周期 STA worker，终端切换时在原线程内停止并重播。
+2. B2：在 B1 基础上复用 `libvlc_instance_t`。
+3. B3：继续复用 `libvlc_media_player_t`，通过 `libvlc_media_player_set_media` 替换 RTSP 媒体。
+4. B4：停止后轮询 `libvlc_media_player_get_state`，确认进入停止状态再替换或释放媒体。
+
+## 真实终端验证结果
+
+每个变体均执行 x64 Release、双终端相机与指纹预览、约 3 分钟、89 次交替切换，功能调用均为 0 失败。
+
+| 版本 | 预热后句柄 | 结束句柄 | 峰值句柄 | 后半段趋势 |
+| --- | ---: | ---: | ---: | ---: |
+| 方案 A | 约 678 | 862 | 896 | `+59.29/min` |
+| B1 固定 STA worker | 713 | 882 | 889 | `+56.91/min` |
+| B2 复用 libVLC instance | 683 | 886 | 889 | `+54.22/min` |
+| B3 复用 media player | 717 | 833 | 892 | `+44.21/min` |
+| B4 等待 stopped 状态 | 684 | 856 | 884 | `+65.34/min` |
+
+- [x] B1 编译和定向测试通过；非 Integration 回归 97/97。
+- [x] B1～B4 真实预览切换功能均正常，无 DLL 调用失败。
+- [ ] B1～B4 句柄指标全部未通过。
+- [x] B4 结束后总句柄约 828；`Thread` 句柄 234，实际活动线程约 25。
+- [x] 未发现方案 A 的 VLC 控制器线程退出超时。
+
+验证数据目录：
+
+- `scripts/stress_results/handle_release_scheme_b`
+- `scripts/stress_results/handle_release_scheme_b2`
+- `scripts/stress_results/handle_release_scheme_b3`
+- `scripts/stress_results/handle_release_scheme_b4`
+
+## 结论
+
+本轮实验修改的是 VLC 控制器，而真实人脸、指纹预览使用 `MjpegPreviewController`，因此 B1～B4 指标未改善不能证明 VLC 内部存在泄漏，只能证明这些修改与实际增长路径无关。正确修复方向是复用 MJPEG worker，并在切换时取消旧 HTTP 请求、替换 URL。
+
+## 回退与回归状态
+
+- [x] 已删除 B1～B4 的 persistent worker、`set_media/get_state` 和专用复用测试代码。
+- [x] 已恢复方案 A 的 `VlcPreviewController` 有界线程退出和轻量 `PreviewRestartInfo`。
+- [x] 回退后 Proxy x64 Release：0 warning、0 error。
+- [x] 回退后 Tests x64 Release：编译成功；仅 NuGet 漏洞源不可访问产生 `NU1900`。
+- [x] 方案 A 定向测试 2/2；非 Integration 回归 96/96。
+- [x] DLL ABI、HTTP/终端协议、回调、配置和第三方调用行为未改变。
+
+## 下一步计划
+
+- [x] 已转入 MJPEG worker 复用方案，结果见下一节。
+
+# MJPEG 长生命周期 worker 方案 B 实施与验证（2026-07-17）
+
+## 当前阶段
+
+- [x] 已完成按资源与会话复用 MJPEG 渲染/读取 worker。
+- [x] 已完成 x64 Release、定向测试、非 Integration 回归、3 分钟首轮、10 分钟短稳和 2 小时真实硬件验证。
+- [x] 句柄增长验收通过。
+- [ ] 24～72 小时长稳及设备断开/恢复验证待后续安排。
+
+## 本次修改内容
+
+1. `MjpegPreviewController` 的渲染线程和 HTTP 读取线程改为 worker 全生命周期只创建一次。
+2. 终端切换时执行 `PauseAsync`，取消旧 `HttpWebRequest` 并等待请求脱离；恢复时通过 `SwitchStreamAsync` 替换 URL 和媒体代次。
+3. 每一帧绑定媒体代次，旧请求延迟返回的数据不能覆盖新终端画面。
+4. 渲染和读取线程分别提供退出完成信号，最终释放必须等待两条线程退出；移除 `Task.Run(Thread.Join)` 和未检查返回值的读取线程 `Join(1000)`。
+5. `PreviewManager` 按 `ResourceType + SessionType` 保存 MJPEG worker；终端切换只暂停，显式停止、目标窗口失效和 Proxy 关闭仍完整移除并释放。
+6. MJPEG 流故障恢复复用原 worker；HTTP MJPEG 失败时原有 VLC 回退兼容路径保留。
+
+## 涉及文件
+
+- `Preview/MjpegPreviewController.cs`：长期 worker、媒体代次、请求暂停、双线程退出信号。
+- `Preview/PreviewManager.cs`：MJPEG worker 池及停止、切换、恢复、关闭生命周期。
+- `HZCYKJTHardWare.Proxy.Tests/Preview/MjpegWorkerReuseTests.cs`：本地双 MJPEG 流切换、暂停、复用和最终退出验证。
+
+## 验证结果
+
+- [x] Proxy x64 Release 编译成功，0 warning、0 error；PE Machine 为 `0x8664`。
+- [x] Tests x64 Release 编译成功；仅包漏洞源不可访问产生 `NU1900`。
+- [x] 定向测试 3/3：两次流切换不新增 worker，暂停保留线程，最终释放后渲染/读取线程均回到基线。
+- [x] 非 Integration 首次运行 96/97；既有 `ActiveTasksTrackerTests` 时序断言瞬时失败，单项重跑通过，完整重跑 97/97。
+- [x] 3 分钟真实双终端测试：88 次切换、96 次 DLL 调用、0 失败；预热后句柄 598～622，斜率约 `+6.36/min`，结束后 `Thread` 句柄 43。
+- [x] 10 分钟真实双终端短稳：297 次切换、305 次 DLL 调用、0 失败。
+- [x] 10 分钟预热后总句柄 593～633；整体斜率 `-1.20/min`，后半段 `+0.57/min`；结束后总句柄 581、`Thread` 句柄 43、实际线程 26。
+- [x] 对比旧版：空闲后仍有 211～234 个 `Thread` 句柄；本版没有按切换次数累积。
+- [x] MJPEG pause timeout、worker stop timeout、同 URL 恢复失败、VLC 回退和 RTSP 使用均为 0。
+- [x] 2 小时真实双终端短稳：运行 120.07 分钟，1437 次切换、1445 次 DLL 调用、0 失败、0 UI 阻塞告警。
+- [x] 2 小时共取得 241 个 Proxy 采样点，30 秒采样无超过 31 秒的缺口；后半程句柄范围 673～709，线性斜率 `+0.0236/min`，`R²=0.0104`；最后 30 分钟斜率 `+0.0578/min`，未出现持续线性增长。
+- [x] 测试停止预览并释放 SDK 后，句柄类型快照为 47 个 `Thread` 句柄、26 个实际线程；截至 2026-07-18 15:54，测试 Proxy 继续空闲时为 633 个句柄、26 个线程、Private Memory 58.96MB。
+- [x] Private Memory 后半程斜率约 `+0.037MB/min`，但 `R²=0.027`；89.3MB 单点峰值在下一个 30 秒采样回落到 53.84MB，空闲后稳定在约 59MB，当前不呈现单向累积。
+- [x] DLL 切换响应 P50/P95/P99/最大值分别为 3/12/25/44ms；1436 次后台预览恢复全部成功，整体恢复 P95 1269ms，摄像头/指纹单路 P95 分别为 131/129ms。
+- [x] 测试窗口 Proxy 日志 21608 行，警告、错误、MJPEG pause/stop timeout、恢复失败均为 0；仅有启动阶段 VLC 预热记录，没有 RTSP URL 或 VLC 实际预览记录。
+
+验证数据：
+
+- `scripts/stress_results/handle_release_mjpeg_scheme_b/handle_switchonly_summary_20260717_105739.csv`
+- `scripts/stress_results/handle_release_mjpeg_scheme_b/handle_switchonly_metrics_20260717_105739.csv`
+- `scripts/stress_results/handle_release_mjpeg_scheme_b_10min/handle_switchonly_summary_20260717_110305.csv`
+- `scripts/stress_results/handle_release_mjpeg_scheme_b_10min/handle_switchonly_metrics_20260717_110305.csv`
+- `scripts/stress_results/handle_release_mjpeg_scheme_b_2hour_real_20260718/handle_switchonly_summary_20260718_090009.csv`
+- `scripts/stress_results/handle_release_mjpeg_scheme_b_2hour_real_20260718/handle_switchonly_metrics_20260718_090009.csv`
+
+## 兼容性和风险
+
+- DLL 导出函数、参数、调用约定、结构体、错误码和回调格式未修改。
+- Proxy HTTP/终端协议、配置文件和第三方调用行为未修改。
+- 人脸、指纹仍只保持当前终端的两路 HTTP MJPEG，不增加为四路常驻连接。
+- VLC/RTSP 路径保持原行为，供未来车牌镜头使用。
+- 2 小时内 Private Memory 在预热后进入约 58～62MB 平台，未伴随句柄或线程持续增长；仍需在 24～72 小时长稳中复核平台期。
+
+## 下一步计划
+
+- [x] 已完成 2 小时双终端相机+指纹预览切换短稳，句柄、线程、功能和恢复时延验收通过。
+- [ ] 安排 24～72 小时长稳及设备断开/恢复验证。
+- [ ] 补测外部预览 HWND 销毁/重建和第三方程序退出/重启后的 worker 最终释放。
+
+## 回退方式
+
+- 反向撤销上述两个生产文件中的本轮 MJPEG worker 差异，并删除 `MjpegWorkerReuseTests.cs`。
+- 回退不会涉及 DLL、配置、终端协议或第三方接口文件；不得覆盖工作区其他未提交修改。
+# MJPEG 16小时真实硬件长稳收尾核查（2026-07-18）
+
+## 数据边界与完成判定
+
+- 本节仅使用 `scripts/stress_results/handle_release_mjpeg_scheme_b_16hour_real_restart_20260718_1750`；人工中断的 `handle_release_mjpeg_scheme_b_16hour_real_20260718` 未参与任何统计。
+- 正式目录只有 `handle_switchonly_cycles_20260718_175129.csv` 和 `handle_switchonly_metrics_20260718_175129.csv`，没有本轮 `summary`、`calls` 或 `callbacks` CSV；不能据称已取得完整调用汇总。
+- 目录于 17:51:32 开始写入。18:04:16 按收尾指令关闭测试 Proxy 前，连续有效片段只有 152 次、12.70 分钟，远未达到 960 分钟；本轮 16 小时验证为**未完成，不能通过**。
+- 关闭后测试宿主 PowerShell（PID 39624）仍在运行并继续向 cycles CSV 追加记录；首个失败为 cycle 159（18:04:43，终端 1，切换返回 0、耗时 2026ms）。这些失败由关闭 Proxy 后产生，不计入关闭前有效片段，也不能作为产品长稳失败归因。
+
+## 关闭前有效片段结果
+
+- 总切换 152 次：终端 1 为 76/76 成功，终端 2 为 76/76 成功，失败 0。
+- 切换耗时（CSV 线性插值分位数）：P50 3ms、P95 18.45ms、P99 52.64ms、最大 72ms。
+- Proxy 日志窗口（17:51:30～18:04:16）无 warning/error、MJPEG pause/stop timeout 或流恢复失败；两路 MJPEG 预览启动各 153 次（摄像头 153、指纹 153）。
+- 同窗口仅有 3 条 VLC 预热日志（17:51:30，预热 229ms），没有 VLC 实际预览证据；RTSP 日志计数为 0。
+
+## 资源趋势与句柄快照
+
+- 预热后可用 Proxy 采样仅 16 个（17:56:31～18:04:02，约 7.5 分钟），HandleCount 为 668～687，线性斜率 `+15.70 handles/hour`、`R²=0.0144`；线程数为 30～35，Private Memory 为 53.04～54.98MB，首末增加 1.84MB。
+- 该短窗口呈有界波动、没有单调线性增长证据，但样本量和持续时间不足，不能外推为 16 小时结论。后半 8 小时和最后 4 小时均无数据，斜率/R²不可计算。
+- 18:03:50 的关闭前句柄类型快照：共 678 个句柄，其中 Event 269、Thread 61、Key 46、File 31、Semaphore 24、IoCompletion 21、Section 14、ALPC Port 12；另有 159 个受权限/对象限制未能解析类型。
+- 18:04:16 已再次核对 PID 47668 路径为 `E:\SZBJ\皇岗开发\车道\HZCYJKTHardWare\_codex_build\mjpeg_worker_scheme_b_x64\proxy\HZCYKJTHardWare.Proxy.exe`，快照为 684 句柄、31 线程、Private Memory 54.93MB；随后仅终止该 Proxy，未终止测试宿主或其他进程。
+
+## 验证状态与建议
+
+- [ ] 真实硬件 960 分钟 MJPEG 句柄长稳：未完成，待重新安排独占的完整测试窗口。
+- [ ] 后半 8 小时及最后 4 小时 HandleCount 斜率/R²：无数据，待验证。
+- [ ] 本轮 summary/calls 汇总及完整失败归因：文件缺失且测试宿主在 Proxy 关闭后继续写入，待验证。
+- [x] 关闭前约 12.7 分钟双终端切换功能片段：152/152 成功。
+
+建议当前不要仅凭此轮数据修改生产代码；先修正/确认测试宿主在 Proxy 意外退出后的停止与结果封存行为，再重新执行一次不中断的 16 小时独占测试。
+
+# 同名抓拍文件一致性方案 A（2026-07-20）
+
+## 当前阶段
+
+- [x] 保留既有 `WorkerQueue` 抓拍队列和同名文件覆盖行为。
+- [x] 在 `FileSaver` 公共保存层增加同目标路径互斥，覆盖 Base64 图片和无畸变 BMP 的“临时文件写入—刷盘—原子提交”完整过程。
+- [x] 对 `MoveFileEx` 的短时占用错误增加有限重试。
+- [ ] 尚未部署到真实硬件环境执行 FullFlow 长稳验证。
+
+## 本次修改
+
+- `Storage/FileSaver.cs`
+  - 使用 64 个固定分片锁，按 `Path.GetFullPath` 规范化后的路径进行不区分大小写映射；锁对象数量有界，不随抓拍文件数量增长。
+  - 同一路径写入串行化，不同路径通常仍可并发；不修改上层队列容量、顺序和待执行任务替换规则。
+  - `MoveFileEx` 遇到 Win32 错误 5、32、33、1224 时按 10/20/40/80ms 退避重试，累计等待上限 150ms；其他错误立即失败。
+  - 所有重试耗尽后仍返回保存失败，原目标文件保持为上一次完整成功版本，临时文件由 `finally` 清理。
+- `Storage/FileSaverTests.cs`
+  - 新增 12 路同路径并发覆盖测试。
+  - 新增目标文件短时被读取占用、释放后重试成功测试。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、参数、返回值、错误码和回调格式均未修改。
+- Proxy HTTP/终端协议、抓拍队列和第三方调用方式均未修改。
+- 继续使用调用方指定的同名文件；成功返回表示本次完整图片已原子提交，后续同路径成功抓拍仍会按既有规则覆盖。
+- 同路径等待和重试会增加最多约 150ms 的文件提交等待；不同路径仅在哈希分片碰撞时可能短暂互斥。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64` 独立目录编译：0 error；仅首次离线构建出现 NuGet 漏洞源不可达警告，不影响编译。
+- [x] Proxy + Tests `Release|x86` 独立目录编译：0 warning、0 error。
+- [x] `FileSaverTests`：x64 7/7、x86 7/7 通过。
+- [x] x64 非 Integration 回归：99/99 通过。
+- [ ] 真实硬件连续抓拍、FullFlow 150 分钟及更长长稳：待验证。
+- [ ] 外部程序持续占用同名文件超过 150ms 的现场行为：待验证；预期当前请求明确失败且旧完整文件保留。
+
+## 风险与下一步
+
+- 单一共享文件名只能保证成功提交时文件属于该请求；下一次同路径抓拍成功后必然覆盖。调用方应在本次成功返回后及时读取。
+- 建议停止现有 Proxy 后部署本次独立构建，先做少量人工抓拍核对，再执行 150 分钟 FullFlow；重点统计抓拍失败、原子替换重试/失败日志、`.tmp` 残留以及响应文件内容。
+- 本次未执行真实硬件测试，不将方案 A 标记为现场验证通过。
+
+## 回退方式
+
+- 仅撤销 `FileSaver.cs` 中的路径分片锁、有限重试及对应两个测试；无需修改抓拍队列、DLL、配置或第三方程序。

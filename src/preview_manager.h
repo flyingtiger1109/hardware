@@ -4,7 +4,7 @@
 
 namespace HZCYKJTHardWare {
 
-// Manages camera, fingerprint and iris RTSP previews.
+// 管理相机、指纹和虹膜 RTSP 预览
 class PreviewManager {
 public:
     struct ActivePreviewSnapshot {
@@ -27,7 +27,7 @@ public:
     int StartIrisPreview(HWND hwnd);
     int StopIrisPreview();
 
-    // Third-party preview path: URL is acquired through Delphi, rendering lives in this process.
+    // 第三方预览链路：通过 Delphi 获取 URL，渲染在当前进程内执行
     int StartCameraPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
     int StartFingerprintPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
     int StartIrisPreviewFromUrl(HWND hwnd, const std::string& rtspUrl);
@@ -89,4 +89,4 @@ private:
 
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

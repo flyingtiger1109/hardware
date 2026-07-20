@@ -28,7 +28,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static DateTime _lastFlushUtc = DateTime.UtcNow;
         private static string _lastCleanupDate = "";
 
-        // Log level filtering: 0=Debug, 1=Info, 2=Warn, 3=Error
+        // 日志级别过滤：0=Debug，1=Info，2=Warn，3=Error
         private static int _minLevel = 1; // default Info
 
         public static void SetMinLevel(string level)
@@ -90,8 +90,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static void Error(string message, Exception ex) => Write("错误", $"{message}: {ex}", 3);
 
         /// <summary>
-        /// Non-blocking log writer with automatic cross-day file rollover.
-        /// Log format matches Delphi: [yyyy-MM-dd HH:mm:ss.fff] [级别] message
+        /// 非阻塞日志写入器，支持跨日自动切换日志文件。
+        /// 日志格式与 Delphi 保持一致：[yyyy-MM-dd HH:mm:ss.fff] [级别] message
         /// </summary>
         public static void Write(string level, string message, int levelNum)
         {
@@ -111,7 +111,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             }
             catch
             {
-                // Logger must not throw — would crash the process
+                // 日志组件不得向外抛出异常，避免导致进程退出
             }
         }
 
@@ -145,7 +145,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 }
                 catch
                 {
-                    // Logger must never throw.
+                    // 日志组件不得向外抛出异常
                 }
             }
         }
@@ -239,7 +239,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             }
             catch
             {
-                // Retention cleanup must never stop business logging.
+                // 保留期清理失败不得中断业务日志写入
             }
         }
 

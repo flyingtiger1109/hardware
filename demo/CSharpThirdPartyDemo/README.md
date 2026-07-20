@@ -38,6 +38,14 @@ vlc\
 
 业务配置统一修改 `HZCYKJTHardWare.json`。
 
+第三方传入 DLL 的 `char*` 编码由 `third_party_input_encoding` 控制：
+
+- `auto`：默认值，严格 UTF-8 校验失败后按 GBK 转为 UTF-8；适合在 Delphi7 与本 C# Demo 之间切换测试。
+- `gbk`：正式调用方明确固定为 GBK 时使用。
+- `utf8`：只接受严格 UTF-8；本 C# Demo 可使用该模式。
+
+该配置只影响传给 DLL 的输入参数；DLL 回调、HTTP/JSON 和 Proxy 内部文本始终为 UTF-8。
+
 ## 构建
 
 ```text

@@ -9,7 +9,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
 
         public static string ExtractPreviewUrl(string responseBody)
         {
-            // Try multiple field names
+            // 依次尝试多个兼容字段名
             var url = JsonHelper.ExtractString(responseBody, "preview_url");
             if (string.IsNullOrEmpty(url))
                 url = JsonHelper.ExtractString(responseBody, "rtsp_url");

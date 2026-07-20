@@ -15,7 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             }
             catch
             {
-                // Fallback: manual extraction for malformed JSON
+                // JSON 格式异常时回退到手工字段提取
                 return ExtractStringManual(json, key);
             }
         }

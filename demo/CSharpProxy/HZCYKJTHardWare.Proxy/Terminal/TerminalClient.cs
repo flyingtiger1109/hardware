@@ -15,7 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
         public TerminalClient()
         {
-            // Increase global connection limit to prevent socket exhaustion under high-frequency requests
+            // 提高全局连接数上限，避免高频请求耗尽可用 Socket 连接
             var handler = new HttpClientHandler
             {
                 AllowAutoRedirect = false,
@@ -23,14 +23,15 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             };
 
             _httpClient = new HttpClient(handler);
-            _httpClient.Timeout = TimeSpan.FromSeconds(10);  // Terminal HTTP timeout
+            _httpClient.Timeout = TimeSpan.FromSeconds(10);  // 终端 HTTP 超时时间
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "HZCYKJTHardWare-Proxy/2.0");
-            _httpClient.DefaultRequestHeaders.ConnectionClose = false;  // Enable keep-alive
+            _httpClient.DefaultRequestHeaders.ConnectionClose = false;  // 启用长连接
         }
 
         public async Task<(bool ok, string response)> PostJsonAsync(string baseUrl, string path,
             string bodyUtf8, int timeoutMs = 0,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            int expectedStatusCode = 0)
         {
             var url = baseUrl.TrimEnd('/') + path;
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -60,11 +61,21 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     sw.Stop();
 
-                    if (response.IsSuccessStatusCode)
+                    var statusCode = (int)response.StatusCode;
+                    if (response.IsSuccessStatusCode &&
+                        (expectedStatusCode <= 0 || statusCode == expectedStatusCode))
                     {
                         if (sw.ElapsedMilliseconds > 500)
                             Logger.Warn($"[终端请求] POST {path} 响应较慢: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
                         return (true, responseBody);
+                    }
+
+                    if (response.IsSuccessStatusCode && expectedStatusCode > 0)
+                    {
+                        Logger.Warn($"[Terminal request] POST {path} unexpected status: " +
+                            $"actual={statusCode}, expected={expectedStatusCode}, " +
+                            $"elapsed={sw.ElapsedMilliseconds}ms, body={Truncate(responseBody, 256)}");
+                        return (false, responseBody);
                     }
 
                     Logger.Warn($"[终端请求] POST {path} 失败: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms, 内容={Truncate(responseBody, 256)}");

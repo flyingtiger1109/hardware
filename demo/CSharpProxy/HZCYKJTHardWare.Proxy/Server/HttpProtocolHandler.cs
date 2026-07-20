@@ -8,26 +8,25 @@ using System.Threading.Tasks;
 namespace HZCYKJTHardWare.Proxy.Server
 {
     /// <summary>
-    /// Stateless HTTP/1.1 request parser and response writer for the internal
-    /// DLL↔Proxy and Proxy↔Terminal communication channels.
+    /// 用于 DLL↔Proxy 和 Proxy↔终端内部通信链路的无状态 HTTP/1.1 请求解析器及响应写入器。
     ///
-    /// This is a pure extraction from ProxyServer — zero behavioral changes.
+    /// 从 ProxyServer 原样拆分，不改变既有行为。
     /// </summary>
     internal static class HttpProtocolHandler
     {
         private const int MaxHeaderBytes = 64 * 1024;
-        // Keep concurrent callback bodies bounded so a burst of large Base64 images
-        // cannot cause excessive managed-memory pressure in either process architecture.
+        // 限制并发回调正文大小，避免大量 Base64 图像突发时在 x86 或 x64 进程中造成过高的托管内存压力
         private const int MaxBodyBytes = 16 * 1024 * 1024;
 
         /// <summary>
-        /// Read an HTTP request from a NetworkStream. Returns (method, path, body).
-        /// Same implementation as the original ProxyServer.ReadHttpRequest.
+        /// 从 NetworkStream 读取 HTTP 请求，返回 (method, path, body)。
+        /// 实现与原 ProxyServer.ReadHttpRequest 保持一致。
         /// </summary>
         public static async Task<(string method, string path, string body)> ReadHttpRequestAsync(
             NetworkStream stream,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            // 审查建议：MemoryStream 实现了 IDisposable；建议改用 using，确保后续替换为持有外部资源的流时仍能及时释放。
             var raw = new MemoryStream();
             var buf = new byte[4096];
             var marker = Encoding.ASCII.GetBytes("\r\n\r\n");
@@ -94,8 +93,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Write an HTTP JSON response to a NetworkStream.
-        /// Same implementation as the original ProxyServer.WriteHttpResponse.
+        /// 向 NetworkStream 写入 HTTP JSON 响应。
+        /// 实现与原 ProxyServer.WriteHttpResponse 保持一致。
         /// </summary>
         public static async Task WriteHttpResponseAsync(NetworkStream stream,
             int statusCode, string body,
@@ -114,8 +113,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Write a 503 Service Busy response to a TcpClient and close it.
-        /// Same implementation as the original ProxyServer.RejectBusyClient.
+        /// 向 TcpClient 写入 503 Service Busy 响应并关闭连接。
+        /// 实现与原 ProxyServer.RejectBusyClient 保持一致。
         /// </summary>
         public static void Write503ServiceBusy(TcpClient client)
         {
@@ -137,7 +136,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// String search in byte array. Same as original ProxyServer.IndexOf.
+        /// 在字节数组中查找指定序列，与原 ProxyServer.IndexOf 实现一致。
         /// </summary>
         private static int IndexOf(byte[] source, int sourceLength, byte[] pattern)
         {

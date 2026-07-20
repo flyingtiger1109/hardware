@@ -67,4 +67,4 @@ private:
     int m_lastHeight = -1;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

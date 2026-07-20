@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 
 namespace HZCYKJTHardWare.Proxy.Storage
@@ -12,6 +13,14 @@ namespace HZCYKJTHardWare.Proxy.Storage
     {
         private const int MoveFileReplaceExisting = 0x1;
         private const int MoveFileWriteThrough = 0x8;
+        private const int ErrorAccessDenied = 5;
+        private const int ErrorSharingViolation = 32;
+        private const int ErrorLockViolation = 33;
+        private const int ErrorUserMappedFile = 1224;
+        private const int PathLockStripeCount = 64;
+
+        private static readonly int[] CommitRetryDelaysMs = { 10, 20, 40, 80 };
+        private static readonly object[] PathLocks = CreatePathLocks();
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool MoveFileEx(string existingFileName,
@@ -21,8 +30,8 @@ namespace HZCYKJTHardWare.Proxy.Storage
         private static readonly TimeSpan DiskCheckInterval = TimeSpan.FromMinutes(5);
 
         /// <summary>
-        /// Periodic disk space check. Warns if free space drops below 200MB.
-        /// Avoids checking on every write — throttled to every 5 minutes.
+        /// 定期检查磁盘空间；可用空间低于 200 MB 时记录警告。
+        /// 检查频率限制为每 5 分钟一次，避免每次写入均访问磁盘状态。
         /// </summary>
         private static void CheckDiskSpace(string filePath)
         {
@@ -41,7 +50,7 @@ namespace HZCYKJTHardWare.Proxy.Storage
                     Logger.Warn($"[磁盘预警] 磁盘空间不足: {root} 剩余 {drive.AvailableFreeSpace / 1024 / 1024}MB");
                 }
             }
-            catch { /* Disk check must not throw */ }
+            catch { /* 磁盘检查异常不得影响文件保存 */ }
         }
 
         public static string SaveBase64Image(string base64Str, string mimeType, string saveDir, string requestId, string prefix)
@@ -118,50 +127,52 @@ namespace HZCYKJTHardWare.Proxy.Storage
         }
 
         /// <summary>
-        /// Decode directly to disk with a fixed-size buffer. This avoids a second
-        /// image-sized byte[] allocation on the LOH in the managed process.
-        /// A temporary file prevents invalid Base64 from damaging an existing file.
+        /// 使用固定大小缓冲区直接解码到磁盘，避免在托管进程的大对象堆上再次分配与图像等大的 byte[]。
+        /// 先写入临时文件，防止无效 Base64 数据破坏已有文件。
         /// </summary>
         private static long WriteBase64ToFile(string base64Str, string filePath)
         {
-            var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
+            lock (GetPathLock(filePath))
             {
-                long length;
-                using (var output = new FileStream(tempPath, FileMode.CreateNew,
-                    FileAccess.Write, FileShare.None, 64 * 1024,
-                    FileOptions.SequentialScan))
-                using (var transform = new FromBase64Transform(
-                    FromBase64TransformMode.IgnoreWhiteSpaces))
-                using (var decoder = new CryptoStream(output, transform,
-                    CryptoStreamMode.Write))
-                {
-                    var inputBuffer = new byte[32 * 1024];
-                    var offset = 0;
-                    while (offset < base64Str.Length)
-                    {
-                        var charCount = Math.Min(inputBuffer.Length,
-                            base64Str.Length - offset);
-                        var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
-                            charCount, inputBuffer, 0);
-                        decoder.Write(inputBuffer, 0, byteCount);
-                        offset += charCount;
-                    }
-                    decoder.FlushFinalBlock();
-                    output.Flush(true);
-                    length = output.Length;
-                }
-
-                CommitTempFile(tempPath, filePath);
-                return length;
-            }
-            finally
-            {
+                var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
-                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                    long length;
+                    using (var output = new FileStream(tempPath, FileMode.CreateNew,
+                        FileAccess.Write, FileShare.None, 64 * 1024,
+                        FileOptions.SequentialScan))
+                    using (var transform = new FromBase64Transform(
+                        FromBase64TransformMode.IgnoreWhiteSpaces))
+                    using (var decoder = new CryptoStream(output, transform,
+                        CryptoStreamMode.Write))
+                    {
+                        var inputBuffer = new byte[32 * 1024];
+                        var offset = 0;
+                        while (offset < base64Str.Length)
+                        {
+                            var charCount = Math.Min(inputBuffer.Length,
+                                base64Str.Length - offset);
+                            var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
+                                charCount, inputBuffer, 0);
+                            decoder.Write(inputBuffer, 0, byteCount);
+                            offset += charCount;
+                        }
+                        decoder.FlushFinalBlock();
+                        output.Flush(true);
+                        length = output.Length;
+                    }
+
+                    CommitTempFile(tempPath, filePath);
+                    return length;
                 }
-                catch { }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(tempPath)) File.Delete(tempPath);
+                    }
+                    catch { }
+                }
             }
         }
 
@@ -222,97 +233,112 @@ namespace HZCYKJTHardWare.Proxy.Storage
             const int headerSize = 14 + 40 + paletteSize;
             var fileSize = checked(headerSize + pixelDataSize);
 
-            // 原子写入：先写临时文件，再覆盖目标，避免第三方读到未写完的半截文件
-            var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
+            lock (GetPathLock(filePath))
             {
-                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
-                    FileShare.None, 64 * 1024, FileOptions.RandomAccess))
+                // 原子写入：先写临时文件，再覆盖目标，避免第三方读到未写完的半截文件
+                var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
                 {
-                    // Pre-size the file so untouched padding and missing source rows
-                    // remain zero-filled, matching the previous implementation.
-                    fs.SetLength(fileSize);
-                    fs.Position = 0;
-                    using (var bw = new BinaryWriter(fs, Encoding.UTF8, true))
+                    using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
+                        FileShare.None, 64 * 1024, FileOptions.RandomAccess))
                     {
-                        // BITMAPFILEHEADER (14 bytes)
-                        bw.Write((short)0x4D42);
-                        bw.Write(fileSize);
-                        bw.Write((short)0);
-                        bw.Write((short)0);
-                        bw.Write(headerSize);
-
-                        // BITMAPINFOHEADER (40 bytes)
-                        bw.Write(40);
-                        bw.Write(width);
-                        bw.Write(height);
-                        bw.Write((short)1);
-                        bw.Write((short)8);
-                        bw.Write(0);
-                        bw.Write(pixelDataSize);
-                        bw.Write(0);
-                        bw.Write(0);
-                        bw.Write(256);
-                        bw.Write(0);
-
-                        // Grayscale palette: 256 entries (B, G, R, 0)
-                        for (int i = 0; i < 256; i++)
+                        // 预先设置文件大小，使未写入的填充区和缺失源行保持补零，并与旧版实现一致。
+                        fs.SetLength(fileSize);
+                        fs.Position = 0;
+                        using (var bw = new BinaryWriter(fs, Encoding.UTF8, true))
                         {
-                            bw.Write((byte)i);
-                            bw.Write((byte)i);
-                            bw.Write((byte)i);
-                            bw.Write((byte)0);
-                        }
-                        bw.Flush();
-                    }
+                            // BITMAPFILEHEADER（14 字节）
+                            bw.Write((short)0x4D42);
+                            bw.Write(fileSize);
+                            bw.Write((short)0);
+                            bw.Write((short)0);
+                            bw.Write(headerSize);
 
-                    long decodedLength;
-                    var pixelWriter = new BottomUpBmpPixelStream(fs, headerSize,
-                        width, height, rowSize);
-                    using (var transform = new FromBase64Transform(
-                        FromBase64TransformMode.IgnoreWhiteSpaces))
-                    using (var decoder = new CryptoStream(pixelWriter, transform,
-                        CryptoStreamMode.Write))
-                    {
-                        var inputBuffer = new byte[32 * 1024];
-                        var offset = 0;
-                        while (offset < base64Str.Length)
+                            // BITMAPINFOHEADER（40 字节）
+                            bw.Write(40);
+                            bw.Write(width);
+                            bw.Write(height);
+                            bw.Write((short)1);
+                            bw.Write((short)8);
+                            bw.Write(0);
+                            bw.Write(pixelDataSize);
+                            bw.Write(0);
+                            bw.Write(0);
+                            bw.Write(256);
+                            bw.Write(0);
+
+                            // 灰度调色板：256 个表项（B、G、R、0）
+                            for (int i = 0; i < 256; i++)
+                            {
+                                bw.Write((byte)i);
+                                bw.Write((byte)i);
+                                bw.Write((byte)i);
+                                bw.Write((byte)0);
+                            }
+                            bw.Flush();
+                        }
+
+                        long decodedLength;
+                        var pixelWriter = new BottomUpBmpPixelStream(fs, headerSize,
+                            width, height, rowSize);
+                        using (var transform = new FromBase64Transform(
+                            FromBase64TransformMode.IgnoreWhiteSpaces))
+                        using (var decoder = new CryptoStream(pixelWriter, transform,
+                            CryptoStreamMode.Write))
                         {
-                            var charCount = Math.Min(inputBuffer.Length,
-                                base64Str.Length - offset);
-                            var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
-                                charCount, inputBuffer, 0);
-                            decoder.Write(inputBuffer, 0, byteCount);
-                            offset += charCount;
+                            var inputBuffer = new byte[32 * 1024];
+                            var offset = 0;
+                            while (offset < base64Str.Length)
+                            {
+                                var charCount = Math.Min(inputBuffer.Length,
+                                    base64Str.Length - offset);
+                                var byteCount = Encoding.ASCII.GetBytes(base64Str, offset,
+                                    charCount, inputBuffer, 0);
+                                decoder.Write(inputBuffer, 0, byteCount);
+                                offset += charCount;
+                            }
+                            decoder.FlushFinalBlock();
+                            decodedLength = pixelWriter.TotalDecodedBytes;
                         }
-                        decoder.FlushFinalBlock();
-                        decodedLength = pixelWriter.TotalDecodedBytes;
+
+                        if (decodedLength != expectedLen)
+                        {
+                            Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decodedLength}");
+                        }
+
+                        fs.Flush(true);
                     }
 
-                    if (decodedLength != expectedLen)
-                    {
-                        Logger.Warn($"[无畸变BMP] 像素数据长度异常: 期望{expectedLen}, 实际{decodedLength}");
-                    }
-
-                    fs.Flush(true);
+                    CommitTempFile(tempPath, filePath);
+                    Logger.Debug($"已保存无畸变BMP: {filePath}");
+                    return filePath;
                 }
-
-                CommitTempFile(tempPath, filePath);
-                Logger.Debug($"已保存无畸变BMP: {filePath}");
-                return filePath;
-            }
-            finally
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); }
-                catch { }
+                finally
+                {
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); }
+                    catch { }
+                }
             }
         }
 
+        private static object[] CreatePathLocks()
+        {
+            var locks = new object[PathLockStripeCount];
+            for (var i = 0; i < locks.Length; i++)
+                locks[i] = new object();
+            return locks;
+        }
+
+        private static object GetPathLock(string filePath)
+        {
+            var normalizedPath = Path.GetFullPath(filePath);
+            var hash = StringComparer.OrdinalIgnoreCase.GetHashCode(normalizedPath);
+            return PathLocks[hash & (PathLockStripeCount - 1)];
+        }
+
         /// <summary>
-        /// Receives decoded raw pixels in top-down source order and writes each
-        /// completed row into the matching bottom-up BMP position. Only one row
-        /// is retained, avoiding an image-sized LOH allocation while preserving
-        /// the historical positive-height BMP layout byte-for-byte.
+        /// 按源数据自顶向下的顺序接收解码后的原始像素，并将完整行写入 BMP 自底向上的对应位置。
+        /// 内存中仅保留一行数据，避免在大对象堆分配整幅图像，同时保持既有正高度 BMP 的字节布局。
         /// </summary>
         private sealed class BottomUpBmpPixelStream : Stream
         {
@@ -419,20 +445,40 @@ namespace HZCYKJTHardWare.Proxy.Storage
         }
 
         /// <summary>
-        /// Atomically publishes a fully-written temporary file. Both paths are
-        /// created in the same directory, so MoveFileEx performs a same-volume
-        /// rename and the reader observes either the previous or the new file.
+        /// 以原子方式发布已完整写入的临时文件。临时路径和目标路径位于同一目录，
+        /// MoveFileEx 执行同卷重命名，读取方只能看到旧文件或新文件的完整版本。
         /// </summary>
         private static void CommitTempFile(string tempPath, string filePath)
         {
-            if (MoveFileEx(tempPath, filePath,
-                MoveFileReplaceExisting | MoveFileWriteThrough))
+            for (var attempt = 0; ; attempt++)
             {
-                return;
-            }
+                if (MoveFileEx(tempPath, filePath,
+                    MoveFileReplaceExisting | MoveFileWriteThrough))
+                {
+                    return;
+                }
 
-            throw new Win32Exception(Marshal.GetLastWin32Error(),
-                "原子替换文件失败: " + filePath);
+                var errorCode = Marshal.GetLastWin32Error();
+                if (!IsTransientCommitError(errorCode) ||
+                    attempt >= CommitRetryDelaysMs.Length)
+                {
+                    throw new Win32Exception(errorCode,
+                        "原子替换文件失败: " + filePath);
+                }
+
+                var delayMs = CommitRetryDelaysMs[attempt];
+                Logger.Debug($"[文件保存] 原子替换暂时失败，{delayMs}ms 后重试: " +
+                    $"error={errorCode}, attempt={attempt + 1}, path={filePath}");
+                Thread.Sleep(delayMs);
+            }
+        }
+
+        private static bool IsTransientCommitError(int errorCode)
+        {
+            return errorCode == ErrorAccessDenied ||
+                errorCode == ErrorSharingViolation ||
+                errorCode == ErrorLockViolation ||
+                errorCode == ErrorUserMappedFile;
         }
     }
 }

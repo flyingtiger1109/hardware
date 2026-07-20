@@ -18,7 +18,7 @@ namespace HZCYKJTHardWare.Proxy
             base.Dispose(disposing);
         }
 
-        #region Windows Form Designer generated code
+        #region Windows 窗体设计器生成的代码
 
         private void InitializeComponent()
         {
@@ -120,7 +120,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelLogToolbar.SuspendLayout();
             this.SuspendLayout();
             // 
-            // panelHeader
+            // 控件：panelHeader
             // 
             this.panelHeader.BackColor = System.Drawing.Color.White;
             this.panelHeader.Controls.Add(this.headerLayout);
@@ -132,7 +132,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelHeader.Size = new System.Drawing.Size(2360, 228);
             this.panelHeader.TabIndex = 3;
             // 
-            // headerLayout
+            // 控件：headerLayout
             // 
             this.headerLayout.ColumnCount = 6;
             this.headerLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 540F));
@@ -156,7 +156,7 @@ namespace HZCYKJTHardWare.Proxy
             this.headerLayout.Size = new System.Drawing.Size(2232, 292);
             this.headerLayout.TabIndex = 0;
             // 
-            // lblPageTitle
+            // 控件：lblPageTitle
             // 
             this.lblPageTitle.AutoEllipsis = false;
             this.lblPageTitle.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -170,7 +170,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblPageTitle.Text = "HZCYJKTHardWare\r\n后台服务";
             this.lblPageTitle.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
-            // lblServiceStatus
+            // 控件：lblServiceStatus
             // 
             this.lblServiceStatus.AutoEllipsis = true;
             this.lblServiceStatus.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -184,7 +184,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblServiceStatus.Text = "● 已停止";
             this.lblServiceStatus.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // panelDllListenInfo
+            // 控件：panelDllListenInfo
             // 
             this.panelDllListenInfo.Controls.Add(this.lblDllListenValue);
             this.panelDllListenInfo.Controls.Add(this.lblDllListenCaption);
@@ -196,7 +196,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelDllListenInfo.Size = new System.Drawing.Size(288, 168);
             this.panelDllListenInfo.TabIndex = 2;
             // 
-            // lblDllListenValue
+            // 控件：lblDllListenValue
             // 
             this.lblDllListenValue.AutoEllipsis = true;
             this.lblDllListenValue.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -209,7 +209,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblDllListenValue.TabIndex = 0;
             this.lblDllListenValue.Text = "--";
             // 
-            // lblDllListenCaption
+            // 控件：lblDllListenCaption
             // 
             this.lblDllListenCaption.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblDllListenCaption.Font = new System.Drawing.Font("微软雅黑", 9F);
@@ -222,7 +222,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblDllListenCaption.Text = "DLL 监听";
             this.lblDllListenCaption.TextAlign = System.Drawing.ContentAlignment.BottomLeft;
             // 
-            // panelCallbackListenInfo
+            // 控件：panelCallbackListenInfo
             // 
             this.panelCallbackListenInfo.Controls.Add(this.lblCallbackListenValue);
             this.panelCallbackListenInfo.Controls.Add(this.lblCallbackListenCaption);
@@ -234,7 +234,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelCallbackListenInfo.Size = new System.Drawing.Size(318, 168);
             this.panelCallbackListenInfo.TabIndex = 3;
             // 
-            // lblCallbackListenValue
+            // 控件：lblCallbackListenValue
             // 
             this.lblCallbackListenValue.AutoEllipsis = true;
             this.lblCallbackListenValue.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -247,7 +247,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCallbackListenValue.TabIndex = 0;
             this.lblCallbackListenValue.Text = "--";
             // 
-            // lblCallbackListenCaption
+            // 控件：lblCallbackListenCaption
             // 
             this.lblCallbackListenCaption.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblCallbackListenCaption.Font = new System.Drawing.Font("微软雅黑", 9F);
@@ -260,7 +260,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCallbackListenCaption.Text = "回调监听";
             this.lblCallbackListenCaption.TextAlign = System.Drawing.ContentAlignment.BottomLeft;
             // 
-            // panelTerminalInfo
+            // 控件：panelTerminalInfo
             // 
             this.panelTerminalInfo.Controls.Add(this.lblTerminalValue);
             this.panelTerminalInfo.Controls.Add(this.lblTerminalCaption);
@@ -272,7 +272,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelTerminalInfo.Size = new System.Drawing.Size(548, 168);
             this.panelTerminalInfo.TabIndex = 4;
             // 
-            // lblTerminalValue
+            // 控件：lblTerminalValue
             // 
             this.lblTerminalValue.AutoEllipsis = true;
             this.lblTerminalValue.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -285,7 +285,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblTerminalValue.TabIndex = 0;
             this.lblTerminalValue.Text = "--";
             // 
-            // lblTerminalCaption
+            // 控件：lblTerminalCaption
             // 
             this.lblTerminalCaption.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblTerminalCaption.Font = new System.Drawing.Font("微软雅黑", 9F);
@@ -298,7 +298,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblTerminalCaption.Text = "当前终端";
             this.lblTerminalCaption.TextAlign = System.Drawing.ContentAlignment.BottomLeft;
             // 
-            // panelMonitorInfo
+            // 控件：panelMonitorInfo
             // 
             this.panelMonitorInfo.Controls.Add(this.lblMonitorValue);
             this.panelMonitorInfo.Controls.Add(this.lblMonitorCaption);
@@ -310,7 +310,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelMonitorInfo.Size = new System.Drawing.Size(260, 168);
             this.panelMonitorInfo.TabIndex = 5;
             // 
-            // lblMonitorValue
+            // 控件：lblMonitorValue
             // 
             this.lblMonitorValue.Dock = System.Windows.Forms.DockStyle.Fill;
             this.lblMonitorValue.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Bold);
@@ -322,7 +322,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblMonitorValue.TabIndex = 0;
             this.lblMonitorValue.Text = "CPU: -% | 内存: -MB\r\n运行时间: 0m";
             // 
-            // lblMonitorCaption
+            // 控件：lblMonitorCaption
             // 
             this.lblMonitorCaption.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblMonitorCaption.Font = new System.Drawing.Font("微软雅黑", 9F);
@@ -335,7 +335,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblMonitorCaption.Text = "运行状态";
             this.lblMonitorCaption.TextAlign = System.Drawing.ContentAlignment.BottomLeft;
             // 
-            // panelTop
+            // 控件：panelTop
             // 
             this.panelTop.BackColor = System.Drawing.Color.White;
             this.panelTop.Controls.Add(this.cardLayout);
@@ -347,7 +347,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelTop.Size = new System.Drawing.Size(2360, 360);
             this.panelTop.TabIndex = 2;
             // 
-            // cardLayout
+            // 控件：cardLayout
             // 
             this.cardLayout.ColumnCount = 3;
             this.cardLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 33.333F));
@@ -365,7 +365,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardLayout.Size = new System.Drawing.Size(2280, 320);
             this.cardLayout.TabIndex = 0;
             // 
-            // cardService
+            // 控件：cardService
             // 
             this.cardService.BackColor = System.Drawing.Color.White;
             this.cardService.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -379,7 +379,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardService.Size = new System.Drawing.Size(735, 320);
             this.cardService.TabIndex = 0;
             // 
-            // tlpService
+            // 控件：tlpService
             // 
             this.tlpService.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 20F));
             this.tlpService.Location = new System.Drawing.Point(0, 0);
@@ -388,7 +388,7 @@ namespace HZCYKJTHardWare.Proxy
             this.tlpService.Size = new System.Drawing.Size(400, 200);
             this.tlpService.TabIndex = 0;
             // 
-            // lblCardService
+            // 控件：lblCardService
             // 
             this.lblCardService.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblCardService.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Bold);
@@ -401,7 +401,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCardService.Text = "服务与通道";
             this.lblCardService.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // cardOperation
+            // 控件：cardOperation
             // 
             this.cardOperation.BackColor = System.Drawing.Color.White;
             this.cardOperation.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -415,7 +415,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardOperation.Size = new System.Drawing.Size(735, 320);
             this.cardOperation.TabIndex = 1;
             // 
-            // tlpOperation
+            // 控件：tlpOperation
             // 
             this.tlpOperation.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 20F));
             this.tlpOperation.Location = new System.Drawing.Point(0, 0);
@@ -424,7 +424,7 @@ namespace HZCYKJTHardWare.Proxy
             this.tlpOperation.Size = new System.Drawing.Size(400, 200);
             this.tlpOperation.TabIndex = 0;
             // 
-            // lblCardOperation
+            // 控件：lblCardOperation
             // 
             this.lblCardOperation.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblCardOperation.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Bold);
@@ -437,7 +437,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCardOperation.Text = "业务操作";
             this.lblCardOperation.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // cardPreviewControl
+            // 控件：cardPreviewControl
             // 
             this.cardPreviewControl.BackColor = System.Drawing.Color.White;
             this.cardPreviewControl.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -451,7 +451,7 @@ namespace HZCYKJTHardWare.Proxy
             this.cardPreviewControl.Size = new System.Drawing.Size(762, 320);
             this.cardPreviewControl.TabIndex = 2;
             // 
-            // tlpPreviewControl
+            // 控件：tlpPreviewControl
             // 
             this.tlpPreviewControl.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 20F));
             this.tlpPreviewControl.Location = new System.Drawing.Point(0, 0);
@@ -460,7 +460,7 @@ namespace HZCYKJTHardWare.Proxy
             this.tlpPreviewControl.Size = new System.Drawing.Size(400, 200);
             this.tlpPreviewControl.TabIndex = 0;
             // 
-            // lblCardPreviewControl
+            // 控件：lblCardPreviewControl
             // 
             this.lblCardPreviewControl.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblCardPreviewControl.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Bold);
@@ -473,7 +473,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCardPreviewControl.Text = "预览控制";
             this.lblCardPreviewControl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // panelPreview
+            // 控件：panelPreview
             // 
             this.panelPreview.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(248)))), ((int)(((byte)(250)))), ((int)(((byte)(252)))));
             this.panelPreview.Controls.Add(this.previewLayout);
@@ -487,7 +487,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPreview.Size = new System.Drawing.Size(2360, 468);
             this.panelPreview.TabIndex = 1;
             // 
-            // previewLayout
+            // 控件：previewLayout
             // 
             this.previewLayout.ColumnCount = 7;
             this.previewLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
@@ -513,7 +513,7 @@ namespace HZCYKJTHardWare.Proxy
             this.previewLayout.Size = new System.Drawing.Size(2264, 452);
             this.previewLayout.TabIndex = 0;
             // 
-            // panelCamera
+            // 控件：panelCamera
             // 
             this.panelCamera.BackColor = System.Drawing.Color.Black;
             this.panelCamera.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -528,7 +528,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelCamera.TabIndex = 0;
             this.panelCamera.Text = "摄像头预览";
             // 
-            // lblCameraPlaceholder
+            // 控件：lblCameraPlaceholder
             // 
             this.lblCameraPlaceholder.BackColor = System.Drawing.Color.Black;
             this.lblCameraPlaceholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -542,7 +542,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblCameraPlaceholder.Text = "摄像头未开启";
             this.lblCameraPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
-            // panelFingerprint
+            // 控件：panelFingerprint
             // 
             this.panelFingerprint.BackColor = System.Drawing.Color.Black;
             this.panelFingerprint.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -557,7 +557,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelFingerprint.TabIndex = 1;
             this.panelFingerprint.Text = "指纹预览";
             // 
-            // lblFingerprintPlaceholder
+            // 控件：lblFingerprintPlaceholder
             // 
             this.lblFingerprintPlaceholder.BackColor = System.Drawing.Color.Black;
             this.lblFingerprintPlaceholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -571,7 +571,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblFingerprintPlaceholder.Text = "指纹未开启";
             this.lblFingerprintPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
-            // panelIris
+            // 控件：panelIris
             // 
             this.panelIris.BackColor = System.Drawing.Color.Black;
             this.panelIris.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -586,7 +586,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelIris.TabIndex = 2;
             this.panelIris.Text = "虹膜预览";
             // 
-            // lblIrisPlaceholder
+            // 控件：lblIrisPlaceholder
             // 
             this.lblIrisPlaceholder.BackColor = System.Drawing.Color.Black;
             this.lblIrisPlaceholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -600,7 +600,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblIrisPlaceholder.Text = "虹膜未开启";
             this.lblIrisPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             //
-            // panelPlateCJ
+            // 控件：panelPlateCJ
             //
             this.panelPlateCJ.BackColor = System.Drawing.Color.Black;
             this.panelPlateCJ.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -615,7 +615,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPlateCJ.TabIndex = 3;
             this.panelPlateCJ.Text = "出境车牌预览";
             //
-            // lblPlateCJPlaceholder
+            // 控件：lblPlateCJPlaceholder
             //
             this.lblPlateCJPlaceholder.BackColor = System.Drawing.Color.Black;
             this.lblPlateCJPlaceholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -629,7 +629,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblPlateCJPlaceholder.Text = "出境车牌预览未开启";
             this.lblPlateCJPlaceholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             //
-            // panelPlateRJ2
+            // 控件：panelPlateRJ2
             //
             this.panelPlateRJ2.BackColor = System.Drawing.Color.Black;
             this.panelPlateRJ2.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -644,7 +644,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPlateRJ2.TabIndex = 4;
             this.panelPlateRJ2.Text = "入境车牌预览 2";
             //
-            // lblPlateRJ2Placeholder
+            // 控件：lblPlateRJ2Placeholder
             //
             this.lblPlateRJ2Placeholder.BackColor = System.Drawing.Color.Black;
             this.lblPlateRJ2Placeholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -657,7 +657,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblPlateRJ2Placeholder.Text = "入境车牌预览 2 未开启";
             this.lblPlateRJ2Placeholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             //
-            // panelPlateRJ3
+            // 控件：panelPlateRJ3
             //
             this.panelPlateRJ3.BackColor = System.Drawing.Color.Black;
             this.panelPlateRJ3.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
@@ -672,7 +672,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelPlateRJ3.TabIndex = 5;
             this.panelPlateRJ3.Text = "入境车牌预览 3";
             //
-            // lblPlateRJ3Placeholder
+            // 控件：lblPlateRJ3Placeholder
             //
             this.lblPlateRJ3Placeholder.BackColor = System.Drawing.Color.Black;
             this.lblPlateRJ3Placeholder.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -685,7 +685,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblPlateRJ3Placeholder.Text = "入境车牌预览 3 未开启";
             this.lblPlateRJ3Placeholder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
-            // splitter2
+            // 控件：splitter2
             // 
             this.splitter2.Location = new System.Drawing.Point(48, 0);
             this.splitter2.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
@@ -695,7 +695,7 @@ namespace HZCYKJTHardWare.Proxy
             this.splitter2.TabStop = false;
             this.splitter2.Visible = false;
             // 
-            // splitter1
+            // 控件：splitter1
             // 
             this.splitter1.Location = new System.Drawing.Point(40, 0);
             this.splitter1.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
@@ -705,7 +705,7 @@ namespace HZCYKJTHardWare.Proxy
             this.splitter1.TabStop = false;
             this.splitter1.Visible = false;
             // 
-            // panelLog
+            // 控件：panelLog
             // 
             this.panelLog.BackColor = System.Drawing.Color.White;
             this.panelLog.Controls.Add(this.memoLog);
@@ -719,7 +719,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelLog.Size = new System.Drawing.Size(2360, 352);
             this.panelLog.TabIndex = 0;
             // 
-            // memoLog
+            // 控件：memoLog
             // 
             this.memoLog.AutoScroll = true;
             this.memoLog.DetectUrls = false;
@@ -734,7 +734,7 @@ namespace HZCYKJTHardWare.Proxy
             this.memoLog.Text = "";
             this.memoLog.WordWrap = false;
             // 
-            // panelLogToolbar
+            // 控件：panelLogToolbar
             // 
             this.panelLogToolbar.Controls.Add(this.chkAutoScroll);
             this.panelLogToolbar.Controls.Add(this.chkErrorOnly);
@@ -748,7 +748,7 @@ namespace HZCYKJTHardWare.Proxy
             this.panelLogToolbar.Size = new System.Drawing.Size(2280, 56);
             this.panelLogToolbar.TabIndex = 1;
             // 
-            // chkAutoScroll
+            // 控件：chkAutoScroll
             // 
             this.chkAutoScroll.Anchor = System.Windows.Forms.AnchorStyles.Left;
             this.chkAutoScroll.AutoSize = true;
@@ -764,7 +764,7 @@ namespace HZCYKJTHardWare.Proxy
             this.chkAutoScroll.Text = "自动滚动";
             this.chkAutoScroll.UseVisualStyleBackColor = true;
             // 
-            // chkErrorOnly
+            // 控件：chkErrorOnly
             // 
             this.chkErrorOnly.Anchor = System.Windows.Forms.AnchorStyles.Left;
             this.chkErrorOnly.AutoSize = true;
@@ -778,7 +778,7 @@ namespace HZCYKJTHardWare.Proxy
             this.chkErrorOnly.Text = "仅错误";
             this.chkErrorOnly.UseVisualStyleBackColor = true;
             // 
-            // btnClearLog
+            // 控件：btnClearLog
             // 
             this.btnClearLog.Anchor = System.Windows.Forms.AnchorStyles.Right;
             this.btnClearLog.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
@@ -791,7 +791,7 @@ namespace HZCYKJTHardWare.Proxy
             this.btnClearLog.Text = "清空";
             this.btnClearLog.UseVisualStyleBackColor = true;
             // 
-            // btnExportLog
+            // 控件：btnExportLog
             // 
             this.btnExportLog.Anchor = System.Windows.Forms.AnchorStyles.Right;
             this.btnExportLog.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
@@ -804,7 +804,7 @@ namespace HZCYKJTHardWare.Proxy
             this.btnExportLog.Text = "导出";
             this.btnExportLog.UseVisualStyleBackColor = true;
             // 
-            // lblLogTitle
+            // 控件：lblLogTitle
             // 
             this.lblLogTitle.Dock = System.Windows.Forms.DockStyle.Top;
             this.lblLogTitle.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Bold);
@@ -817,14 +817,14 @@ namespace HZCYKJTHardWare.Proxy
             this.lblLogTitle.Text = "实时日志";
             this.lblLogTitle.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // btnStartServer
+            // 控件：btnStartServer
             // 
             this.btnStartServer.Location = new System.Drawing.Point(0, 0);
             this.btnStartServer.Name = "btnStartServer";
             this.btnStartServer.Size = new System.Drawing.Size(75, 23);
             this.btnStartServer.TabIndex = 0;
             // 
-            // btnStopServer
+            // 控件：btnStopServer
             // 
             this.btnStopServer.Enabled = false;
             this.btnStopServer.Location = new System.Drawing.Point(0, 0);
@@ -832,161 +832,161 @@ namespace HZCYKJTHardWare.Proxy
             this.btnStopServer.Size = new System.Drawing.Size(75, 23);
             this.btnStopServer.TabIndex = 0;
             // 
-            // btnStartProcess
+            // 控件：btnStartProcess
             // 
             this.btnStartProcess.Location = new System.Drawing.Point(0, 0);
             this.btnStartProcess.Name = "btnStartProcess";
             this.btnStartProcess.Size = new System.Drawing.Size(75, 23);
             this.btnStartProcess.TabIndex = 0;
             // 
-            // btnEndProcess
+            // 控件：btnEndProcess
             // 
             this.btnEndProcess.Location = new System.Drawing.Point(0, 0);
             this.btnEndProcess.Name = "btnEndProcess";
             this.btnEndProcess.Size = new System.Drawing.Size(75, 23);
             this.btnEndProcess.TabIndex = 0;
             // 
-            // btnSwitchTerminal1
+            // 控件：btnSwitchTerminal1
             // 
             this.btnSwitchTerminal1.Location = new System.Drawing.Point(0, 0);
             this.btnSwitchTerminal1.Name = "btnSwitchTerminal1";
             this.btnSwitchTerminal1.Size = new System.Drawing.Size(75, 23);
             this.btnSwitchTerminal1.TabIndex = 0;
             // 
-            // btnSwitchTerminal2
+            // 控件：btnSwitchTerminal2
             // 
             this.btnSwitchTerminal2.Location = new System.Drawing.Point(0, 0);
             this.btnSwitchTerminal2.Name = "btnSwitchTerminal2";
             this.btnSwitchTerminal2.Size = new System.Drawing.Size(75, 23);
             this.btnSwitchTerminal2.TabIndex = 0;
             // 
-            // btnFaceCapture
+            // 控件：btnFaceCapture
             // 
             this.btnFaceCapture.Location = new System.Drawing.Point(0, 0);
             this.btnFaceCapture.Name = "btnFaceCapture";
             this.btnFaceCapture.Size = new System.Drawing.Size(75, 23);
             this.btnFaceCapture.TabIndex = 0;
             // 
-            // btnFingerprintCapture
+            // 控件：btnFingerprintCapture
             // 
             this.btnFingerprintCapture.Location = new System.Drawing.Point(0, 0);
             this.btnFingerprintCapture.Name = "btnFingerprintCapture";
             this.btnFingerprintCapture.Size = new System.Drawing.Size(75, 23);
             this.btnFingerprintCapture.TabIndex = 0;
             // 
-            // btnOCR
+            // 控件：btnOCR
             // 
             this.btnOCR.Location = new System.Drawing.Point(0, 0);
             this.btnOCR.Name = "btnOCR";
             this.btnOCR.Size = new System.Drawing.Size(75, 23);
             this.btnOCR.TabIndex = 0;
             // 
-            // btnNfcCard
+            // 控件：btnNfcCard
             // 
             this.btnNfcCard.Location = new System.Drawing.Point(0, 0);
             this.btnNfcCard.Name = "btnNfcCard";
             this.btnNfcCard.Size = new System.Drawing.Size(75, 23);
             this.btnNfcCard.TabIndex = 0;
             // 
-            // btnIrisCapture
+            // 控件：btnIrisCapture
             // 
             this.btnIrisCapture.Location = new System.Drawing.Point(0, 0);
             this.btnIrisCapture.Name = "btnIrisCapture";
             this.btnIrisCapture.Size = new System.Drawing.Size(75, 23);
             this.btnIrisCapture.TabIndex = 0;
             // 
-            // btnStartCameraPreview
+            // 控件：btnStartCameraPreview
             // 
             this.btnStartCameraPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStartCameraPreview.Name = "btnStartCameraPreview";
             this.btnStartCameraPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStartCameraPreview.TabIndex = 0;
             // 
-            // btnStopCameraPreview
+            // 控件：btnStopCameraPreview
             // 
             this.btnStopCameraPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStopCameraPreview.Name = "btnStopCameraPreview";
             this.btnStopCameraPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStopCameraPreview.TabIndex = 0;
             // 
-            // btnStartFingerprintPreview
+            // 控件：btnStartFingerprintPreview
             // 
             this.btnStartFingerprintPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStartFingerprintPreview.Name = "btnStartFingerprintPreview";
             this.btnStartFingerprintPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStartFingerprintPreview.TabIndex = 0;
             // 
-            // btnStopFingerprintPreview
+            // 控件：btnStopFingerprintPreview
             // 
             this.btnStopFingerprintPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStopFingerprintPreview.Name = "btnStopFingerprintPreview";
             this.btnStopFingerprintPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStopFingerprintPreview.TabIndex = 0;
             // 
-            // btnStartIrisPreview
+            // 控件：btnStartIrisPreview
             // 
             this.btnStartIrisPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStartIrisPreview.Name = "btnStartIrisPreview";
             this.btnStartIrisPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStartIrisPreview.TabIndex = 0;
             // 
-            // btnStopIrisPreview
+            // 控件：btnStopIrisPreview
             // 
             this.btnStopIrisPreview.Location = new System.Drawing.Point(0, 0);
             this.btnStopIrisPreview.Name = "btnStopIrisPreview";
             this.btnStopIrisPreview.Size = new System.Drawing.Size(75, 23);
             this.btnStopIrisPreview.TabIndex = 0;
             //
-            // btnStartPlatePreviewCJ
+            // 控件：btnStartPlatePreviewCJ
             //
             this.btnStartPlatePreviewCJ.Location = new System.Drawing.Point(0, 0);
             this.btnStartPlatePreviewCJ.Name = "btnStartPlatePreviewCJ";
             this.btnStartPlatePreviewCJ.Size = new System.Drawing.Size(75, 23);
             this.btnStartPlatePreviewCJ.TabIndex = 0;
             //
-            // btnStopPlatePreviewCJ
+            // 控件：btnStopPlatePreviewCJ
             //
             this.btnStopPlatePreviewCJ.Location = new System.Drawing.Point(0, 0);
             this.btnStopPlatePreviewCJ.Name = "btnStopPlatePreviewCJ";
             this.btnStopPlatePreviewCJ.Size = new System.Drawing.Size(75, 23);
             this.btnStopPlatePreviewCJ.TabIndex = 0;
             //
-            // btnStartPlatePreviewRJ2
+            // 控件：btnStartPlatePreviewRJ2
             //
             this.btnStartPlatePreviewRJ2.Location = new System.Drawing.Point(0, 0);
             this.btnStartPlatePreviewRJ2.Name = "btnStartPlatePreviewRJ2";
             this.btnStartPlatePreviewRJ2.Size = new System.Drawing.Size(75, 23);
             this.btnStartPlatePreviewRJ2.TabIndex = 0;
             //
-            // btnStopPlatePreviewRJ2
+            // 控件：btnStopPlatePreviewRJ2
             //
             this.btnStopPlatePreviewRJ2.Location = new System.Drawing.Point(0, 0);
             this.btnStopPlatePreviewRJ2.Name = "btnStopPlatePreviewRJ2";
             this.btnStopPlatePreviewRJ2.Size = new System.Drawing.Size(75, 23);
             this.btnStopPlatePreviewRJ2.TabIndex = 0;
             //
-            // btnStartPlatePreviewRJ3
+            // 控件：btnStartPlatePreviewRJ3
             //
             this.btnStartPlatePreviewRJ3.Location = new System.Drawing.Point(0, 0);
             this.btnStartPlatePreviewRJ3.Name = "btnStartPlatePreviewRJ3";
             this.btnStartPlatePreviewRJ3.Size = new System.Drawing.Size(75, 23);
             this.btnStartPlatePreviewRJ3.TabIndex = 0;
             //
-            // btnStopPlatePreviewRJ3
+            // 控件：btnStopPlatePreviewRJ3
             //
             this.btnStopPlatePreviewRJ3.Location = new System.Drawing.Point(0, 0);
             this.btnStopPlatePreviewRJ3.Name = "btnStopPlatePreviewRJ3";
             this.btnStopPlatePreviewRJ3.Size = new System.Drawing.Size(75, 23);
             this.btnStopPlatePreviewRJ3.TabIndex = 0;
             // 
-            // btnAuthorize
+            // 控件：btnAuthorize
             // 
             this.btnAuthorize.Location = new System.Drawing.Point(0, 0);
             this.btnAuthorize.Name = "btnAuthorize";
             this.btnAuthorize.Size = new System.Drawing.Size(75, 23);
             this.btnAuthorize.TabIndex = 0;
             // 
-            // MainForm
+            // 窗体：MainForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(192F, 192F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;

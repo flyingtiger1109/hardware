@@ -110,7 +110,7 @@ int NetworkDetector::Detect(const std::string& preferredSubnet) {
             }
         }
         LOG_WARN("NetDetector", "配置网段未匹配，降级自动选择，preferred_subnet_prefix=%s", preferredSubnet.c_str());
-        // fall through to auto-select
+        // 继续执行自动选择逻辑
     }
 
     // 只有一个 192.168 地址时自动选择
@@ -159,4 +159,4 @@ const std::string& NetworkDetector::GetSelectedIp() const { return m_selectedIp;
 const std::string& NetworkDetector::GetSelectedSubnetPrefix() const { return m_selectedSubnetPrefix; }
 const std::vector<std::string>& NetworkDetector::GetCandidates() const { return m_candidates; }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

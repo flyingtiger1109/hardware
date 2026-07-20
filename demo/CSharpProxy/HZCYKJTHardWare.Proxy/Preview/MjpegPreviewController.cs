@@ -23,29 +23,40 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const int ConnectTimeoutMs = 5000;
         private const int StreamReadTimeoutMs = 5000;
 
-        private readonly TaskCompletionSource<bool> _startTcs =
+        private readonly TaskCompletionSource<bool> _workerStartTcs =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _renderExitTcs =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _readerExitTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Thread _thread;
+        private readonly Thread _readerThread;
         private readonly string _description;
-        private readonly string _url;
-        private readonly IntPtr _parentHwnd;
         private readonly int _sourceWidth;
         private readonly int _sourceHeight;
         private readonly bool _swapDimensions;
         private readonly bool _visible;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private readonly AutoResetEvent _streamChanged = new AutoResetEvent(false);
+        private readonly object _stateLock = new object();
         private readonly object _requestLock = new object();
         private readonly object _faultLock = new object();
 
-        private volatile bool _disposed;
         private volatile bool _running;
         private volatile bool _stopRequested;
+        private bool _streamActive;
+        private string _url;
+        private IntPtr _requestedParentHwnd;
+        private long _streamGeneration;
+        private TaskCompletionSource<bool> _activationTcs;
+        private TaskCompletionSource<bool> _pauseTcs;
+        private int _disposeStarted;
+        private int _resourcesDisposed;
         private int _streamFaulted;
         private bool _faultCallbackIssued;
         private string _streamFaultReason;
         private Action<MjpegPreviewController, string> _streamFaultHandler;
         private HttpWebRequest _request;
-        private Thread _readerThread;
         private IntPtr _videoHwnd = IntPtr.Zero;
         private IntPtr _currentParentHwnd = IntPtr.Zero;
         private byte[] _latestFrame;
@@ -53,13 +64,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _renderedFrameSeq;
         private int _lastHostW;
         private int _lastHostH;
+        private static int _createdWorkerCount;
+        private static int _liveRenderThreadCount;
+        private static int _liveReaderThreadCount;
 
-        private MjpegPreviewController(string description, string url, IntPtr parentHwnd,
+        private MjpegPreviewController(string description, IntPtr parentHwnd,
             int sourceWidth, int sourceHeight, bool swapDimensions, bool visible)
         {
             _description = description;
-            _url = url;
-            _parentHwnd = parentHwnd;
+            _requestedParentHwnd = parentHwnd;
             _sourceWidth = sourceWidth;
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
@@ -71,13 +84,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Name = "MJPEG Preview Thread-" + description
             };
             _thread.SetApartmentState(ApartmentState.STA);
+
+            _readerThread = new Thread(ReadLoop)
+            {
+                IsBackground = true,
+                Name = "MJPEG Reader Thread-" + description
+            };
+            Interlocked.Increment(ref _createdWorkerCount);
         }
+
+        internal static int CreatedWorkerCount => Volatile.Read(ref _createdWorkerCount);
+        internal static int LiveRenderThreadCount => Volatile.Read(ref _liveRenderThreadCount);
+        internal static int LiveReaderThreadCount => Volatile.Read(ref _liveReaderThreadCount);
 
         public bool IsRunning
         {
             get
             {
-                return _running && Volatile.Read(ref _streamFaulted) == 0 &&
+                return _running && IsStreamActive() && Volatile.Read(ref _streamFaulted) == 0 &&
                        _videoHwnd != IntPtr.Zero && IsWindow(_videoHwnd);
             }
         }
@@ -90,8 +114,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             lock (_faultLock)
                 _streamFaultHandler = handler;
 
-            // The stream can fail immediately after the first frame and before PreviewManager
-            // stores the session. Dispatching here closes that registration race.
+            // 首帧到达后、PreviewManager 登记会话前数据流仍可能立即失败；此处转发故障以消除登记竞争窗口。
             TryDispatchStreamFault();
         }
 
@@ -99,31 +122,22 @@ namespace HZCYKJTHardWare.Proxy.Preview
             IntPtr parentHwnd, int sourceWidth, int sourceHeight, bool swapDimensions,
             bool visible, int timeoutMs)
         {
-            var controller = new MjpegPreviewController(description, url, parentHwnd,
+            var controller = new MjpegPreviewController(description, parentHwnd,
                 sourceWidth, sourceHeight, swapDimensions, visible);
 
             controller._thread.Start();
+            controller._readerThread.Start();
 
-            var completed = await Task.WhenAny(controller._startTcs.Task, Task.Delay(timeoutMs)).ConfigureAwait(false);
-            if (completed != controller._startTcs.Task)
+            var workerStarted = await WaitWithTimeoutAsync(controller._workerStartTcs.Task, timeoutMs)
+                .ConfigureAwait(false);
+            if (!workerStarted)
             {
-                Logger.Warn($"HTTP MJPEG preview start timeout, fallback will be tried: {description}, timeout={timeoutMs}ms, url={url}");
+                Logger.Warn($"HTTP MJPEG worker start timeout: {description}, timeout={timeoutMs}ms");
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
                 return null;
             }
 
-            bool ok;
-            try
-            {
-                ok = await controller._startTcs.Task.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn($"HTTP MJPEG preview start exception, fallback will be tried: {description}, error={ex.Message}");
-                await controller.DisposeAsync(1000).ConfigureAwait(false);
-                return null;
-            }
-
+            var ok = await controller.SwitchStreamAsync(url, parentHwnd, timeoutMs).ConfigureAwait(false);
             if (!ok)
             {
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
@@ -133,20 +147,110 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return controller;
         }
 
+        internal async Task<bool> SwitchStreamAsync(string url, IntPtr parentHwnd, int timeoutMs)
+        {
+            if (Volatile.Read(ref _disposeStarted) != 0 || _stopRequested ||
+                string.IsNullOrWhiteSpace(url) || parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd))
+                return false;
+
+            var activation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            long generation;
+            lock (_stateLock)
+            {
+                if (_stopRequested)
+                    return false;
+
+                _activationTcs?.TrySetResult(false);
+                _pauseTcs?.TrySetResult(true);
+                _pauseTcs = null;
+                generation = ++_streamGeneration;
+                _url = url;
+                _requestedParentHwnd = parentHwnd;
+                _streamActive = true;
+                _running = false;
+                _activationTcs = activation;
+                Interlocked.Exchange(ref _latestFrame, null);
+                _renderedFrameSeq = Interlocked.CompareExchange(ref _latestFrameSeq, 0, 0);
+            }
+
+            lock (_faultLock)
+            {
+                _streamFaultHandler = null;
+                _streamFaultReason = null;
+                _faultCallbackIssued = false;
+                Volatile.Write(ref _streamFaulted, 0);
+            }
+
+            AbortRequest();
+            _streamChanged.Set();
+
+            var completed = await Task.WhenAny(activation.Task, Task.Delay(Math.Max(1, timeoutMs)))
+                .ConfigureAwait(false);
+            if (completed == activation.Task && await activation.Task.ConfigureAwait(false))
+            {
+                Logger.Debug($"HTTP MJPEG worker已切换媒体: {_description}, generation={generation}, created={CreatedWorkerCount}, render_live={LiveRenderThreadCount}, reader_live={LiveReaderThreadCount}");
+                return true;
+            }
+
+            await PauseAsync(Math.Min(1000, Math.Max(1, timeoutMs))).ConfigureAwait(false);
+            Logger.Warn($"HTTP MJPEG preview start timeout, fallback will be tried: {_description}, timeout={timeoutMs}ms, url={url}");
+            return false;
+        }
+
+        internal async Task<bool> PauseAsync(int timeoutMs)
+        {
+            TaskCompletionSource<bool> pause;
+            lock (_stateLock)
+            {
+                _activationTcs?.TrySetResult(false);
+                _activationTcs = null;
+                _streamActive = false;
+                _running = false;
+                ++_streamGeneration;
+                pause = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _pauseTcs = pause;
+            }
+
+            lock (_faultLock)
+                _streamFaultHandler = null;
+
+            var requestIdle = false;
+            lock (_requestLock)
+                requestIdle = _request == null;
+            if (requestIdle)
+                pause.TrySetResult(true);
+
+            AbortRequest();
+            _streamChanged.Set();
+
+            var completed = await Task.WhenAny(pause.Task, Task.Delay(Math.Max(1, timeoutMs)))
+                .ConfigureAwait(false);
+            if (completed == pause.Task)
+                return true;
+
+            Logger.Warn($"HTTP MJPEG worker pause timeout: {_description}, timeout={timeoutMs}ms");
+            return false;
+        }
+
         public async Task DisposeAsync(int timeoutMs)
         {
-            if (_disposed)
+            if (Interlocked.Exchange(ref _disposeStarted, 1) == 0)
+                BeginStop();
+
+            var allExited = Task.WhenAll(_renderExitTcs.Task, _readerExitTcs.Task);
+            var completed = await Task.WhenAny(allExited, Task.Delay(Math.Max(1, timeoutMs)))
+                .ConfigureAwait(false);
+            if (completed != allExited)
+            {
+                Logger.Warn($"HTTP MJPEG worker stop timeout: {_description}, timeout={timeoutMs}ms, render_exited={_renderExitTcs.Task.IsCompleted}, reader_exited={_readerExitTcs.Task.IsCompleted}");
                 return;
+            }
 
-            _disposed = true;
-            BeginStop();
-
-            if (!_thread.IsAlive)
-                return;
-
-            var joined = await Task.Run(() => _thread.Join(timeoutMs)).ConfigureAwait(false);
-            if (!joined)
-                Logger.Warn($"HTTP MJPEG preview stop timeout: {_description}, timeout={timeoutMs}ms");
+            if (Interlocked.Exchange(ref _resourcesDisposed, 1) == 0)
+            {
+                _streamChanged.Dispose();
+                _cts.Dispose();
+            }
         }
 
         public void Dispose()
@@ -156,20 +260,23 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private void ThreadMain()
         {
+            var liveCount = Interlocked.Increment(ref _liveRenderThreadCount);
+            Logger.Debug($"HTTP MJPEG渲染线程已启动: {_description}, live={liveCount}, created={CreatedWorkerCount}");
             try
             {
                 if (!CreateRenderWindow())
                 {
-                    _startTcs.TrySetResult(false);
+                    _workerStartTcs.TrySetResult(false);
+                    BeginStop();
                     return;
                 }
 
-                _running = true;
-                StartReaderThread();
+                _workerStartTcs.TrySetResult(true);
 
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
+                    ApplyRequestedParentAndVisibility();
                     ApplyFillLayout();
                     RenderLatestFrame();
                     Thread.Sleep(RenderIntervalMs);
@@ -178,59 +285,40 @@ namespace HZCYKJTHardWare.Proxy.Preview
             catch (Exception ex)
             {
                 Logger.Error($"HTTP MJPEG preview thread exception: {_description}, error={ex.Message}", ex);
-                _startTcs.TrySetResult(false);
+                _workerStartTcs.TrySetResult(false);
             }
             finally
             {
                 BeginStop();
-                JoinReaderThread();
                 DestroyRenderWindow();
                 _running = false;
-                _cts.Dispose();
-            }
-        }
-
-        private void StartReaderThread()
-        {
-            _readerThread = new Thread(ReadLoop)
-            {
-                IsBackground = true,
-                Name = "MJPEG Reader Thread-" + _description
-            };
-            _readerThread.Start();
-        }
-
-        private void JoinReaderThread()
-        {
-            try
-            {
-                if (_readerThread != null && _readerThread.IsAlive)
-                    _readerThread.Join(1000);
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn($"HTTP MJPEG reader thread join failed: {_description}, error={ex.Message}");
+                var remaining = Interlocked.Decrement(ref _liveRenderThreadCount);
+                _renderExitTcs.TrySetResult(true);
+                Logger.Debug($"HTTP MJPEG渲染线程已退出: {_description}, live={remaining}, reader_live={LiveReaderThreadCount}");
             }
         }
 
         private bool CreateRenderWindow()
         {
-            if (_parentHwnd == IntPtr.Zero || !IsWindow(_parentHwnd))
+            IntPtr parentHwnd;
+            lock (_stateLock)
+                parentHwnd = _requestedParentHwnd;
+
+            if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd))
             {
-                Logger.Error($"HTTP MJPEG preview invalid parent HWND: {_description}, hwnd={_parentHwnd}");
+                Logger.Error($"HTTP MJPEG preview invalid parent HWND: {_description}, hwnd={parentHwnd}");
                 return false;
             }
 
-            _currentParentHwnd = _parentHwnd;
-            // The preview is display-only. Disabling the cross-process child prevents
-            // mouse clicks from moving input focus from the third-party host to Proxy.
+            _currentParentHwnd = parentHwnd;
+            // 预览窗口仅用于显示。禁用跨进程子窗口，避免鼠标操作将输入焦点从第三方宿主切换到 Proxy。
             var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
             if (_visible)
                 windowStyle |= WS_VISIBLE;
 
             _videoHwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_NOACTIVATE,
                 "STATIC", "", windowStyle,
-                0, 0, 1, 1, _parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+                0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
             if (_videoHwnd == IntPtr.Zero)
             {
                 Logger.Error($"HTTP MJPEG preview failed to create child window: {_description}");
@@ -265,89 +353,137 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private void ReadLoop()
         {
-            var buffer = new List<byte>(ReadBufferSize * 4);
-            int failureCount = 0;
-
-            while (!_stopRequested && !_cts.IsCancellationRequested)
+            var liveCount = Interlocked.Increment(ref _liveReaderThreadCount);
+            Logger.Debug($"HTTP MJPEG读取线程已启动: {_description}, live={liveCount}, created={CreatedWorkerCount}");
+            try
             {
-                string failureReason = null;
-                try
+                while (!_stopRequested && !_cts.IsCancellationRequested)
                 {
-                    var request = CreateRequest();
-                    lock (_requestLock)
-                        _request = request;
-
-                    using (var response = (HttpWebResponse)request.GetResponse())
-                    using (var stream = response.GetResponseStream())
+                    string url;
+                    long generation;
+                    if (!TryGetActiveStream(out url, out generation))
                     {
-                        Logger.Debug($"HTTP MJPEG流已打开: {_description}");
-
-                        if (stream == null)
-                            throw new IOException("MJPEG response stream is null");
-
-                        var readBuffer = new byte[ReadBufferSize];
-                        while (!_stopRequested && !_cts.IsCancellationRequested)
-                        {
-                            var read = stream.Read(readBuffer, 0, readBuffer.Length);
-                            if (read <= 0)
-                                break;
-
-                            AppendBytes(buffer, readBuffer, read);
-                            ExtractFrames(buffer);
-                        }
+                        CompletePauseIfIdle();
+                        _streamChanged.WaitOne(250);
+                        continue;
                     }
 
-                    if (!_stopRequested)
-                        failureReason = "MJPEG stream ended";
-                }
-                catch (WebException ex)
-                {
-                    if (_stopRequested || _cts.IsCancellationRequested)
-                        return;
-                    failureReason = ex.Message;
-                }
-                catch (Exception ex)
-                {
-                    if (_stopRequested || _cts.IsCancellationRequested)
-                        return;
-                    failureReason = ex.Message;
-                }
-                finally
-                {
-                    lock (_requestLock)
-                        _request = null;
-                }
+                    var buffer = new List<byte>(ReadBufferSize * 4);
+                    var failureCount = 0;
+                    while (!_stopRequested && IsCurrentStream(generation))
+                    {
+                        string failureReason = null;
+                        HttpWebRequest request = null;
+                        try
+                        {
+                            request = CreateRequest(url);
+                            lock (_requestLock)
+                            {
+                                if (!IsCurrentStream(generation))
+                                {
+                                    request.Abort();
+                                    break;
+                                }
+                                _request = request;
+                            }
 
-                if (_stopRequested || _cts.IsCancellationRequested)
-                    return;
+                            using (var response = (HttpWebResponse)request.GetResponse())
+                            using (var stream = response.GetResponseStream())
+                            {
+                                Logger.Debug($"HTTP MJPEG流已打开: {_description}, generation={generation}");
 
-                failureCount++;
-                buffer.Clear();
-                if (failureCount >= SameUrlMaxFailures)
-                {
-                    Logger.Warn($"HTTP MJPEG同URL恢复失败({SameUrlMaxFailures}次): {_description}, error={failureReason}");
-                    SignalStreamFault(failureReason);
-                    return;
+                                if (stream == null)
+                                    throw new IOException("MJPEG response stream is null");
+
+                                var readBuffer = new byte[ReadBufferSize];
+                                while (!_stopRequested && !_cts.IsCancellationRequested &&
+                                       IsCurrentStream(generation))
+                                {
+                                    var read = stream.Read(readBuffer, 0, readBuffer.Length);
+                                    if (read <= 0)
+                                        break;
+
+                                    AppendBytes(buffer, readBuffer, read);
+                                    ExtractFrames(buffer, generation);
+                                }
+                            }
+
+                            if (IsCurrentStream(generation))
+                                failureReason = "MJPEG stream ended";
+                        }
+                        catch (WebException ex)
+                        {
+                            if (_stopRequested || _cts.IsCancellationRequested ||
+                                !IsCurrentStream(generation))
+                                break;
+                            failureReason = ex.Message;
+                        }
+                        catch (Exception ex)
+                        {
+                            if (_stopRequested || _cts.IsCancellationRequested ||
+                                !IsCurrentStream(generation))
+                                break;
+                            failureReason = ex.Message;
+                        }
+                        finally
+                        {
+                            lock (_requestLock)
+                            {
+                                if (ReferenceEquals(_request, request))
+                                    _request = null;
+                            }
+                            CompletePauseIfIdle();
+                        }
+
+                        if (_stopRequested || _cts.IsCancellationRequested ||
+                            !IsCurrentStream(generation))
+                            break;
+
+                        failureCount++;
+                        buffer.Clear();
+                        if (failureCount >= SameUrlMaxFailures)
+                        {
+                            Logger.Warn($"HTTP MJPEG同URL恢复失败({SameUrlMaxFailures}次): {_description}, error={failureReason}");
+                            SignalStreamFault(generation, failureReason);
+                            break;
+                        }
+
+                        Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同URL重连" +
+                                    $"({failureCount}/{SameUrlMaxFailures}): {_description}, error={failureReason}");
+                        _streamChanged.WaitOne(ReconnectDelayMs);
+                    }
                 }
-
-                Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同URL重连" +
-                            $"({failureCount}/{SameUrlMaxFailures}): {_description}, error={failureReason}");
-                if (_cts.Token.WaitHandle.WaitOne(ReconnectDelayMs))
-                    return;
+            }
+            finally
+            {
+                CompletePauseIfIdle();
+                var remaining = Interlocked.Decrement(ref _liveReaderThreadCount);
+                _readerExitTcs.TrySetResult(true);
+                Logger.Debug($"HTTP MJPEG读取线程已退出: {_description}, live={remaining}, render_live={LiveRenderThreadCount}");
             }
         }
 
-        private void SignalStreamFault(string reason)
+        private void SignalStreamFault(long generation, string reason)
         {
-            if (_disposed || _stopRequested || Interlocked.Exchange(ref _streamFaulted, 1) != 0)
+            TaskCompletionSource<bool> activation;
+            lock (_stateLock)
+            {
+                if (_stopRequested || !_streamActive || generation != _streamGeneration)
+                    return;
+
+                _streamActive = false;
+                _running = false;
+                activation = _activationTcs;
+                _activationTcs = null;
+            }
+
+            if (Interlocked.Exchange(ref _streamFaulted, 1) != 0)
                 return;
 
             lock (_faultLock)
                 _streamFaultReason = string.IsNullOrWhiteSpace(reason) ? "MJPEG stream unavailable" : reason;
 
-            _running = false;
-            _startTcs.TrySetResult(false);
-            _stopRequested = true;
+            activation?.TrySetResult(false);
             TryDispatchStreamFault();
         }
 
@@ -375,9 +511,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
-        private HttpWebRequest CreateRequest()
+        private HttpWebRequest CreateRequest(string url)
         {
-            var request = (HttpWebRequest)WebRequest.Create(_url);
+            var request = (HttpWebRequest)WebRequest.Create(url);
             request.Method = "GET";
             request.Accept = "multipart/x-mixed-replace,image/jpeg,*/*";
             request.UserAgent = "HZCYKJTHardWare.Proxy MJPEG Preview";
@@ -407,7 +543,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 buffer.Clear();
         }
 
-        private void ExtractFrames(List<byte> buffer)
+        private void ExtractFrames(List<byte> buffer, long generation)
         {
             while (buffer.Count >= 4)
             {
@@ -429,7 +565,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var frame = new byte[frameLength];
                 buffer.CopyTo(0, frame, 0, frameLength);
                 buffer.RemoveRange(0, frameLength);
-                PublishFrame(frame);
+                PublishFrame(frame, generation);
             }
         }
 
@@ -454,11 +590,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 buffer.Add(0xFF);
         }
 
-        private void PublishFrame(byte[] frame)
+        private void PublishFrame(byte[] frame, long generation)
         {
+            TaskCompletionSource<bool> activation;
+            lock (_stateLock)
+            {
+                if (!_streamActive || generation != _streamGeneration)
+                    return;
+                activation = _activationTcs;
+                _running = true;
+            }
+
             Interlocked.Exchange(ref _latestFrame, frame);
             Interlocked.Increment(ref _latestFrameSeq);
-            _startTcs.TrySetResult(true);
+            activation?.TrySetResult(true);
         }
 
         private void RenderLatestFrame()
@@ -562,11 +707,84 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private void ApplyRequestedParentAndVisibility()
+        {
+            IntPtr requestedParent;
+            bool active;
+            lock (_stateLock)
+            {
+                requestedParent = _requestedParentHwnd;
+                active = _streamActive;
+            }
+
+            if (_videoHwnd == IntPtr.Zero || !IsWindow(_videoHwnd))
+                return;
+
+            if (requestedParent != IntPtr.Zero && requestedParent != _currentParentHwnd &&
+                IsWindow(requestedParent))
+            {
+                SetParent(_videoHwnd, requestedParent);
+                _currentParentHwnd = requestedParent;
+                _lastHostW = _lastHostH = 0;
+            }
+
+            ShowWindow(_videoHwnd, active && _visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+        }
+
+        private bool TryGetActiveStream(out string url, out long generation)
+        {
+            lock (_stateLock)
+            {
+                url = _url;
+                generation = _streamGeneration;
+                return _streamActive && !string.IsNullOrWhiteSpace(url);
+            }
+        }
+
+        private bool IsCurrentStream(long generation)
+        {
+            lock (_stateLock)
+                return !_stopRequested && _streamActive && generation == _streamGeneration;
+        }
+
+        private bool IsStreamActive()
+        {
+            lock (_stateLock)
+                return _streamActive;
+        }
+
+        private void CompletePauseIfIdle()
+        {
+            TaskCompletionSource<bool> pause = null;
+            lock (_stateLock)
+            {
+                if (!_streamActive)
+                    pause = _pauseTcs;
+            }
+            pause?.TrySetResult(true);
+        }
+
+        private static async Task<bool> WaitWithTimeoutAsync(Task<bool> task, int timeoutMs)
+        {
+            var completed = await Task.WhenAny(task, Task.Delay(Math.Max(1, timeoutMs)))
+                .ConfigureAwait(false);
+            return completed == task && await task.ConfigureAwait(false);
+        }
+
         private void BeginStop()
         {
             _stopRequested = true;
+            lock (_stateLock)
+            {
+                _streamActive = false;
+                _running = false;
+                _activationTcs?.TrySetResult(false);
+                _activationTcs = null;
+                _pauseTcs?.TrySetResult(true);
+            }
             try { _cts.Cancel(); } catch { }
             AbortRequest();
+            _streamChanged.Set();
         }
 
         private void AbortRequest()
@@ -582,6 +800,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string lpModuleName);
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
             int X, int Y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
@@ -600,6 +820,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const uint WS_EX_NOPARENTNOTIFY = 0x00000004;
         private const uint WS_EX_NOACTIVATE = 0x08000000;
         private const uint SWP_NOACTIVATE = 0x0010;
+        private const int SW_HIDE = 0;
+        private const int SW_SHOWNOACTIVATE = 4;
         private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
         [StructLayout(LayoutKind.Sequential)]

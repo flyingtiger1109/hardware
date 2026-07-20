@@ -14,4 +14,4 @@ public:
     static std::string Encode(const unsigned char* data, size_t len);
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

@@ -295,4 +295,4 @@ std::string ResultParser::ExtractPreviewUrl(const std::string& json) {
     return url;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

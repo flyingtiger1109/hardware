@@ -29,33 +29,36 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     var callbackHandler = new TerminalCallbackHandler(
                         terminalClient, terminalManager, callbackSender,
                         requestRegistry, processRegistry, _ => { });
+                    var routeA = terminalManager.CurrentRoute;
+                    var sourceA = IPAddress.Parse(new System.Uri(routeA.BaseUrl).Host);
 
                     var processA = processRegistry.Prepare(1,
-                        "http://192.168.20.30:9098", "PROCESS_A",
+                        routeA.BaseUrl, "PROCESS_A",
                         @"C:\capture-a", 0);
                     Assert.IsTrue(processRegistry.Commit(processA));
 
                     await callbackHandler.HandleAsync(
                         NfcBody("PROCESS_A", "CARD-A-1"),
-                        IPAddress.Parse("192.168.20.30"));
+                        sourceA);
                     Assert.AreEqual(1, captureHandler.Count);
 
                     Assert.IsTrue(terminalManager.SwitchTo(2));
+                    var routeB = terminalManager.CurrentRoute;
                     var processB = processRegistry.Prepare(2,
-                        "http://192.168.20.31:9098", "PROCESS_B",
+                        routeB.BaseUrl, "PROCESS_B",
                         @"C:\capture-b", 1);
                     Assert.IsTrue(processRegistry.Commit(processB));
 
                     await callbackHandler.HandleAsync(
                         NfcBody("PROCESS_A", "CARD-A-INACTIVE"),
-                        IPAddress.Parse("192.168.20.30"));
+                        sourceA);
                     Assert.AreEqual(1, captureHandler.Count,
                         "inactive terminal callback must not cross routes");
 
                     Assert.IsTrue(terminalManager.SwitchTo(1));
                     await callbackHandler.HandleAsync(
                         NfcBody("PROCESS_A", "CARD-A-2"),
-                        IPAddress.Parse("192.168.20.30"));
+                        sourceA);
 
                     Assert.AreEqual(2, captureHandler.Count);
                     var requestIds = captureHandler.RequestIds;

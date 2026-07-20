@@ -3,6 +3,7 @@
 #include "path_helper.h"
 #include <algorithm>
 #include <filesystem>
+#include <io.h>
 #include <share.h>
 #include <vector>
 
@@ -22,6 +23,16 @@ const char* ShortFunctionName(const char* function) {
     }
     return last;
 }
+
+void WriteUtf8BomIfEmpty(FILE* file) {
+    if (!file) return;
+
+    const int descriptor = _fileno(file);
+    if (descriptor < 0 || _filelengthi64(descriptor) != 0) return;
+
+    static const unsigned char utf8Bom[] = {0xEF, 0xBB, 0xBF};
+    fwrite(utf8Bom, 1, sizeof(utf8Bom), file);
+}
 }
 
 Logger::Logger() {
@@ -35,6 +46,8 @@ Logger::~Logger() {
 namespace { Logger* g_pLogger = nullptr; }
 
 Logger& Logger::Instance() {
+    // 审查建议：裸指针惰性初始化不具备并发首次访问保障，且实例未显式释放。
+    // 如需支持并发首次调用或 DLL 反复装卸，建议使用 std::call_once，并明确进程级生命周期策略。
     if (!g_pLogger) g_pLogger = new Logger();
     return *g_pLogger;
 }
@@ -86,6 +99,7 @@ bool Logger::Init(const std::string& logDir) {
     m_file = _wfsopen(wLogPath.c_str(), L"a", _SH_DENYNO);
     if (m_file) {
         setvbuf(m_file, nullptr, _IOFBF, 64 * 1024);
+        WriteUtf8BomIfEmpty(m_file);
     }
     m_currentLogPath = logPath;
     m_pendingLines = 0;
@@ -272,6 +286,7 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
         m_file = _wfsopen(wLogPath.c_str(), L"a", _SH_DENYNO);
         if (m_file) {
             setvbuf(m_file, nullptr, _IOFBF, 64 * 1024);
+            WriteUtf8BomIfEmpty(m_file);
             m_currentLogPath = desiredLogPath;
             m_pendingLines = 0;
             m_lastFlushTick = GetTickCount64();
@@ -339,4 +354,4 @@ void Logger::SetLevel(LogLevel level) {
     m_level = level;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

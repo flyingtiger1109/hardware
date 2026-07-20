@@ -36,4 +36,4 @@ private:
     static std::string ExtractStringValue(const std::string& json, size_t pos);
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

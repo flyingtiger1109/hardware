@@ -8,12 +8,11 @@ using HZCYKJTHardWare.Proxy.Terminal;
 namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 {
     /// <summary>
-    /// Synchronous execution methods that run on WorkerQueue dedicated threads.
-    /// Extracted from ProxyServer — all methods are designed for the "executing
-    /// thread per queue" model and should NOT be called from ThreadPool or UI.
+    /// 在 WorkerQueue 专用线程上运行的同步执行方法。
+    /// 从 ProxyServer 拆分，全部方法均按“每个队列一个执行线程”模型设计，
+    /// 不应从 ThreadPool 或 UI 线程调用。
     ///
-    /// Async terminal calls are synchronously bridged only on dedicated worker
-    /// threads, never on the UI thread.
+    /// 仅在专用工作线程上同步桥接终端异步调用，不在 UI 线程上执行。
     /// </summary>
     public sealed class WorkerExecutionEngine
     {
@@ -27,7 +26,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
         private const string TerminalSwitchingResult =
             "{\"error\":true,\"code\":\"terminal_switching\"}";
 
-        // Synchronous adapters invoked only by dedicated capture workers.
+        // 仅由专用采集工作线程调用的同步适配器
         public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFaceFunc { get; set; }
         public Func<string, string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
 
@@ -49,7 +48,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             _getIrisCallbackUrl = getIrisCallbackUrl;
         }
 
-        // ====== Sync Captures ======
+        // ====== 同步采集 ======
 
         internal void ExecuteCaptureFace(QueueTask<object> task)
         {
@@ -65,7 +64,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 }
                 var saveDir = data?.SaveDir;
                 if (string.IsNullOrEmpty(saveDir))
-                    saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
+                    saveDir = _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
                 var captureFunc = CaptureFaceFunc;
@@ -99,7 +98,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 }
                 var saveDir = data?.SaveDir;
                 if (string.IsNullOrEmpty(saveDir))
-                    saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
+                    saveDir = _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
                 var saveDirHk = data?.SaveDirHk;
 
@@ -120,7 +119,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             }
         }
 
-        // ====== Async Resources ======
+        // ====== 异步资源 ======
 
         internal void ExecuteOcrInternal(QueueTask<object> task)
         {
@@ -197,7 +196,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             }
         }
 
-        // ====== Iris ======
+        // ====== 虹膜 ======
 
         internal void ExecuteIrisInternal(IrisTaskData data)
         {
@@ -288,7 +287,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             }
         }
 
-        // ====== Authorize (moved from DllCommandHandler) ======
+        // ====== 授权（从 DllCommandHandler 迁移）======
 
         internal void ExecuteAuthorizeInternal(QueueTask<object> task)
         {

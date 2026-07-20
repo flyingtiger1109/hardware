@@ -80,4 +80,4 @@ std::string Base64::Encode(const unsigned char* data, size_t len) {
     return result;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

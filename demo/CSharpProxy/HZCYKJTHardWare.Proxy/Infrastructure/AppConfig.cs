@@ -20,29 +20,29 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static readonly Lazy<AppConfig> _lazy = new Lazy<AppConfig>(() => Load());
         public static AppConfig Instance => _lazy.Value;
 
-        // DLL communication server
+        // DLL 通信服务
         public string DllServerHost { get; set; } = "127.0.0.1";
         public int DllServerPort { get; set; } = 18080;
 
-        // Terminal callback receiver
+        // 终端回调接收服务
         public string CallbackListenHost { get; set; } = "0.0.0.0";
         public string CallbackPublicHost { get; set; } = "";  // public_host: terminal callback address for terminals to reach back
         public int CallbackListenPort { get; set; } = 18081;
         public string CallbackPath { get; set; } = "/terminal-callback";
 
-        // Terminal configuration
+        // 终端配置
         public string TerminalScheme { get; set; } = "http";
         public int TerminalPort { get; set; } = 9098;
         public int Terminal1HostSuffix { get; set; } = 30;
         public int Terminal2HostSuffix { get; set; } = 31;
         public string SubnetPrefix { get; set; } = "192.168.20";
 
-        // DLL callback server (where to send results back to DLL)
+        // DLL 回调服务（用于向 DLL 返回结果）
         public string DllCallbackHost { get; set; } = "";
         public int DllCallbackPort { get; set; } = 39091;
         public string DllCallbackBasePath { get; set; } = "/HZCYKJTHardWare/callback";
 
-        // Preview settings
+        // 预览配置
         public int RtspNetworkCachingMs { get; set; } = 50;
         public int RtspLiveCachingMs { get; set; } = 50;
         public int PreviewCheckHwndIntervalMs { get; set; } = 500;
@@ -50,16 +50,16 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public PlatePreviewCameraConfig PlatePreviewCJ { get; set; } = new PlatePreviewCameraConfig();
         public PlatePreviewCameraConfig PlatePreviewRJ2 { get; set; } = new PlatePreviewCameraConfig();
         public PlatePreviewCameraConfig PlatePreviewRJ3 { get; set; } = new PlatePreviewCameraConfig();
-        // Save settings
+        // 保存配置
         public string DefaultSaveDir { get; set; } = @".\captures";
         public bool CreateDateFolder { get; set; } = true;
         public bool CreateRequestFolder { get; set; } = true;
 
-        // Paths
+        // 路径配置
         public string ExeDir { get; set; }
         public string VlcDir { get; set; }
 
-        // Log settings
+        // 日志配置
         public string LogLevel { get; set; } = "info";
         public int LogRetentionDays { get; set; } = 30;
         public int LogMaxTotalSizeMb { get; set; } = 2048;
@@ -68,7 +68,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public int LogFlushBatchSize { get; set; } = 50;
 
         /// <summary>
-        /// Unified config file shared by the DLL and C# proxy.
+        /// DLL 与 C# Proxy 共用的统一配置文件。
         /// </summary>
         private const string ConfigFile = "HZCYKJTHardWare.json";
 
@@ -89,7 +89,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var json = File.ReadAllText(jsonPath, Encoding.UTF8);
                 var obj = JObject.Parse(json);
 
-                // Supports both the old C# key and the unified DLL key.
+                // 同时兼容旧版 C# 配置键和统一 DLL 配置键
                 var dllServer = obj["dll_server"] ?? obj["delphi_server"];
                 if (dllServer != null)
                 {
@@ -97,7 +97,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.DllServerPort = dllServer.Value<int?>("port") ?? config.DllServerPort;
                 }
 
-                // terminal_callback_server
+                // terminal_callback_server 配置段
                 var callbackServer = obj["terminal_callback_server"];
                 if (callbackServer != null)
                 {
@@ -107,7 +107,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.CallbackPath = callbackServer.Value<string>("path") ?? config.CallbackPath;
                 }
 
-                // terminal
+                // terminal 配置段
                 var terminal = obj["terminal"];
                 if (terminal != null)
                 {
@@ -117,7 +117,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                         ?? terminal.Value<string>("preferred_subnet_prefix")
                         ?? config.SubnetPrefix;
 
-                    // C# key: "devices"; also supports legacy "auto_subnet_devices"
+                    // C# 配置键为 "devices"，同时兼容旧版 "auto_subnet_devices"
                     var devices = terminal["devices"] ?? terminal["auto_subnet_devices"];
                     if (devices != null)
                     {
@@ -131,7 +131,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     }
                 }
 
-                // callback_server
+                // callback_server 配置段
                 var dllCallback = obj["callback_server"];
                 if (dllCallback != null)
                 {
@@ -140,7 +140,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.DllCallbackBasePath = dllCallback.Value<string>("base_path") ?? config.DllCallbackBasePath;
                 }
 
-                // preview
+                // preview 配置段
                 var preview = obj["preview"];
                 if (preview != null)
                 {
@@ -153,15 +153,14 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     var plate = preview["plate"];
                     if (plate != null)
                     {
-                        // Flat camera configuration only. Direction-to-camera composition is
-                        // intentionally owned by the third-party caller.
+                        // 此处仅保存扁平化相机配置；方向与相机的组合关系由第三方调用方维护。
                         config.PlatePreviewCJ = ReadPlatePreviewCamera(plate["cj"]);
                         config.PlatePreviewRJ2 = ReadPlatePreviewCamera(plate["rj2"]);
                         config.PlatePreviewRJ3 = ReadPlatePreviewCamera(plate["rj3"]);
                     }
                 }
 
-                // Supports both the old C# key and the unified DLL key.
+                // 同时兼容旧版 C# 配置键和统一 DLL 配置键
                 var save = obj["save"];
                 if (save != null)
                 {
@@ -266,8 +265,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         }
 
         /// <summary>
-        /// Gets the terminal callback base URL that terminals can reach back to.
-        /// Uses public_host if set, otherwise falls back to LAN IP.
+        /// 获取终端可访问的回调基础 URL。已配置 public_host 时优先使用，否则回退到局域网 IP。
         /// </summary>
         public string GetTerminalCallbackBaseUrl(string lanIp)
         {

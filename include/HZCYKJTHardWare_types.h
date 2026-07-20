@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-/* Internal error codes (logged to file, not exposed to caller). Public API returns 1/0. */
+/* 内部错误码，仅写入日志，不向调用方暴露；公共 API 返回 1 或 0。 */
 #define HZCYKJTHardWare_RET_OK                         1
 #define HZCYKJTHardWare_RET_FAILED                    -1
 #define HZCYKJTHardWare_RET_NOT_INITIALIZED           -2
@@ -38,7 +38,7 @@ extern "C" {
 #define HZCYKJTHardWare_RET_CONFIG_INVALID           -29
 #define HZCYKJTHardWare_RET_CONFIG_FIELD_MISSING     -30
 
-/* Event types */
+/* 事件类型 */
 #define HZCYKJTHardWare_EVENT_TERMINAL_ONLINE              1001
 #define HZCYKJTHardWare_EVENT_TERMINAL_OFFLINE             1002
 #define HZCYKJTHardWare_EVENT_TERMINAL_SWITCHED            1003
@@ -54,7 +54,7 @@ extern "C" {
 #define HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_STOPPED  1302
 #define HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_FAILED   1303
 
-/* Reserved legacy events. Face/fingerprint capture currently return synchronously. */
+/* 保留的旧版事件；当前人脸和指纹采集采用同步返回。 */
 #define HZCYKJTHardWare_EVENT_FACE_CAPTURE_SUCCESS         1401
 #define HZCYKJTHardWare_EVENT_FACE_CAPTURE_FAILED          1402
 #define HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_SUCCESS  1501
@@ -82,7 +82,7 @@ extern "C" {
 #define HZCYKJTHardWare_EVENT_AUTHORIZE_SUCCESS            2001
 #define HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED             2002
 
-/* Resource types */
+/* 资源类型 */
 #define HZCYKJTHardWare_RESOURCE_FACE_IMAGE        "face_image"
 #define HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE "fingerprint_image"
 #define HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT      "ocr_document"
@@ -92,9 +92,8 @@ extern "C" {
 #define HZCYKJTHardWare_RESOURCE_AUTHORIZATION    "authorization"
 
 /*
- * Unified event data.
- * All string pointers are valid only during the callback. Copy them inside the
- * callback if the caller needs to keep them.
+ * 统一事件数据。
+ * 所有字符串指针仅在回调函数执行期间有效；调用方需要保留数据时，必须在回调函数内复制。
  */
 #pragma pack(push, 1)
 typedef struct HZCYKJTHardWare_EVENT
@@ -129,4 +128,4 @@ typedef void (__stdcall *THZCYKJTHardWareEventCallback)(const char* eventJson);
 }
 #endif
 
-#endif /* HZCYKJTHARDWARE_TYPES_H */
+#endif /* HZCYKJTHARDWARE_TYPES_H 结束 */

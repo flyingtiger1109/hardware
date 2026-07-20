@@ -21,18 +21,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private string _vlcDir;
         private const string RiskySftpPluginRelativePath = @"plugins\access\libsftp_plugin.dll";
         private const uint LoadWithAlteredSearchPath = 0x00000008;
+        private const ushort ImageFileMachineI386 = 0x014c;
+        private const ushort ImageFileMachineAmd64 = 0x8664;
         private static readonly object RiskyPluginCheckLock = new object();
         private static readonly HashSet<string> RiskyPluginCheckedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Source dimensions for cover layout
+        // Cover 布局使用的源图像尺寸
         private int _sourceWidth;
         private int _sourceHeight;
         private bool _swapDimensions;
 
-        // Cached layout
+        // 布局缓存
         private int _lastHostW, _lastHostH, _lastSrcW, _lastSrcH;
 
-        // Delegates for libvlc functions
+        // libVLC 函数委托
         private delegate IntPtr LibvlcNew(int argc, IntPtr argv);
         private delegate void LibvlcRelease(IntPtr instance);
         private delegate IntPtr LibvlcMediaNewLocation(IntPtr instance, IntPtr mrl);
@@ -67,8 +69,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         public int WarmupMs { get; private set; }
 
         /// <summary>
-        /// Pre-load VLC libraries and create a short-lived instance to warm up the VLC engine.
-        /// This significantly reduces first-playback latency (same as Delphi TVlcWarmupThread).
+        /// 预加载 VLC 库并创建短生命周期实例以预热 VLC 引擎，降低首次播放延迟。
+        /// 行为与 Delphi TVlcWarmupThread 保持一致。
         /// </summary>
         public void Warmup()
         {
@@ -81,7 +83,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return;
                 }
 
-                // Create a minimal VLC instance to trigger library initialization
+                // 创建最小 VLC 实例以触发库初始化
                 var args = new List<string>
                 {
                     "--no-video-title-show", "--no-xlib", "--quiet", "--no-plugins-cache", "--intf", "dummy"
@@ -115,21 +117,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             if (_libVlcHandle != IntPtr.Zero) return true;
 
-            // Priority 1: local vlc directory in output (same as Delphi — full plugins)
-            var localVlcDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vlc");
-            if (System.IO.Directory.Exists(localVlcDir))
+            // 优先级 1：输出目录中的本地 vlc 目录，与 Delphi 一致并包含完整插件
+            foreach (var directoryName in GetLocalVlcDirectoryNames(Environment.Is64BitProcess))
             {
-                if (TryLoadFromDir(localVlcDir)) return true;
+                var localVlcDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, directoryName);
+                if (Directory.Exists(localVlcDir) && TryLoadFromDir(localVlcDir)) return true;
             }
 
-            // Priority 2: try extracted embedded resources (backward compat)
+            // 优先级 2：尝试已提取的嵌入资源，保持向后兼容
             var extractedDir = VlcResourceExtractor.EnsureExtracted();
             if (!string.IsNullOrEmpty(extractedDir) && System.IO.Directory.Exists(extractedDir))
             {
                 if (TryLoadFromDir(extractedDir)) return true;
             }
 
-            // Priority 3: external VLC installations
+            // 优先级 3：外部 VLC 安装目录
             var searchDirs = new[]
             {
                 vlcDir,
@@ -159,6 +161,19 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             try
             {
+                ushort coreMachine = 0;
+                ushort libMachine = 0;
+                var is64BitProcess = Environment.Is64BitProcess;
+                if (!IsPeMachineCompatible(corePath, is64BitProcess, out coreMachine) ||
+                    !IsPeMachineCompatible(libPath, is64BitProcess, out libMachine))
+                {
+                    Logger.Warn(
+                        $"Skipping incompatible VLC directory: dir={dir}, " +
+                        $"process={(is64BitProcess ? "x64" : "x86")}, " +
+                        $"libvlccore={FormatPeMachine(coreMachine)}, libvlc={FormatPeMachine(libMachine)}");
+                    return false;
+                }
+
                 DisableRiskySftpPlugin(dir);
                 _libVlcCoreHandle = LoadLibraryEx(corePath, IntPtr.Zero,
                     LoadWithAlteredSearchPath);
@@ -213,7 +228,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
-        // Child window handle for VLC rendering (same as Delphi's CreateWindowEx STATIC)
+        // VLC 渲染子窗口句柄，与 Delphi 的 CreateWindowEx STATIC 窗口一致
         private IntPtr _videoHwnd = IntPtr.Zero;
 
         public bool Play(string rtspUrl, IntPtr parentHwnd, int networkCachingMs, int liveCachingMs,
@@ -234,7 +249,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             try
             {
-                // 1) Create VLC instance (exact same args as Delphi)
+                // 1）使用与 Delphi 完全一致的参数创建 VLC 实例
                 var args = new List<string>
                 {
                     "--no-video-title-show", "--no-xlib", "--quiet", "--no-plugins-cache"
@@ -265,7 +280,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return false;
                 }
 
-                // 2) Create media with options
+                // 2）创建媒体对象并设置选项
                 Logger.Info($"VLC启动步骤：创建媒体，url={safeUrl}");
                 var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
                 var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
@@ -306,7 +321,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     AddMediaOption(media, ":no-audio");
                 }
 
-                // 3) Create player
+                // 3）创建播放器
                 Logger.Info($"VLC启动步骤：创建播放器，url={safeUrl}");
                 _mediaPlayer = _fnPlayerNewFromMedia(media);
                 _fnMediaRelease(media);
@@ -318,9 +333,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     return false;
                 }
 
-                // External plate preview binds libVLC directly to the caller-owned HWND.
-                // Local/debug sessions retain the Proxy-owned child window so their paint
-                // lifecycle remains isolated inside the Proxy process.
+                // 外部车牌预览将 libVLC 直接绑定到调用方持有的 HWND。
+                // 本地或调试会话继续使用 Proxy 持有的子窗口，使绘制生命周期隔离在 Proxy 进程内。
                 if (directRenderTarget)
                 {
                     Logger.Info($"VLC启动步骤：直接绑定目标窗口，url={safeUrl}，target={parentHwnd}");
@@ -345,12 +359,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     }
                 }
 
-                // 5) Set VLC render target → child window
+                // 5）将 VLC 渲染目标设置为子窗口
                 _fnPlayerSetHwnd(_mediaPlayer, _videoHwnd);
                 _fnVideoSetMouseInput?.Invoke(_mediaPlayer, 0);
                 _fnVideoSetKeyInput?.Invoke(_mediaPlayer, 0);
 
-                // 6) Play
+                // 6）开始播放
                 Logger.Info($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
@@ -360,11 +374,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
                 _running = true;
 
-                // 7) Scale to fill window (same as Delphi libvlc_video_set_scale(0.0))
+                // 7）缩放以填满窗口，与 Delphi 调用 libvlc_video_set_scale(0.0) 一致
                 if (_fnVideoSetScale != null)
                     _fnVideoSetScale(_mediaPlayer, 0.0f);
 
-                // 8) Apply cover layout AFTER play (same order as Delphi)
+                // 8）播放后应用 Cover 布局，调用顺序与 Delphi 一致
                 ApplyCoverLayout();
                 Logger.Info($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
@@ -380,8 +394,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Clean up resources created during a failed Play attempt, without touching resources
-        /// from a previous successful Play (those are managed by Stop).
+        /// 清理本次 Play 失败时创建的资源，不处理上次成功播放的资源；后者由 Stop 管理。
         /// </summary>
         private void CleanupPartial()
         {
@@ -396,8 +409,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Release VLC instance and video window but keep DLLs loaded (for warmup).
-        /// Calling FreeLibrary after warmup causes subsequent libvlc_new to fail.
+        /// 释放 VLC 实例和视频窗口，但保留已加载的 DLL 以维持预热状态。
+        /// 预热后调用 FreeLibrary 会导致后续 libvlc_new 失败。
         /// </summary>
         public void StopKeepDlls()
         {
@@ -425,7 +438,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Reparent the render window to a new parent and apply cover layout.
+        /// 将渲染窗口迁移到新的父窗口，并应用 Cover 布局。
         /// </summary>
         public bool SetParentWindow(IntPtr newParentHwnd)
         {
@@ -455,8 +468,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// Apply cover-fit layout to child video window (same algorithm as Delphi ApplyCoverLayout).
-        /// Uses MulDiv for precise integer scaling — avoids floating-point rounding differences.
+        /// 对视频子窗口应用 Cover 布局，算法与 Delphi ApplyCoverLayout 一致。
+        /// 使用 MulDiv 进行精确整数缩放，避免浮点舍入差异。
         /// </summary>
         public void ApplyCoverLayout()
         {
@@ -477,7 +490,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 int srcH = _sourceHeight > 0 ? _sourceHeight : hostH;
                 if (srcW <= 0 || srcH <= 0) return;
 
-                // Swap for portrait sources (e.g. camera 480x640)
+                // 竖向视频源需交换宽高，例如 480x640 相机画面
                 int displayW = srcW, displayH = srcH;
                 if (_swapDimensions)
                 {
@@ -501,11 +514,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastSrcW = displayW;
                 _lastSrcH = displayH;
 
-                // 1) Tell VLC to scale to fill window exactly (same as Delphi libvlc_video_set_scale(0.0))
+                // 1）通知 VLC 精确缩放并填满窗口，与 Delphi 的 libvlc_video_set_scale(0.0) 一致
                 if (_fnVideoSetScale != null)
                     _fnVideoSetScale(_mediaPlayer, 0.0f);
 
-                // 2) Set aspect ratio (same as Delphi)
+                // 2）设置宽高比，与 Delphi 一致
                 if (_fnVideoSetAspectRatio != null)
                 {
                     var ratioStr = $"{displayW}:{displayH}";
@@ -514,11 +527,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     Marshal.FreeHGlobal(ratioPtr);
                 }
 
-                // 3) Calculate cover-fit position/size (same MulDiv algorithm as Delphi)
+                // 3）使用与 Delphi 一致的 MulDiv 算法计算 Cover 布局位置和尺寸
                 int videoW, videoH, videoX, videoY;
                 if (displayW * hostH > displayH * hostW)
                 {
-                    // Fit by height (pillarbox) - same as Delphi MulDiv
+                    // 按高度适配并产生左右黑边，计算方式与 Delphi MulDiv 一致
                     videoH = hostH;
                     videoW = (displayW * hostH) / displayH;
                     videoX = (hostW - videoW) / 2;
@@ -526,7 +539,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
                 else
                 {
-                    // Fit by width (letterbox) - same as Delphi MulDiv
+                    // 按宽度适配并产生上下黑边，计算方式与 Delphi MulDiv 一致
                     videoW = hostW;
                     videoH = (displayH * hostW) / displayW;
                     videoX = 0;
@@ -551,7 +564,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public void Stop()
         {
-            // Stop and release VLC player (same order as Delphi)
+            // 按 Delphi 的顺序停止并释放 VLC 播放器
             if (_mediaPlayer != IntPtr.Zero)
             {
                 try { _fnPlayerSetHwnd?.Invoke(_mediaPlayer, IntPtr.Zero); } catch { }
@@ -565,7 +578,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _vlcInstance = IntPtr.Zero;
             }
 
-            // Destroy child video window (same as Delphi DestroyWindow)
+            // 销毁视频子窗口，与 Delphi 的 DestroyWindow 行为一致
             if (_ownsVideoHwnd && _videoHwnd != IntPtr.Zero)
             {
                 DestroyWindow(_videoHwnd);
@@ -601,6 +614,61 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var at = value.IndexOf('@', authorityStart);
             if (at <= authorityStart) return value;
             return value.Substring(0, authorityStart) + "***:***@" + value.Substring(at + 1);
+        }
+
+        internal static string[] GetLocalVlcDirectoryNames(bool is64BitProcess)
+        {
+            return is64BitProcess
+                ? new[] { "vlc-x64", "vlc" }
+                : new[] { "vlc" };
+        }
+
+        internal static bool IsPeMachineCompatible(
+            string filePath,
+            bool is64BitProcess,
+            out ushort machine)
+        {
+            machine = 0;
+            try
+            {
+                using (var stream = new FileStream(
+                    filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new BinaryReader(stream))
+                {
+                    if (stream.Length < 64 || reader.ReadUInt16() != 0x5a4d)
+                        return false;
+
+                    stream.Position = 0x3c;
+                    var peOffset = reader.ReadInt32();
+                    if (peOffset < 0 || peOffset > stream.Length - 6)
+                        return false;
+
+                    stream.Position = peOffset;
+                    if (reader.ReadUInt32() != 0x00004550)
+                        return false;
+
+                    machine = reader.ReadUInt16();
+                    var expected = is64BitProcess
+                        ? ImageFileMachineAmd64
+                        : ImageFileMachineI386;
+                    return machine == expected;
+                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        private static string FormatPeMachine(ushort machine)
+        {
+            if (machine == ImageFileMachineI386) return "x86(0x014C)";
+            if (machine == ImageFileMachineAmd64) return "x64(0x8664)";
+            return $"unknown(0x{machine:X4})";
         }
 
         private static void DisableRiskySftpPlugin(string vlcDir)
@@ -654,7 +722,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public void Dispose() { Unload(); }
 
-        // Win32 API
+        // Win32 API 声明
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr LoadLibraryEx(string lpFileName,
             IntPtr hFile, uint dwFlags);

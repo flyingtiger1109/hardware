@@ -17,7 +17,7 @@ namespace HZCYKJTHardWare.Proxy.Storage
         }
 
         /// <summary>
-        /// Resolve a file path (make absolute, create parent dir). Used when saveDir is a full file name.
+        /// 解析文件路径，包括转换为绝对路径并创建父目录；适用于 saveDir 为完整文件名的场景。
         /// </summary>
         public static string ResolveExactSaveFile(string filePath)
         {
@@ -50,7 +50,7 @@ namespace HZCYKJTHardWare.Proxy.Storage
         public static string CreateRequestFolder(string baseDir, string requestId)
         {
             var safeId = string.IsNullOrEmpty(requestId) ? "unknown" : requestId;
-            // Sanitize requestId for use as directory name
+            // 清理 requestId 中不适用于目录名的字符
             foreach (var c in Path.GetInvalidFileNameChars())
                 safeId = safeId.Replace(c, '_');
             var dir = Path.Combine(baseDir, safeId);

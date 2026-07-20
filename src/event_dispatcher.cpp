@@ -76,9 +76,7 @@ static EventTerminalContext ResolveEventTerminalContext(
     const std::string& requestId) {
     EventTerminalContext result;
 
-    // Async requests capture their route when the session is created. Use that
-    // immutable snapshot so a late callback cannot be labelled as the terminal
-    // that happens to be current when the callback is processed.
+    // 异步请求在创建会话时捕获路由。使用该不可变快照，避免延迟回调被误标记为处理回调时的当前终端。
     auto session = RequestSessionManager::Instance().GetSession(requestId);
     if (session) {
         result.terminal_index = session->terminal_index;
@@ -86,9 +84,8 @@ static EventTerminalContext ResolveEventTerminalContext(
         return result;
     }
 
-    // Preview and persistent-process callbacks may not have a request session.
-    // Snapshot both fields under the context lock to avoid concurrent
-    // std::string read/write during terminal switching.
+    // 预览和持久流程回调可能不存在请求会话。在上下文锁内同时读取两个字段，
+    // 避免终端切换期间并发读写 std::string。
     auto& ctx = HzsjkjtContext::Instance();
     auto lock = ReadLock();
     result.terminal_index = ctx.current_terminal_index;
@@ -233,8 +230,7 @@ static const size_t kMaxPendingCallbackQueueSize = 512;
 static const size_t kMaxPendingCallbackBytes = 64u * 1024u * 1024u;
 
 EventDispatcher& EventDispatcher::Instance() {
-    // Function-local static initialization is thread-safe since C++11. Keep the
-    // instance intentionally alive for the DLL lifetime to avoid unload-order races.
+    // C++11 起函数局部静态初始化具备线程安全保证。实例在 DLL 整个生命周期内保留，避免卸载顺序竞争。
     static EventDispatcher* instance = new EventDispatcher();
     return *instance;
 }
@@ -264,8 +260,7 @@ bool EventDispatcher::Stop(int timeoutMs) {
             static_cast<HANDLE>(m_thread->native_handle()),
             static_cast<DWORD>(timeoutMs > 0 ? timeoutMs : 1));
         if (waitResult != WAIT_OBJECT_0) {
-            // Keep the runtime usable. The caller may retry ReleaseSdk after the
-            // third-party callback returns.
+            // 保持运行时可用；第三方回调返回后，调用方可重试 ReleaseSdk。
             m_running = true;
             LOG_ERROR("事件分发", "第三方事件回调线程停止超时：timeout_ms=%d", timeoutMs);
             return false;
@@ -421,17 +416,11 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
     auto session = sessionMgr.GetSession(requestId);
     if (!session) {
-        bool processActive = false;
-        {
-            auto& ctx = HzsjkjtContext::Instance();
-            ContextLock lock(&ctx.mutex);
-            processActive = ctx.process_active;
-        }
-
-        if (processActive &&
-            (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT ||
-             resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD ||
-             resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE)) {
+        // 流程回调已在 Proxy 中通过终端来源和 request_id 路由检查。
+        // Start/End 控制硬件是否发出回调，DLL 不再设置第二层本地活动状态准入门。
+        if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT ||
+            resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD ||
+            resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
             std::string errorCode;
             std::string errorMsg;
             bool isError = IsDelphiErrorResponse(body, errorCode, errorMsg);
@@ -1005,8 +994,8 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
             startedEventType = HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STARTED;
             failedEventType = HZCYKJTHardWare_EVENT_IRIS_PREVIEW_FAILED;
         } else if (resourceType == HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) {
-            // All plate callbacks intentionally keep the public plate_image resource
-            // type. The unique request_id selects CJ, RJ2 or RJ3 without Direction logic.
+            // 所有车牌回调统一保留公共 plate_image 资源类型。
+            // 通过唯一 request_id 区分 CJ、RJ2 或 RJ3，不引入 Direction 逻辑。
             PlatePreviewState* state = FindPlatePreviewStateByRequestId(ctx, requestId);
             if (state) {
                 currentRequestId = state->request_id;
@@ -1162,9 +1151,8 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                 continue;
             }
 
-            // Alternate callback parsing and event delivery so neither queue can
-            // starve the other. A callback keeps one reserved capacity slot until
-            // ProcessCallback returns.
+            // 交替执行回调解析和事件投递，避免任一队列长期得不到处理。
+            // ProcessCallback 返回前，每个回调占用一个预留容量名额。
             const bool takeCallback = !m_pendingCallbacks.empty() &&
                 (preferCallbacks || m_queue.empty());
             if (takeCallback) {
@@ -1218,7 +1206,7 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                 LeaveCriticalSection(&m_cs);
 
                 if (cb) {
-                    // Build JSON string and pass to callback
+                    // 构建 JSON 字符串并传递给回调函数
                     std::string json = "{\"event_type\":" + std::to_string(event.event_type) +
                         ",\"request_id\":\"" + JsonEscape(strs.request_id) + "\"" +
                         ",\"resource_type\":\"" + JsonEscape(strs.resource_type) + "\"" +
@@ -1307,7 +1295,7 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
              LogValue(JsonHelper::GetString(body, "CSRQ")).c_str(),
              LogValue(JsonHelper::GetString(body, "KADM")).c_str());
 
-    // Build the basic event
+    // 构建基础事件
     const EventTerminalContext terminalContext =
         ResolveEventTerminalContext(requestId);
     HZCYKJTHardWare_EVENT event;
@@ -1324,7 +1312,7 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     event.terminal_index = terminalContext.terminal_index;
     event.raw_json = body.c_str();
 
-    // Build EventStrings with auth fields
+    // 使用授权字段构建 EventStrings
     EnterCriticalSection(&m_cs);
     EventStrings strs;
     strs.request_id = requestId;
@@ -1346,4 +1334,4 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     LeaveCriticalSection(&m_cs);
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

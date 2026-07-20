@@ -26,8 +26,7 @@ static int64_t NowMs() {
 }
 
 static const int64_t kCompletedKeepMs = 10 * 60 * 1000;
-// Keep enough composite callback keys for retry de-duplication without placing
-// material pressure on the x86 address space.
+// 保留足量复合回调键用于重试去重，同时控制对 x86 地址空间的占用
 static const size_t kMaxCompletedRequests = 8192;
 
 RequestSessionManager& RequestSessionManager::Instance() {
@@ -97,8 +96,7 @@ bool RequestSessionManager::MarkAccepted(const std::string& requestId) {
     CriticalSectionGuard guard(&m_cs);
     auto it = m_sessions.find(requestId);
     if (it == m_sessions.end()) {
-        // A very fast callback may complete before the synchronous submission
-        // response returns. Treat that as accepted instead of reporting busy.
+        // 快速回调可能在同步提交响应返回前完成，此时应视为已受理，不返回忙状态。
         PruneCompletedLocked(NowMs());
         const auto completed = m_completedRequests.lower_bound(
             CompletedRequestKey(requestId, std::string()));
@@ -232,7 +230,7 @@ void RequestSessionManager::CancelAll() {
         if (kv.second->status == RequestStatus::Pending ||
             kv.second->status == RequestStatus::Accepted) {
             kv.second->status = RequestStatus::Cancelled;
-            LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=流程结束", kv.first.c_str());
+            LOG_DEBUG("RequestSession", "异步请求已取消：request_id=%s，原因=SDK或回调服务停止", kv.first.c_str());
             m_completedRequests[CompletedRequestKey(
                 kv.first, kv.second->resource_type)] = now;
             it = m_sessions.erase(it);
@@ -316,4 +314,4 @@ int RequestSessionManager::GetPendingCount() const {
     return count;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

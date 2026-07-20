@@ -13,6 +13,8 @@
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <!-- 构建环境可能无法访问漏洞审计源，关闭还原阶段审计以避免 NU1900。 -->
+    <NuGetAudit>false</NuGetAudit>
     <ApplicationIcon>国移局icon_256x256.ico</ApplicationIcon>
     <DefaultItemExcludes>$(DefaultItemExcludes);_codex_build\**\*</DefaultItemExcludes>
   </PropertyGroup>
@@ -51,7 +53,7 @@
     <Content Include="..\..\..\HZCYKJTHardWare.json" Link="HZCYKJTHardWare.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- VLC: keep x86/x64 source packages separate, but publish both as output\vlc. -->
+  <!-- VLC: keep x86/x64 source and output directories separate. -->
   <ItemGroup>
     <Content Include="vlc\**\*"
              Condition="'$(Platform)' != 'x64'"
@@ -62,11 +64,16 @@
              Condition="'$(Platform)' == 'x64'"
              Exclude="vlc-x64\plugins\access\libsftp_plugin.dll"
              CopyToOutputDirectory="PreserveNewest"
-             Link="vlc\%(RecursiveDir)%(Filename)%(Extension)" />
+             Link="vlc-x64\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <Target Name="RemoveUnsupportedVlcPlugins" AfterTargets="Build">
-    <Delete Files="$(TargetDir)vlc\plugins\access\libsftp_plugin.dll" TreatErrorsAsWarnings="true" />
+    <Delete Files="$(TargetDir)vlc\plugins\access\libsftp_plugin.dll"
+            Condition="'$(Platform)' != 'x64'"
+            TreatErrorsAsWarnings="true" />
+    <Delete Files="$(TargetDir)vlc-x64\plugins\access\libsftp_plugin.dll"
+            Condition="'$(Platform)' == 'x64'"
+            TreatErrorsAsWarnings="true" />
   </Target>
 
 </Project>

@@ -4,7 +4,7 @@
 
 namespace HZCYKJTHardWare {
 
-class HttpClient;  // forward declaration
+class HttpClient;  // 前向声明
 
 struct PlatePreviewState {
     bool running = false;
@@ -57,6 +57,9 @@ public:
     int ocr_timeout_ms = 20000;
     int authorize_timeout_ms = 60000;
 
+    // 第三方传入 DLL 的 char* 编码模式；内部文本始终为 UTF-8。
+    std::string third_party_input_encoding = "auto";
+
     // 预览状态
     bool camera_preview_running = false;
     bool fingerprint_preview_running = false;
@@ -76,7 +79,6 @@ public:
     PlatePreviewState plate_preview_rj3;
 
     // 流程状态
-    bool process_active = false;
     std::atomic<bool> http_busy{false};  // 防止 Delphi 代理请求重入
     std::atomic<bool> switch_pending{false};  // 终端切换进行中，拦截新操作
 
@@ -148,4 +150,4 @@ inline ContextLock WriteLock() {
     return ContextLock(&HzsjkjtContext::Instance().mutex);
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

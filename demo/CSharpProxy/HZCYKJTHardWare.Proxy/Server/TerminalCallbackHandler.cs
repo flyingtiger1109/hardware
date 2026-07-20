@@ -47,9 +47,9 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 if (string.IsNullOrEmpty(resourceType))
                 {
-                    // Fallback: detect callbacks without resource_type by characteristic fields.
-                    // 2.22 protocol callback body: {"request_id":"...","status":"yes|no"}
-                    // (terminal may not echo back all fields like id_no/name)
+                    // 回退处理：根据特征字段识别缺少 resource_type 的回调。
+                    // 2.22 协议回调正文为 {"request_id":"...","status":"yes|no"}，
+                    // 终端可能不会回传 id_no、name 等全部字段。
                     cbStatus = JsonHelper.ExtractString(bodyUtf8, "status");
                     var cbRequestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
                     if ((string.Equals(cbStatus, "yes", StringComparison.OrdinalIgnoreCase) ||
@@ -96,7 +96,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                             .ConfigureAwait(false);
                         break;
                     default:
-                        // Log body snippet to help diagnose unknown callback types
+                        // 记录正文片段，用于定位未知回调类型
                         var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
                         _log($"[终端回调] 未知资源类型: path={callbackPath}, body={snippet}");
                         break;
@@ -111,7 +111,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Map OCR event_type (from 2.5 protocol) to Chinese description.
+        /// 将 2.5 协议的 OCR event_type 映射为中文说明。
         /// </summary>
         private static string TranslateOcrEventType(string eventType)
         {
@@ -155,7 +155,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
 
-            // 2.5 protocol: event_type is in data.event_type (蛇形字符串)
+            // 2.5 协议的 event_type 位于 data.event_type，字段值采用蛇形命名
             var dataObj = JsonHelper.ExtractObject(bodyUtf8, "data");
             var eventType = "";
             if (!string.IsNullOrEmpty(dataObj))
@@ -165,11 +165,11 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             var chineseEvent = TranslateOcrEventType(eventType);
 
-            // Check for error conditions
+            // 检查错误状态
             var errorCode = JsonHelper.ExtractString(bodyUtf8, "error_code");
             var message = JsonHelper.ExtractString(bodyUtf8, "message");
 
-            // Only "证件检测" and "证件离开" show in UI; all others write to log file only
+            // UI 仅显示“证件检测”和“证件离开”，其他事件只写入日志文件
             bool showInUi = (eventType == "event_type_card_detect" || eventType == "event_type_card_leave");
 
             var logLine = !string.IsNullOrEmpty(errorCode)
@@ -211,13 +211,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _log($"[OCR回调] MRZ={result.Mrz}");
             }
 
-            // Save OCR result JSON
+            // 保存 OCR 结果 JSON
             FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
 
-            // Save evidence images (light source: 红外光/紫外光/可见光 + portrait: 人像)
+            // 保存证据图像，包括红外光、紫外光、可见光和证件人像
             SaveEvidenceImages(parsedBody.Root, saveDir, result.RequestId);
 
-            // Save MRZ information (MRZ.json with MRZ lines + person_info)
+            // 保存 MRZ 信息，MRZ.json 包含 MRZ 行及 person_info
             SaveMrzJson(parsedBody.Root, saveDir, result.RequestId);
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
@@ -349,9 +349,9 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Handle 2.22 protocol signing result pushed from terminal.
-        /// Terminal sends: request_id, name, sex, id_no, doc_type, birthday, nationality, status (yes/no)
-        /// Maps back to DLL callback format with Chinese field names (ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ).
+        /// 处理终端推送的 2.22 协议签名结果。
+        /// 终端发送 request_id、name、sex、id_no、doc_type、birthday、nationality、status（yes/no），
+        /// 并映射为使用中文缩写字段名的 DLL 回调格式：ZJHM、ZJLB、GJDQDM、XM、XB、CSRQ。
         /// </summary>
         private async Task HandleProtocolAsync(string bodyUtf8,
             IPAddress sourceAddress)
@@ -364,11 +364,12 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (route == null)
                 return;
 
-            // 2.22 status field: "yes" (agreed) or "no" (rejected)
+            // 2.22 协议 status 字段："yes" 表示同意，"no" 表示拒绝
             var status = ExtractTopOrDataString(bodyUtf8, "status");
 
-            // Map 2.22 terminal fields back to DLL Chinese field names
-            // Terminal: name,sex,id_no,doc_type,birthday,nationality,port_code → DLL: XM,XB,ZJHM,ZJLB,CSRQ,GJDQDM,KADM
+            // 将 2.22 协议终端字段映射回 DLL 中文缩写字段名
+            // 终端字段 name、sex、id_no、doc_type、birthday、nationality、port_code
+            // 对应 DLL 字段 XM、XB、ZJHM、ZJLB、CSRQ、GJDQDM、KADM
             var originalBody = route.OriginalRequestBodyUtf8;
             var name = CoalesceString(ExtractTopOrDataString(bodyUtf8, "name"),
                 JsonHelper.ExtractString(originalBody, "XM"));
@@ -395,7 +396,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "，出生日期=" + JsonHelper.ToLogValue(birthday) +
                 "，口岸代码=" + JsonHelper.ToLogValue(portCode));
 
-            // Build DLL callback payload (matching Delphi format with Chinese field names)
+            // 构建 DLL 回调载荷，使用与 Delphi 一致的中文缩写字段名格式
             var isYes = (status == "yes");
             var message = isYes ? "同意授权" : "旅客拒绝签署";
             var authResult = isYes ? "1" : "0";
@@ -447,9 +448,9 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Map OCR evidence lamp type to Chinese filename (aligned with C++ DLL).
+        /// 将 OCR 证据图光源类型映射为中文文件名，与 C++ DLL 保持一致。
         /// lampType/lamp_type: 1 → 可见光, 2 → 红外光, 3 → 紫外光
-        /// (imageType/image_type is NOT used for light source — image_type == 2 means portrait)
+        /// imageType/image_type 不表示光源；image_type == 2 表示证件人像。
         /// </summary>
         private static string MapEvidenceImageName(JObject image)
         {
@@ -466,8 +467,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Check if evidence image is a portrait (证件人像图).
-        /// imageType/image_type == 2 means portrait per protocol 2.6.
+        /// 检查证据图像是否为证件人像图。根据 2.6 协议，imageType/image_type == 2 表示证件人像。
         /// </summary>
         private static bool IsOcrPortraitImage(JObject image)
         {
@@ -495,7 +495,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var image = token as JObject;
                     if (image == null) continue;
 
-                    // Extract base64: protocol uses imageData (camelCase), also support snake_case
+                    // 提取 Base64 数据：协议使用驼峰命名 imageData，同时兼容蛇形命名
                     var base64 = JsonHelper.ExtractString(image, "imageData");
                     if (string.IsNullOrEmpty(base64))
                         base64 = JsonHelper.ExtractString(image, "image_data");
@@ -503,7 +503,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         base64 = JsonHelper.ExtractString(image, "image_base64");
                     if (string.IsNullOrEmpty(base64)) continue;
 
-                    // Save light source images by lamp_type (dedup: first of each type only)
+                    // 按 lamp_type 保存光源图像，每种类型仅保存第一张
                     var lampName = MapEvidenceImageName(image);
                     if (!string.IsNullOrEmpty(lampName))
                     {
@@ -520,7 +520,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         }
                     }
 
-                    // Save portrait image (imageType == 2, first only)
+                    // 保存证件人像（imageType == 2），仅保存第一张
                     if (!savedPortrait && IsOcrPortraitImage(image))
                     {
                         savedPortrait = true;
@@ -540,8 +540,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Save MRZ information as MRZ.json from OCR callback body.
-        /// Extracts MRZ1/MRZ2/MRZ3 and person_info array per protocol 2.6.
+        /// 从 OCR 回调正文中提取 MRZ 信息并保存为 MRZ.json。
+        /// 按 2.6 协议提取 MRZ1、MRZ2、MRZ3 和 person_info 数组。
         /// </summary>
         private void SaveMrzJson(JObject root, string saveDir, string requestId)
         {
@@ -550,7 +550,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var data = root?["data"] as JObject;
                 if (data == null) return;
 
-                // Extract MRZ lines (same field names as C++ DLL)
+                // 提取 MRZ 行，字段名与 C++ DLL 保持一致
                 var mrz1 = data["MRZ1"]?.ToString() ?? "";
                 var mrz2 = data["MRZ2"]?.ToString() ?? "";
                 var mrz3 = data["MRZ3"]?.ToString() ?? "";
@@ -558,10 +558,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 if (string.IsNullOrEmpty(mrz2)) mrz2 = data["mrz2"]?.ToString() ?? "";
                 if (string.IsNullOrEmpty(mrz3)) mrz3 = data["mrz3"]?.ToString() ?? "";
 
-                // Extract person_info array
+                // 提取 person_info 数组
                 var personInfoArray = data["person_info"] as JArray;
 
-                // Build MRZ.json
+                // 构建 MRZ.json
                 var mrzObj = new JObject();
                 mrzObj["request_id"] = requestId;
 
@@ -593,7 +593,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var terminalIndex = _terminalManager?.CurrentIndex ?? 0;
             return PathHelper.SafeResolveSaveDir(
-                _processRegistry.GetActiveSaveDir(terminalIndex));
+                _processRegistry.GetCurrentSaveDir(terminalIndex));
         }
 
         private async Task<CallbackRoute> ResolveCallbackAsync(string requestId,
@@ -623,12 +623,6 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!_processRegistry.TryGetByRequestId(requestId, out var session))
             {
                 Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过: request_id={requestId}");
-                return null;
-            }
-
-            if (!await session.WaitUntilActiveAsync(5000).ConfigureAwait(false))
-            {
-                Logger.Warn($"[{operation}回调] 流程会话未激活或已停止，已跳过: request_id={requestId}, terminal={session.TerminalIndex}");
                 return null;
             }
 

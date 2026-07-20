@@ -33,4 +33,4 @@ int TerminalStatusChecker::Check(const std::string& baseUrl, int connectTimeoutM
     return HZCYKJTHardWare_RET_OK;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

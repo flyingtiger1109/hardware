@@ -51,9 +51,9 @@ void HzsjkjtContext::Reset() {
     plate_preview_cj = PlatePreviewState{};
     plate_preview_rj2 = PlatePreviewState{};
     plate_preview_rj3 = PlatePreviewState{};
-    process_active = false;
     http_busy.store(false);
     switch_pending.store(false);
+    third_party_input_encoding = "auto";
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

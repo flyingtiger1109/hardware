@@ -16,15 +16,14 @@ using HZCYKJTHardWare.Proxy.Terminal;
 namespace HZCYKJTHardWare.Proxy.Server
 {
     /// <summary>
-    /// Composition root. Creates the four core components (Runtime, Coordinator,
-    /// Scheduler, Registry) and their supporting modules, wires dependencies,
-    /// and delegates the public API surface.
+    /// 组合根：创建 Runtime、Coordinator、Scheduler、Registry 四个核心组件及其辅助模块，
+    /// 完成依赖绑定并转发公共 API。
     ///
-    /// Post-Phase-4: ~200 lines (down from 980).
+    /// 第四阶段重构后约 200 行，重构前约 980 行。
     /// </summary>
     public class ProxyServer : IDisposable
     {
-        // === Four core components ===
+        // === 四个核心组件 ===
         private readonly Runtime.TransportLayer _transport;
         private readonly Coordinator.SwitchCoordinator _coordinator;
         private readonly Scheduler.WorkerExecutionEngine _engine;
@@ -32,13 +31,14 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly TerminalProcessRegistry _processRegistry;
         private readonly ControlOperationGate _controlGate;
 
-        // === Supporting modules ===
+        // === 辅助模块 ===
         private readonly TerminalManager _terminalManager;
         private readonly TerminalClient _terminalClient;
         private readonly DllCallbackSender _dllCallback;
         private readonly PreviewManager _previewManager;
         private readonly QueueManager _queueManager;
         private readonly ActiveTasksTracker _taskTracker;
+        private readonly ProcessEndCoordinator _processEndCoordinator;
         private readonly BizOperationHandler _bizOps;
         private readonly DllCommandHandler _commandHandler;
         private readonly TerminalCallbackHandler _callbackHandler;
@@ -64,7 +64,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             public string Message { get; set; }
         }
 
-        // === URL helpers (used during wiring) ===
+        // === URL 辅助属性（依赖绑定阶段使用）===
 
         public string GetTerminalCallbackBaseUrl()
         {
@@ -81,7 +81,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             return baseUrl + "/iris-image";
         }
 
-        // === Constructor: create all components, wire dependencies ===
+        // === 构造函数：创建全部组件并绑定依赖 ===
 
         public ProxyServer(
             Action<string> log,
@@ -93,11 +93,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             _onProcessStateChanged = onProcessStateChanged;
             _onTerminalChanged = onTerminalChanged;
 
-            // Infrastructure
+            // 基础设施组件
             _transport = new Runtime.TransportLayer(log);
             _taskTracker = new ActiveTasksTracker(32, 30000);
 
-            // Core modules
+            // 核心模块
             _terminalManager = new TerminalManager();
             _terminalClient = new TerminalClient();
             _dllCallback = new DllCallbackSender();
@@ -110,35 +110,41 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _queueManager, _taskTracker, _previewManager,
                 _requestRegistry, _processRegistry);
 
-            // === Four components ===
+            // === 四个核心组件 ===
 
-            // Scheduler
+            // 调度器
             _engine = new WorkerExecutionEngine(
                 _terminalManager, _terminalClient, _requestRegistry,
                 _processRegistry,
                 log, GetTerminalCallbackBaseUrl, GetTerminalIrisCallbackUrl);
 
-            // Runtime: lifecycle
+            // Runtime：生命周期管理
             _runtime = new ProxyRuntime(
                 _transport, _requestRegistry, _processRegistry, _taskTracker,
                 _queueManager, _previewManager, _dllCallback,
                 _metricsReporter, log);
 
-            // Coordinator: SwitchCoordinator
+            // Coordinator：终端切换协调器
             _coordinator = new SwitchCoordinator(
                 _terminalManager, _previewManager, _requestRegistry,
                 _queueManager, log, NotifyTerminalChanged, _controlGate,
                 _taskTracker);
 
-            // Coordinator: BizOperationHandler
+            _processEndCoordinator = new ProcessEndCoordinator(
+                _terminalManager, _terminalClient, _processRegistry,
+                _controlGate, _coordinator, log,
+                onProcessStateChanged);
+
+            // Coordinator：业务操作处理器
             _bizOps = new BizOperationHandler(
                 _terminalManager, _terminalClient, _requestRegistry,
                 _processRegistry, _controlGate,
                 _queueManager, _previewManager, log,
                 GetTerminalCallbackBaseUrl, GetTerminalIrisCallbackUrl,
-                onProcessStateChanged, _coordinator, _dllCallback);
+                onProcessStateChanged, _coordinator, _processEndCoordinator,
+                _dllCallback);
 
-            // Wire Scheduler handlers
+            // 绑定调度器处理函数
             _queueManager.SwitchHandler = _coordinator.ExecuteQueuedSwitch;
             _queueManager.FaceCaptureHandler = (t) => _engine.ExecuteCaptureFace(t);
             _queueManager.FingerprintCaptureHandler = (t) => _engine.ExecuteCaptureFingerprint(t);
@@ -147,18 +153,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             _queueManager.NfcHandler = (t) => _engine.ExecuteNfcInternal(t);
             _queueManager.AuthorizeHandler = _engine.ExecuteAuthorizeInternal;
 
-            // Wire capture delegates (WorkerExecutionEngine → BizOperationHandler async)
+            // 绑定采集委托（WorkerExecutionEngine → BizOperationHandler 异步方法）
             _engine.CaptureFaceFunc = (d, route) =>
                 _bizOps.CaptureFaceAsync(d, route).GetAwaiter().GetResult();
             _engine.CaptureFingerprintFunc = (d, hk, route) =>
                 _bizOps.CaptureFingerprintAsync(d, hk, route).GetAwaiter().GetResult();
 
-            // Supporting modules
+            // 辅助模块
             _commandHandler = new DllCommandHandler(
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
                 _requestRegistry, _processRegistry, _controlGate, log,
                 GetTerminalCallbackBaseUrl, _queueManager, _taskTracker,
-                _coordinator, onProcessStateChanged);
+                _coordinator, _processEndCoordinator, onProcessStateChanged);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _terminalManager, _dllCallback,
@@ -168,12 +174,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _terminalClient, _terminalManager, log, onHealthChanged);
         }
 
-        // === Lifecycle ===
+        // === 生命周期 ===
 
         public void Start()
         {
             if (Volatile.Read(ref _disposed) != 0)
                 throw new ObjectDisposedException(nameof(ProxyServer));
+            // 审查风险：启动标志在监听器和后台组件启动前置位；后续步骤抛出异常时无法重试，且可能遗留部分资源。
+            // 建议为 Start 增加失败回滚，在全部组件启动成功后提交状态，或显式进入故障状态并执行 Stop/Dispose。
             if (Interlocked.Exchange(ref _started, 1) != 0)
                 throw new InvalidOperationException("ProxyServer has already been started.");
 
@@ -192,11 +200,11 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _transport.StartAll(cts.Token);
 
-            // Terminal hardware health check
+            // 终端硬件健康检查
             _healthChecker.Start();
             _metricsReporter.Start();
 
-            // VLC warmup
+            // VLC 预热
             if (!_taskTracker.TryRun(() =>
             {
                 _log("[VLC预热] 正在启动...");
@@ -214,7 +222,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             try
             {
-                var processActive = _processRegistry.TryGetActive(terminalIndex,
+                var processActive = _processRegistry.TryGetCurrent(terminalIndex,
                     out var processSession);
                 _terminalManager.ProcessActive = processActive;
                 _terminalManager.ProcessSaveDir = processActive
@@ -239,7 +247,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (Interlocked.Exchange(ref _stopped, 1) != 0)
                 return;
-            // Ordered shutdown via Runtime (one shared ~5s budget)
+            // 通过 Runtime 有序关闭，所有步骤共享约 5 秒时限
             try { _runtime.StopAsync().GetAwaiter().GetResult(); }
             catch (Exception ex) { Logger.Error("[服务] 关闭异常", ex); }
 
@@ -269,7 +277,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             catch (Exception ex) { Logger.Error($"[服务] 释放{name}异常", ex); }
         }
 
-        // === HTTP handlers (delegated from TransportLayer) ===
+        // === HTTP 处理函数（由 TransportLayer 转发）===
 
         private async Task HandleDllRequest(TcpClient client)
         {
@@ -372,16 +380,15 @@ namespace HZCYKJTHardWare.Proxy.Server
             try { client?.Close(); } catch { }
         }
 
-        // === Public API (delegated to Coordinator) ===
-        // Methods are synchronous for backward compatibility with MainForm.
-        // They call async BizOperationHandler methods via .GetAwaiter().GetResult()
-        // which is safe because MainForm calls them from Task.Run workers (no UI SyncCtx).
+        // === 公共 API（转发到 Coordinator）===
+        // 为兼容 MainForm 保留同步方法。方法通过 GetAwaiter().GetResult() 调用 BizOperationHandler 异步方法；
+        // MainForm 从不含 UI 同步上下文的 Task.Run 工作任务中调用这些方法。
 
         public string StartProcess(string saveDir)
             => _bizOps.StartProcessAsync(saveDir).GetAwaiter().GetResult();
 
         public string EndProcess()
-            => _bizOps.EndProcess();
+            => _bizOps.EndProcessAsync().GetAwaiter().GetResult();
 
         public string SwitchTerminal(int index)
             => _bizOps.SwitchTerminalAsync(index).GetAwaiter().GetResult();

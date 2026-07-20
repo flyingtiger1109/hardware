@@ -74,6 +74,10 @@ public:
     int GetOcrTimeoutMs() const;
     int GetAuthorizeTimeoutMs() const;
 
+    // DLL 对外 char* 输入编码：auto / gbk / utf8。
+    // DLL 内部、HTTP/JSON 与第三方回调始终保持 UTF-8。
+    const std::string& GetThirdPartyInputEncoding() const;
+
     const std::string& GetSaveDefaultRoot() const;
     const std::string& GetCameraDefaultPath() const;
     const std::string& GetFingerprintDefaultPath() const;
@@ -134,6 +138,7 @@ private:
     int m_fingerprintCaptureTimeoutMs = 15000;
     int m_ocrTimeoutMs = 20000;
     int m_authorizeTimeoutMs = 60000;
+    std::string m_thirdPartyInputEncoding = "auto";
 
     std::string m_saveDefaultRoot;
     std::string m_cameraDefaultPath = ".\\captures\\camera.jpg";
@@ -163,4 +168,4 @@ private:
     bool m_hasConfigFile = false;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

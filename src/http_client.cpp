@@ -226,11 +226,19 @@ bool HttpClient::Get(const std::string& url,
     WinHttpCloseHandle(hConnect);
 
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
-    LOG_INFO("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
-             url.c_str(), responseStatusCode, responseBody.size(),
-             static_cast<unsigned long long>(elapsedMs));
+    const bool isPingRequest = url.size() >= 5 &&
+        url.compare(url.size() - 5, 5, "/ping") == 0;
+    if (isPingRequest) {
+        LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
+                  url.c_str(), responseStatusCode, responseBody.size(),
+                  static_cast<unsigned long long>(elapsedMs));
+    } else {
+        LOG_INFO("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
+                 url.c_str(), responseStatusCode, responseBody.size(),
+                 static_cast<unsigned long long>(elapsedMs));
+    }
 
     return true;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

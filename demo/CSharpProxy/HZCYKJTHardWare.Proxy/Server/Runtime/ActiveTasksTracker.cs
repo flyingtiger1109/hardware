@@ -7,9 +7,8 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Server.Runtime
 {
     /// <summary>
-    /// Starts and tracks bounded background work for graceful shutdown drain.
-    /// Work is admitted before Task.Run is created, so the configured capacity
-    /// is a real concurrency limit rather than only a tracking limit.
+    /// 启动并跟踪有界后台任务，支持正常关闭时排空。
+    /// 在创建 Task.Run 前完成任务准入，因此配置容量是实际并发上限，而非仅用于跟踪。
     /// </summary>
     public sealed class ActiveTasksTracker : IDisposable
     {
@@ -30,8 +29,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         public long TotalTimedOut => Interlocked.Read(ref _totalTimedOut);
         public long TotalRejected => Interlocked.Read(ref _totalRejected);
 
-        /// <param name="maxConcurrent">Max tracked tasks. Beyond this, Register returns false.</param>
-        /// <param name="defaultTimeoutMs">Default per-task timeout for shutdown drain.</param>
+        /// <param name="maxConcurrent">最大跟踪任务数，超过上限时 Register 返回 false。</param>
+        /// <param name="defaultTimeoutMs">关闭排空时每个任务的默认超时时间。</param>
         public ActiveTasksTracker(int maxConcurrent = 32, int defaultTimeoutMs = 30000)
         {
             if (maxConcurrent < 1) throw new ArgumentOutOfRangeException(nameof(maxConcurrent));
@@ -42,7 +41,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Start bounded synchronous background work.
+        /// 启动有界同步后台任务。
         /// </summary>
         public bool TryRun(Action action, string label)
         {
@@ -55,8 +54,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Start bounded asynchronous background work.
-        /// Returns false without starting work when stopping or at capacity.
+        /// 启动有界异步后台任务。正在停止或达到容量上限时不启动任务并返回 false。
         /// </summary>
         public bool TryRun(Func<Task> work, string label)
         {
@@ -105,8 +103,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
 
             Interlocked.Increment(ref _totalRegistered);
 
-            // Auto-cleanup: when the task completes, remove from tracking.
-            // Using ContinueWith to avoid blocking the task's own continuation.
+            // 任务完成后自动从跟踪集合中移除；使用 ContinueWith 避免阻塞任务自身的延续操作
             task.ContinueWith(t =>
             {
                 if (t.IsFaulted && t.Exception != null)
@@ -121,8 +118,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Non-blocking cleanup: remove already-completed tasks from tracking.
-        /// Useful for periodic maintenance without waiting.
+        /// 非阻塞清理：从跟踪集合中移除已完成任务，适用于无需等待的定期维护。
         /// </summary>
         public int CleanupCompleted()
         {
@@ -140,8 +136,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Wait for all tracked tasks to complete, up to the specified timeout.
-        /// Used during graceful shutdown.
+        /// 等待全部跟踪任务完成，最长等待到指定超时时间；用于正常关闭。
         /// </summary>
         public async Task WaitAllAsync(int timeoutMs)
         {
@@ -158,7 +153,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
 
             if (completed != allTask)
             {
-                // Timeout reached: count still-active tasks
+                // 达到超时时间后统计仍在运行的任务
                 int stillActive = 0;
                 foreach (var kv in _tasks)
                 {
@@ -174,7 +169,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Get a snapshot of statistics for telemetry.
+        /// 获取遥测使用的统计快照。
         /// </summary>
         public string GetStats()
         {
@@ -185,8 +180,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            // Don't cancel tasks — they should complete naturally.
-            // Call WaitAllAsync before Dispose for graceful drain.
+            // 不主动取消任务，由任务自然完成；正常排空应在 Dispose 前调用 WaitAllAsync
         }
 
         private sealed class TrackedTask

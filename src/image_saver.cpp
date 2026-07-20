@@ -243,4 +243,4 @@ std::string ImageSaver::BuildSavePath(const std::string& rootDir,
     return basePath;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

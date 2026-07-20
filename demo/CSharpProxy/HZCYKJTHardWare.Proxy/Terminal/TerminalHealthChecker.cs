@@ -9,7 +9,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 {
     public class TerminalHealthChecker : IDisposable
     {
-        private const int PollIntervalMs = 5 * 60 * 1000; // 5 minutes
+        private const int PollIntervalMs = 5 * 60 * 1000; // 5 分钟
         private const int InitialDelayMs = 1000;
         private const int RetryBaseDelayMs = 5000;
         private const int RetryMaxDelayMs = 60000;
@@ -67,6 +67,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             timer?.Change(0, Timeout.Infinite);
         }
 
+        // 审查风险：async void 回调在 Dispose 后仍可能继续执行并触发状态通知。
+        // 建议使用可等待的 Task、取消令牌及 Timer.Dispose(WaitHandle)，确保释放前完成在途轮询。
         private async void PollCallback(object state)
         {
             if (_disposed)

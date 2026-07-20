@@ -19,8 +19,8 @@ namespace HZCYKJTHardWare.Proxy
         [STAThread]
         private static void Main()
         {
-            // DPI awareness - safe on Win7+ (function exists since Vista)
-            try { SetProcessDPIAware(); } catch { /* WinXP fallback */ }
+            // 启用 DPI 感知；该函数自 Windows Vista 起可用，兼容 Windows 7 及以上版本
+            try { SetProcessDPIAware(); } catch { /* 兼容 Windows XP */ }
 
             bool createdNew;
             using (var singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out createdNew))
@@ -33,19 +33,19 @@ namespace HZCYKJTHardWare.Proxy
                     return;
                 }
 
-                // Thread pool warm-up: prevent slow thread ramp-up under sudden high load
-                // Default min threads is very low; without this, high-frequency requests queue up
+                // 预热线程池，避免突发高负载时线程扩容过慢
+                // 默认最小线程数较低，未调整时高频请求可能积压
                 int minWorker, minIo;
                 ThreadPool.GetMinThreads(out minWorker, out minIo);
                 ThreadPool.SetMinThreads(Math.Max(minWorker, 20), Math.Max(minIo, 20));
 
-                // ServicePointManager: connection pool and DNS settings (process-wide, set once)
+                // ServicePointManager 连接池与 DNS 配置为进程级设置，仅初始化一次
                 ServicePointManager.DefaultConnectionLimit = 50;
                 ServicePointManager.Expect100Continue = false;
                 ServicePointManager.MaxServicePointIdleTime = 60000;  // 60s idle timeout
                 ServicePointManager.DnsRefreshTimeout = 120000;       // 2min DNS refresh
 
-                // === Global exception handlers for long-running stability ===
+                // === 长期运行使用的全局异常处理函数 ===
                 AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
                 {
                     var ex = args.ExceptionObject as Exception;
@@ -57,7 +57,7 @@ namespace HZCYKJTHardWare.Proxy
                 {
                     var msg = $"[全局异常] ThreadException: {args.Exception}";
                     try { CrashLog(msg); } catch { }
-                    // Do NOT re-throw — keep the process alive for long-running service
+                    // 不重新抛出异常，保持长期运行服务进程存活
                 };
 
                 TaskScheduler.UnobservedTaskException += (sender, args) =>
@@ -74,7 +74,7 @@ namespace HZCYKJTHardWare.Proxy
         }
 
         /// <summary>
-        /// Write crash-level log to file when normal logger may be unavailable.
+        /// 正常日志组件不可用时，将崩溃级日志直接写入文件。
         /// </summary>
         private static void CrashLog(string message)
         {
@@ -87,7 +87,7 @@ namespace HZCYKJTHardWare.Proxy
                 var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [致命] {message}{Environment.NewLine}";
                 File.AppendAllText(file, line, Encoding.UTF8);
             }
-            catch { /* Last resort — must not throw */ }
+            catch { /* 最终回退路径不得抛出异常 */ }
         }
     }
 }

@@ -9,19 +9,16 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Server.Runtime
 {
     /// <summary>
-    /// Manages TcpListener instances, accept loops, connection slot limiting,
-    /// and graceful shutdown with backlog drain.
+    /// 管理 TcpListener 实例、连接接收循环、连接并发名额及带积压排空的正常关闭。
     ///
-    /// Extracted from ProxyServer. The key fix: AcceptTcpClientAsync does NOT
-    /// observe CancellationToken natively. We use CancellationToken.Register
-    /// to call listener.Stop(), which forces AcceptTcpClientAsync to throw
-    /// ObjectDisposedException, enabling immediate (non-2s-read-timeout) shutdown.
+    /// 从 ProxyServer 拆分。AcceptTcpClientAsync 本身不响应 CancellationToken，
+    /// 因此通过 CancellationToken.Register 调用 listener.Stop()，强制 AcceptTcpClientAsync
+    /// 抛出 ObjectDisposedException，实现立即关闭而无需等待 2 秒读取超时。
     /// </summary>
     public sealed class TransportLayer : IDisposable
     {
         /// <summary>
-        /// A named listener binding together the TcpListener, its accept-loop handler,
-        /// and its concurrency slot.
+        /// 具名监听绑定，组合 TcpListener、连接接收循环处理函数和并发名额。
         /// </summary>
         private sealed class ListenerBinding
         {
@@ -47,7 +44,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         private int _disposed;
 
         /// <summary>
-        /// Create a transport layer that can manage up to 2 listeners (DLL + callback).
+        /// 创建最多可管理 2 个监听器的传输层，分别用于 DLL 通信和回调。
         /// </summary>
         public TransportLayer(Action<string> log)
         {
@@ -56,7 +53,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Add a listener. Must be called before StartAllAsync.
+        /// 添加监听器，必须在 StartAllAsync 前调用。
         /// </summary>
         public void AddListener(string name, string listenHost, int port,
             Func<TcpClient, Task> handler, int maxConcurrent, int backlog)
@@ -81,7 +78,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Start all registered listeners. Returns when all accept loops are running.
+        /// 启动全部已注册监听器，在所有连接接收循环进入运行状态后返回。
         /// </summary>
         public void StartAll(CancellationToken ct)
         {
@@ -98,9 +95,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 b.Listener.Start(b.Backlog);
                 _log($"传输层 {b.Name} 已启动监听");
 
-                // CRITICAL FIX: Register cancellation to force-stop the listener.
-                // AcceptTcpClientAsync does not observe CancellationToken natively,
-                // so we force listener.Stop() which throws ObjectDisposedException.
+                // 注册取消回调以强制停止监听器。AcceptTcpClientAsync 不直接响应 CancellationToken，
+                // 因此调用 listener.Stop() 使其抛出 ObjectDisposedException。
                 b.CancellationRegistration = _cts.Token.Register(() =>
                 {
                     try { b.Listener.Stop(); } catch { }
@@ -111,8 +107,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Graceful shutdown: stop accepting, drain pending connections with 503,
-        /// wait for active handlers up to the drain timeout.
+        /// 正常关闭：停止接收连接，以 503 响应排空等待连接，并在排空超时前等待活动处理函数结束。
         /// </summary>
         public async Task StopAsync(int drainTimeoutMs = 3000)
         {
@@ -134,7 +129,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
 
             var drainDeadline = DateTime.UtcNow.AddMilliseconds(Math.Max(0, drainTimeoutMs));
 
-            // First ensure no accept loop can add another active handler.
+            // 首先确保连接接收循环不会再添加新的活动处理函数
             foreach (var b in _bindings)
             {
                 if (b == null) continue;
@@ -158,7 +153,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         }
 
         /// <summary>
-        /// Accept loop: accept connections, check slot availability, dispatch to handler.
+        /// 连接接收循环：接收连接、检查并发名额并分派到处理函数。
         /// </summary>
         private async Task AcceptLoop(ListenerBinding binding, CancellationToken ct)
         {
@@ -206,11 +201,11 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 }
                 catch (ObjectDisposedException)
                 {
-                    break; // Listener stopped — normal shutdown
+                    break; // 监听器已停止，属于正常关闭流程
                 }
                 catch (SocketException)
                 {
-                    break; // Socket closed — normal shutdown
+                    break; // Socket 已关闭，属于正常关闭流程
                 }
                 catch (OperationCanceledException)
                 {

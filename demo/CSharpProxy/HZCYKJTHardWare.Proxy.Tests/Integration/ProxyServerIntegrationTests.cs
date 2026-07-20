@@ -51,6 +51,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
                 msg => System.Diagnostics.Debug.WriteLine(msg),
                 active => System.Diagnostics.Debug.WriteLine($"Process active: {active}"));
             _proxy.Start();
+            _mockTerminal.ProxyCallbackBaseUrl =
+                "http://127.0.0.1:" + TestCallbackPort;
 
             // Brief wait for listeners to start
             Thread.Sleep(500);
@@ -191,6 +193,141 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
             string endResult = SendDllRequest("/process/end", "{}");
             Assert.IsTrue(endResult.Contains("\"status\":\"ok\""),
                 $"Process end should succeed, got: {endResult}");
+            Assert.IsFalse(string.IsNullOrEmpty(_mockTerminal.LastProcessEndRequestId),
+                "Proxy must send request_id to terminal /process/end");
+        }
+
+        [TestMethod]
+        public async Task ProcessCallback_AlreadyInFlightAfterEnd_IsForwarded()
+        {
+            string processId = "PROCESS_LATE_" +
+                DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            string cardText = "LATE_CARD_" + Guid.NewGuid().ToString("N");
+            string startBody = "{\"request_id\":\"" + processId +
+                "\",\"save_dir\":\"" + _testDir.Replace("\\", "\\\\") +
+                "\\\\captures\"}";
+
+            string startResult = SendDllRequest("/process/start", startBody);
+            Assert.IsTrue(startResult.Contains("\"status\":\"ok\""),
+                $"Process start should succeed, got: {startResult}");
+
+            string endResult = SendDllRequest("/process/end",
+                "{\"request_id\":\"END_LATE\"}");
+            Assert.IsTrue(endResult.Contains("\"status\":\"ok\""),
+                $"Process end should succeed, got: {endResult}");
+
+            var delivered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Action<string, string> handler = (path, body) =>
+            {
+                if (body != null && body.Contains(cardText))
+                    delivered.TrySetResult(true);
+            };
+            _mockCallback.OnCallbackReceived += handler;
+            try
+            {
+                string callbackBody = "{\"request_id\":\"" + processId +
+                    "\",\"resource_type\":\"nfc_card\",\"card_text\":\"" +
+                    cardText + "\"}";
+                Assert.IsTrue(await _mockTerminal.SendCallback(processId,
+                    "nfc_card", callbackBody));
+
+                var completed = await Task.WhenAny(delivered.Task,
+                    Task.Delay(3000));
+                Assert.AreSame(delivered.Task, completed,
+                    "Proxy must forward a valid callback already in flight after End");
+            }
+            finally
+            {
+                _mockCallback.OnCallbackReceived -= handler;
+            }
+        }
+
+        [TestMethod]
+        public async Task ExplicitNfcRequest_CallbackAfterEnd_RemainsRegistered()
+        {
+            string requestId = "NFC_AFTER_END_" +
+                DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            string cardText = "EXPLICIT_CARD_" + Guid.NewGuid().ToString("N");
+            string requestBody = "{\"request_id\":\"" + requestId +
+                "\",\"save_dir\":\"" + _testDir.Replace("\\", "\\\\") +
+                "\\\\captures\",\"callback_url\":\"http://127.0.0.1:" +
+                _mockCallback.Port + "/HZCYKJTHardWare/callback/nfc-card\"}";
+
+            string requestResult = SendDllRequest("/nfc", requestBody);
+            Assert.IsTrue(requestResult.Contains("\"accepted\":true"),
+                $"NFC request should be accepted, got: {requestResult}");
+
+            string endResult = SendDllRequest("/process/end",
+                "{\"request_id\":\"END_EXPLICIT\"}");
+            Assert.IsTrue(endResult.Contains("\"status\":\"ok\""),
+                $"Process end should succeed, got: {endResult}");
+
+            var delivered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Action<string, string> handler = (path, body) =>
+            {
+                if (body != null && body.Contains(cardText))
+                    delivered.TrySetResult(true);
+            };
+            _mockCallback.OnCallbackReceived += handler;
+            try
+            {
+                string callbackBody = "{\"request_id\":\"" + requestId +
+                    "\",\"resource_type\":\"nfc_card\",\"card_text\":\"" +
+                    cardText + "\"}";
+                Assert.IsTrue(await _mockTerminal.SendCallback(requestId,
+                    "nfc_card", callbackBody));
+
+                var completed = await Task.WhenAny(delivered.Task,
+                    Task.Delay(3000));
+                Assert.AreSame(delivered.Task, completed,
+                    "End must not cancel an independently requested NFC callback");
+            }
+            finally
+            {
+                _mockCallback.OnCallbackReceived -= handler;
+            }
+        }
+
+        [TestMethod]
+        public void ProcessEnd_RejectedThenRetry_UsesCallerRequestIdEachTime()
+        {
+            string processId = "PROCESS_END_RETRY_" +
+                DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            string startBody = "{\"request_id\":\"" + processId +
+                "\",\"save_dir\":\"" + _testDir.Replace("\\", "\\\\") +
+                "\\\\captures\"}";
+            string startResult = SendDllRequest("/process/start", startBody);
+            Assert.IsTrue(startResult.Contains("\"status\":\"ok\""),
+                $"Process start should succeed, got: {startResult}");
+
+            try
+            {
+                _mockTerminal.ProcessEndStatusCode = 400;
+                _mockTerminal.ProcessEndResponseBody =
+                    "{\"request_id\":\"rejected\",\"status\":\"rejected\"," +
+                    "\"error_code\":\"internal_error\"}";
+                string rejected = SendDllRequest("/process/end",
+                    "{\"request_id\":\"END_FIRST\"}");
+                Assert.IsTrue(rejected.Contains("\"error\":true"),
+                    $"Rejected terminal end must fail, got: {rejected}");
+                Assert.AreEqual("END_FIRST", _mockTerminal.LastProcessEndRequestId);
+
+                _mockTerminal.ProcessEndStatusCode = 202;
+                _mockTerminal.ProcessEndResponseBody = null;
+                string retry = SendDllRequest("/process/end",
+                    "{\"request_id\":\"END_SECOND\"}");
+                Assert.IsTrue(retry.Contains("\"status\":\"ok\""),
+                    $"Explicit retry should succeed, got: {retry}");
+                Assert.AreEqual("END_SECOND", _mockTerminal.LastProcessEndRequestId,
+                    "Proxy must forward each End request without local retry state");
+            }
+            finally
+            {
+                _mockTerminal.ProcessEndStatusCode = 202;
+                _mockTerminal.ProcessEndResponseBody = null;
+            }
         }
 
         [TestMethod]
@@ -339,7 +476,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Integration
         {
             _cts = new CancellationTokenSource();
             _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://localhost:{Port}/");
+            _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
             _listener.Start();
             IsRunning = true;
             _listenTask = Task.Run(() => AcceptLoop(_cts.Token));

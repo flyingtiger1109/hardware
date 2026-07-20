@@ -165,7 +165,7 @@ public static class HzcyDllStressNative
     private static extern int HZCYKJTHardWare_CaptureCameraImage(IntPtr saveDir);
 
     [DllImport(@"$escapedDll", CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
-    private static extern int HZCYKJTHardWare_CaptureFingerprintImage(IntPtr saveDir);
+    private static extern int HZCYKJTHardWare_CaptureFingerprintImage(IntPtr saveDir, IntPtr saveDirHk);
 
     [DllImport(@"$escapedDll", CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
     private static extern int HZCYKJTHardWare_SwitchTerminal(int terminalIndex);
@@ -191,9 +191,20 @@ public static class HzcyDllStressNative
         return InvokeWithUtf8(savePath, HZCYKJTHardWare_CaptureCameraImage);
     }
 
-    public static int CaptureFingerprintImage(string savePath)
+    public static int CaptureFingerprintImage(string savePath, string savePathHk)
     {
-        return InvokeWithUtf8(savePath, HZCYKJTHardWare_CaptureFingerprintImage);
+        IntPtr savePathPointer = AllocUtf8(savePath);
+        IntPtr savePathHkPointer = AllocUtf8(savePathHk);
+        try
+        {
+            return HZCYKJTHardWare_CaptureFingerprintImage(
+                savePathPointer, savePathHkPointer);
+        }
+        finally
+        {
+            if (savePathHkPointer != IntPtr.Zero) Marshal.FreeHGlobal(savePathHkPointer);
+            if (savePathPointer != IntPtr.Zero) Marshal.FreeHGlobal(savePathPointer);
+        }
     }
 
     public static string[] DrainCallbackEvents()
@@ -483,7 +494,7 @@ try {
         if ($script:stopFlag) { break }
 
         $record = Invoke-DllCall -Name "CaptureFingerprintImage" -Stage "Stress" -Action {
-            [HzcyDllStressNative]::CaptureFingerprintImage($fingerprintSavePath)
+            [HzcyDllStressNative]::CaptureFingerprintImage($fingerprintSavePath, $null)
         }
         if ($record.Success) { $stats.FingerOk++ } else { $stats.FingerFail++ }
         Drain-CallbackEvents

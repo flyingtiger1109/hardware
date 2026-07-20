@@ -7,8 +7,7 @@ using HZCYKJTHardWare.Proxy.Infrastructure;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// Composite key for request registry lookups. Uses struct to avoid
-    /// string-concatenation collisions (previous "\n" delimiter was fragile).
+    /// 请求注册表使用的复合键。采用结构体可避免字符串拼接产生键冲突，旧版换行分隔方式可靠性不足。
     /// </summary>
     internal readonly struct CompositeKey : IEquatable<CompositeKey>
     {
@@ -208,7 +207,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(30);
         private const int MaxCompletedEntries = 8192;
 
-        // Capacity configurable via AppConfig (read at construction time)
+        // 容量由 AppConfig 配置，并在构造时读取
         private readonly int _maxActiveEntries;
         private int _registerRejectedCount;
         private int _duplicateRejectedCount;
@@ -249,8 +248,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         }
 
         /// <summary>
-        /// Register a new request. Returns null if the registry is at capacity
-        /// (caller must handle rejection and return an error response).
+        /// 注册新请求。注册表达到容量上限时返回 null，调用方负责拒绝请求并返回错误响应。
         /// </summary>
         internal ProxyRequestContext Register(string requestId, string resourceType,
             string saveDir, string dllCallbackUrl, int generation,
@@ -346,17 +344,16 @@ namespace HZCYKJTHardWare.Proxy.Core
         {
             foreach (var item in _active)
             {
-                // Legacy process-flow entries must survive route generation
-                // changes. New code stores them in TerminalProcessRegistry, but
-                // this guard protects in-flight sessions during rolling upgrade.
+                // 旧版流程条目必须跨路由代次保留。新版条目存入 TerminalProcessRegistry；
+                // 此保护分支用于保障滚动升级期间尚未结束的会话。
                 if (!item.Value.IsProcessFlow && item.Value.Generation < generation)
                     Finish(item.Value.RequestId, item.Value.ResourceType, ProxyRequestState.Cancelled);
             }
         }
 
         /// <summary>
-        /// Timer callback: prune expired active entries and stale completed records.
-        /// Thread-safe via Interlocked guard (single execution at a time).
+        /// 定时器回调函数：清理过期的活动条目和陈旧的完成记录。
+        /// 通过 Interlocked 防止并发执行，同一时刻仅允许一个清理任务运行。
         /// </summary>
         private void PruneExpiredCallback()
         {
@@ -411,8 +408,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                         continue;
                     }
 
-                    // Completion records are enqueued in timestamp order while
-                    // holding this same lock, so no later record can be stale.
+                    // 完成记录在同一锁内按时间戳顺序入队，因此后续记录不会早于当前清理边界。
                     if (record.CompletedAtTicks >= completedCutoff)
                         break;
 
@@ -449,8 +445,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 _capacity.Release();
             }
 
-            // Cancellation callbacks may execute synchronously. Never run them
-            // while holding the registry mutation lock.
+            // 取消回调函数可能同步执行，不得在持有注册表变更锁时触发。
             context.TryMarkTerminal(state);
             return true;
         }

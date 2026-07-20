@@ -12,6 +12,7 @@ namespace HZCYKJTHardWare {
 namespace { TerminalManager* g_pTermMgr = nullptr; }
 
 TerminalManager& TerminalManager::Instance() {
+    // 审查风险：并发首次访问时裸指针惰性初始化存在数据竞争；建议改用 std::call_once 或函数局部静态实例。
     if (!g_pTermMgr) g_pTermMgr = new TerminalManager();
     return *g_pTermMgr;
 }
@@ -225,4 +226,4 @@ std::string TerminalManager::GetTerminalUrl(int index) const {
     return urlBuf;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

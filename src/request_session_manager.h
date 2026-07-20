@@ -10,7 +10,7 @@ enum class RequestStatus {
     CallbackReceived,
     Completed,
     Timeout,
-    Cancelled,      // EndProcess 导致
+    Cancelled,      // SDK释放或回调服务重置导致
     Expired,        // SwitchTerminal 导致
     Failed
 };
@@ -62,7 +62,7 @@ public:
     // 检查超时，返回超时的请求列表
     std::vector<std::shared_ptr<RequestSession>> CheckTimeouts();
 
-    // 取消所有 pending 请求（EndProcess）
+    // 取消所有 pending 请求（SDK释放/服务停止）
     void CancelAll();
 
     // 将所有旧请求标记为过期（SwitchTerminal）
@@ -89,4 +89,4 @@ private:
     int m_seq = 0;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

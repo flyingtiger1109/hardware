@@ -98,9 +98,8 @@ bool LibVlcRtspRenderer::TryLoadLibVlcFromDir(const std::string& dir) {
         return false;
     }
 
-    // Use an absolute module path with a per-load dependency search directory.
-    // SetDllDirectory is process-wide and would otherwise alter the Delphi host's
-    // DLL resolution for unrelated third-party modules.
+    // 使用绝对模块路径，并为单次加载指定依赖搜索目录。
+    // SetDllDirectory 为进程级设置，使用它会改变 Delphi 宿主中无关第三方模块的 DLL 解析行为。
     m_hLibVlcCore = LoadLibraryExW(
         PathHelper::Utf8ToWide(corePath).c_str(), nullptr,
         LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -251,7 +250,7 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
         return HZCYKJTHardWare_RET_VLC_INIT_FAILED;
     }
 
-    // 创建 media
+    // 创建媒体对象
     typedef libvlc_media_t* (*media_new_location_t)(libvlc_instance_t*, const char*);
     m_media = ((media_new_location_t)m_libvlc_media_new_location)(m_vlcInstance, url.c_str());
     if (!m_media) {
@@ -263,7 +262,7 @@ int LibVlcRtspRenderer::Start(const std::string& url, HWND hwnd) {
         return HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED;
     }
 
-    // 创建 media player
+    // 创建媒体播放器
     int networkCachingMs = 150;
     int liveCachingMs = 150;
     std::string rtspTransport = "tcp";
@@ -358,14 +357,14 @@ int LibVlcRtspRenderer::Stop() {
         ((stop_t)m_libvlc_media_player_stop)(m_mediaPlayer);
     }
 
-    // 释放 media player
+    // 释放媒体播放器
     if (m_mediaPlayer && m_libvlc_media_player_release) {
         typedef void (*release_t)(libvlc_media_player_t*);
         ((release_t)m_libvlc_media_player_release)(m_mediaPlayer);
     }
     m_mediaPlayer = nullptr;
 
-    // 释放 media
+    // 释放媒体对象
     if (m_media && m_libvlc_media_release) {
         typedef void (*release_t)(libvlc_media_t*);
         ((release_t)m_libvlc_media_release)(m_media);
@@ -470,4 +469,4 @@ std::unique_ptr<IRtspRenderer> CreateLibVlcRtspRenderer() {
     return std::make_unique<LibVlcRtspRenderer>();
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

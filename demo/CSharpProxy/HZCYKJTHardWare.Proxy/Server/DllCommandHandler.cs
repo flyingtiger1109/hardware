@@ -30,6 +30,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly QueueManager _queueManager;
         private readonly ActiveTasksTracker _taskTracker;
         private readonly SwitchCoordinator _switchCoordinator;
+        private readonly ProcessEndCoordinator _processEndCoordinator;
         private readonly Action<bool> _onProcessStateChanged;
         private readonly string _proxyInstanceId = CreateProxyInstanceId();
         private const string TerminalSwitchingResult =
@@ -48,6 +49,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             QueueManager queueManager,
             ActiveTasksTracker taskTracker,
             SwitchCoordinator switchCoordinator,
+            ProcessEndCoordinator processEndCoordinator,
             Action<bool> onProcessStateChanged = null)
         {
             _terminalManager = terminalManager;
@@ -62,17 +64,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             _queueManager = queueManager;
             _taskTracker = taskTracker;
             _switchCoordinator = switchCoordinator;
+            _processEndCoordinator = processEndCoordinator;
             _onProcessStateChanged = onProcessStateChanged;
         }
 
         public async Task<string> HandleAsync(string method, string path, string bodyUtf8)
         {
-            // /ping — fast path, no queuing
+            // /ping：快速路径，不进入队列
             if (path == "/ping")
                 return BuildPingResponse(_proxyInstanceId);
 
-            // Flat plate-camera routing: Proxy never interprets Direction. Each route owns
-            // one camera/session, and the third-party caller chooses CJ or RJ2+RJ3.
+            // 扁平化车牌相机路由：Proxy 不解析 Direction。每条路由持有一个相机或会话，
+            // 由第三方调用方选择 CJ 或 RJ2+RJ3。
             if (path == "/preview/plate/cj/start")
                 return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
                     PreviewResourceType.PlateCJ, "cj");
@@ -89,29 +92,29 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (path == "/preview/plate/rj3/stop")
                 return HandlePreviewStop(PreviewResourceType.PlateRJ3);
 
-            // Fast reject during terminal switch
+            // 终端切换期间快速拒绝请求
             if (_queueManager.SwitchingTerminal)
                 return TerminalSwitchingResult;
 
             if (!_switchCoordinator.TryCaptureRoute(out var routeEpoch))
                 return TerminalSwitchingResult;
 
-            // Parse the request body exactly once and reuse it across route handlers.
+            // 请求正文仅解析一次，并在各路由处理函数间复用
             var request = ParsedJsonBody.Parse(bodyUtf8);
             var requestId = request.GetString("request_id");
             var saveDir = request.GetString("save_dir");
             var callbackUrl = request.GetString("callback_url");
             if (string.IsNullOrEmpty(saveDir))
-                saveDir = _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex);
+                saveDir = _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex);
             if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
             switch (path)
             {
-                // === Terminal Switch (highest priority, wait for route commit) ===
+                // === 终端切换（最高优先级，等待路由提交）===
                 case "/terminal/switch":
                     return await HandleSwitch(request).ConfigureAwait(false);
 
-                // === Sync captures (wait for result, pass saveDir from third-party) ===
+                // === 同步采集（等待结果，传入第三方提供的 saveDir）===
                 case "/capture/face":
                     return await EnqueueCapture(_queueManager.FaceCaptureQueue, routeEpoch, saveDir);
 
@@ -121,7 +124,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch, saveDir, saveDirHk);
                     }
 
-                // === Async operations (return "accepted" immediately after terminal forwards) ===
+                // === 异步操作（终端转发成功后立即返回 "accepted"）===
                 case "/ocr":
                     return await EnqueueAsyncResource(_queueManager.OcrQueue, routeEpoch, path,
                         OperationTimeouts.AsyncProxyWaitMs,
@@ -135,7 +138,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 case "/capture/iris":
                     return await EnqueueIris(routeEpoch, requestId, saveDir, callbackUrl);
 
-                // === Previews (replace mode, immediate "accepted") ===
+                // === 预览（Replace 模式，立即返回 "accepted"）===
                 case "/preview/camera/start":
                     return await HandlePreviewStart(request, PreviewResourceType.Camera, routeEpoch);
 
@@ -152,7 +155,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 case "/preview/iris/stop":
                     return HandlePreviewStop(PreviewResourceType.Iris);
 
-                // === Preview URL queries (synchronous, no queue) ===
+                // === 预览 URL 查询（同步执行，不进入队列）===
                 case "/preview/camera/url":
                     return await HandlePreviewUrl(PreviewResourceType.Camera, routeEpoch);
                 case "/preview/fingerprint/url":
@@ -160,11 +163,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                 case "/preview/iris/url":
                     return await HandlePreviewUrl(PreviewResourceType.Iris, routeEpoch);
 
-                // === Process and authorization ===
+                // === 流程控制与授权 ===
                 case "/process/start":
                     return await HandleProcessStart(requestId, routeEpoch, saveDir);
                 case "/process/end":
-                    return HandleProcessEnd();
+                    return await HandleProcessEnd(requestId).ConfigureAwait(false);
                 case "/authorize":
                     return await EnqueueAuthorize(routeEpoch, request, requestId, callbackUrl);
 
@@ -174,8 +177,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Enqueue a capture task with saveDir from the third-party request (matching Delphi logic).
-        /// If saveDir has a file extension, it's used directly as the save path.
+        /// 将采集任务加入队列，并使用第三方请求中的 saveDir，与 Delphi 逻辑一致。
+        /// saveDir 包含文件扩展名时直接作为保存路径。
         /// </summary>
         private async Task<string> EnqueueCapture(WorkerQueue<object> queue,
             TerminalRouteEpochSnapshot routeEpoch, string saveDir, string saveDirHk = null)
@@ -220,8 +223,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Queue an asynchronous iris capture while preserving the DLL request_id.
-        /// The terminal posts the final iris_image result to the proxy callback server.
+        /// 将异步虹膜采集任务加入队列并保留 DLL 的 request_id。
+        /// 终端将最终 iris_image 结果提交到 Proxy 回调服务。
         /// </summary>
         private async Task<string> EnqueueIris(TerminalRouteEpochSnapshot routeEpoch, string requestId,
             string saveDir, string callbackUrl)
@@ -314,10 +317,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             };
 
             var resolvedSaveDir = PathHelper.SafeResolveSaveDir(
-                string.IsNullOrEmpty(_processRegistry.GetActiveSaveDir(
+                string.IsNullOrEmpty(_processRegistry.GetCurrentSaveDir(
                     routeEpoch.Route.TerminalIndex))
                     ? AppConfig.Instance.DefaultSaveDir
-                    : _processRegistry.GetActiveSaveDir(routeEpoch.Route.TerminalIndex));
+                    : _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex));
             var context = _requestRegistry.Register(requestId, ProxyResourceTypes.Protocol,
                 resolvedSaveDir, callbackUrl, routeEpoch.Generation,
                 terminalIndex: routeEpoch.Route.TerminalIndex,
@@ -358,8 +361,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Enqueue an asynchronous terminal resource request while preserving the
-        /// request_id generated by the DLL.
+        /// 将异步终端资源请求加入队列，并保留 DLL 生成的 request_id。
         /// </summary>
         private async Task<string> EnqueueAsyncResource(WorkerQueue<object> queue,
             TerminalRouteEpochSnapshot routeEpoch, string path, int timeoutMs, string requestId, string saveDir,
@@ -398,7 +400,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
-                // Wait for worker to complete (with timeout)
+                // 等待工作线程完成，并受超时时限约束
                 var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
                 if (completed == tcs.Task && tcs.Task.IsCompleted)
                 {
@@ -407,7 +409,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return result;
                 }
 
-                // Timeout
+                // 等待超时
                 Logger.Error($"[队列] {queue.Name} 请求超时({timeoutMs}ms): {path}");
                 _requestRegistry.Fail(requestId, resourceType, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
@@ -417,7 +419,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        // ====== Switch (response after terminal route commit) ======
+        // ====== 终端切换（终端路由提交后响应）======
 
         private async Task<string> HandleSwitch(ParsedJsonBody request)
         {
@@ -430,16 +432,15 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             _log("[终端切换] 下发切换请求: " + _terminalManager.CurrentIndex + " -> " + terminalIndex);
 
-            // Return success only after PreviewManager has stopped terminal-bound
-            // previews and TerminalManager has committed the new route. Preview
-            // restart remains a background operation inside SwitchCoordinator.
+            // 仅在 PreviewManager 停止终端绑定预览且 TerminalManager 提交新路由后返回成功。
+            // 预览重启仍由 SwitchCoordinator 在后台执行。
             if (!await _switchCoordinator.SwitchToAsync(terminalIndex).ConfigureAwait(false))
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
             return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + "}";
         }
 
-        // ====== Process control ======
+        // ====== 流程控制 ======
 
         private async Task<string> HandleProcessStart(string requestId,
             TerminalRouteEpochSnapshot routeEpoch, string saveDir)
@@ -454,7 +455,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 var route = routeEpoch.Route;
                 if (string.IsNullOrEmpty(saveDir))
-                    saveDir = _processRegistry.GetActiveSaveDir(route.TerminalIndex);
+                    saveDir = _processRegistry.GetCurrentSaveDir(route.TerminalIndex);
                 if (string.IsNullOrEmpty(saveDir))
                     saveDir = AppConfig.Instance.DefaultSaveDir;
                 var resolvedSaveDir = PathHelper.SafeResolveSaveDir(saveDir);
@@ -499,26 +500,19 @@ namespace HZCYKJTHardWare.Proxy.Server
                 finally
                 {
                     if (!committed)
-                        _processRegistry.Rollback(registration);
+                        _processRegistry.RetainUnconfirmed(registration);
                 }
             }
         }
 
-        private string HandleProcessEnd()
+        private async Task<string> HandleProcessEnd(string requestId)
         {
-            using (var controlLease = _controlGate.TryEnter("end_process"))
-            {
-                if (controlLease == null)
-                    return "{\"error\":true,\"code\":\"busy\"}";
-
-                _processRegistry.ClearAll();
-                _terminalManager.ProcessActive = false;
-                _onProcessStateChanged?.Invoke(false);
-                _terminalManager.ProcessSaveDir = "";
-                _requestRegistry.CancelAll();
-                _log("[流程] 流程已结束");
+            var outcome = await _processEndCoordinator.EndCurrentAsync(requestId)
+                .ConfigureAwait(false);
+            if (outcome.Success)
                 return "{\"status\":\"ok\"}";
-            }
+            return "{\"error\":true,\"code\":\"" +
+                JsonHelper.EscapeString(outcome.Code) + "\"}";
         }
 
         public void ClearAllMappings()
@@ -538,7 +532,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
-        // ====== Preview Start (replace mode, immediate "accepted") ======
+        // ====== 启动预览（Replace 模式，立即返回 "accepted"）======
 
         private async Task<string> HandlePreviewStart(ParsedJsonBody request,
             PreviewResourceType resType, TerminalRouteEpochSnapshot routeEpoch)
@@ -554,7 +548,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
             }
 
-            // Start preview on thread pool (not blocking HTTP), then send callback
+            // 在线程池启动预览，避免阻塞 HTTP；随后发送回调
             var terminalBaseUrl = routeEpoch.Route.BaseUrl;
             string resourceName;
             switch (resType)
@@ -565,7 +559,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 default: resourceName = "unknown"; break;
             }
 
-            // Execute preview start asynchronously (don't block HTTP response)
+            // 异步执行预览启动，不阻塞 HTTP 响应
             var taskAccepted = _taskTracker.TryRun(async () =>
             {
                 try
@@ -716,8 +710,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
-        /// Hide the main window to the tray before notifying the third-party UI that preview is ready.
-        /// Waiting for this UI action keeps the external preview callback in the expected window state.
+        /// 通知第三方 UI 预览就绪前，将主窗口隐藏到托盘。
+        /// 等待该 UI 操作完成，确保外部预览回调触发时窗口处于预期状态。
         /// </summary>
         private static async Task<bool> HideMainFormToTrayAsync()
         {
@@ -775,7 +769,7 @@ namespace HZCYKJTHardWare.Proxy.Server
     }
 
     /// <summary>
-    /// Data passed to capture queue workers — includes third-party's saveDir.
+    /// 传递给采集队列工作线程的数据，包含第三方提供的 saveDir。
     /// </summary>
     public class CaptureTaskData : IQueueResultSink
     {
@@ -792,7 +786,7 @@ namespace HZCYKJTHardWare.Proxy.Server
     }
 
     /// <summary>
-    /// Data required to submit one asynchronous iris capture to the terminal.
+    /// 向终端提交单次异步虹膜采集所需的数据。
     /// </summary>
     public class IrisTaskData : IQueueResultSink
     {
@@ -810,7 +804,7 @@ namespace HZCYKJTHardWare.Proxy.Server
     }
 
     /// <summary>
-    /// Data required to submit an OCR or NFC request without regenerating request_id.
+    /// 提交 OCR 或 NFC 请求所需的数据，不重新生成 request_id。
     /// </summary>
     public class AsyncResourceTaskData : IQueueResultSink
     {
@@ -829,7 +823,7 @@ namespace HZCYKJTHardWare.Proxy.Server
     }
 
     /// <summary>
-    /// Data required to submit one asynchronous authorization request.
+    /// 提交单次异步授权请求所需的数据。
     /// </summary>
     public class AuthorizeTaskData : IQueueResultSink
     {

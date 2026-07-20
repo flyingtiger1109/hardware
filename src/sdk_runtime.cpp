@@ -49,20 +49,38 @@ void SdkRuntime::CompleteInitialize(bool success) {
     cv_.notify_all();
 }
 
-bool SdkRuntime::TryEnterCall() {
+bool SdkRuntime::TryEnterCall(const char* callName) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != SdkLifecycleState::Running) {
+        return false;
+    }
+    try {
+        ActiveCallInfo info;
+        info.threadId = GetCurrentThreadId();
+        info.startedAt = GetTickCount64();
+        info.name = callName ? callName : "unknown";
+        activeCallInfos_.push_back(info);
+    } catch (...) {
         return false;
     }
     ++activeCalls_;
     return true;
 }
 
-bool SdkRuntime::TryEnterCallbackRegistration() {
+bool SdkRuntime::TryEnterCallbackRegistration(const char* callName) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ == SdkLifecycleState::Initializing ||
         state_ == SdkLifecycleState::Releasing ||
         state_ == SdkLifecycleState::Faulted) {
+        return false;
+    }
+    try {
+        ActiveCallInfo info;
+        info.threadId = GetCurrentThreadId();
+        info.startedAt = GetTickCount64();
+        info.name = callName ? callName : "unknown";
+        activeCallInfos_.push_back(info);
+    } catch (...) {
         return false;
     }
     ++activeCalls_;
@@ -72,6 +90,13 @@ bool SdkRuntime::TryEnterCallbackRegistration() {
 void SdkRuntime::LeaveCall() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        const DWORD threadId = GetCurrentThreadId();
+        for (size_t i = activeCallInfos_.size(); i > 0; --i) {
+            if (activeCallInfos_[i - 1].threadId == threadId) {
+                activeCallInfos_.erase(activeCallInfos_.begin() + (i - 1));
+                break;
+            }
+        }
         if (activeCalls_ > 0) {
             --activeCalls_;
         }
@@ -92,8 +117,7 @@ bool SdkRuntime::BeginRelease(bool& shouldRelease, int timeoutMs) {
         }
     }
 
-    // A failed teardown after irreversible cleanup may have left a worker
-    // thread alive. Only a host-process restart can guarantee a clean runtime.
+    // 不可逆清理后的拆除失败可能遗留工作线程；此时仅重启宿主进程能够保证运行时恢复到干净状态。
     if (state_ == SdkLifecycleState::Faulted) {
         return false;
     }
@@ -148,9 +172,28 @@ int SdkRuntime::ActiveCalls() const {
     return activeCalls_;
 }
 
+std::string SdkRuntime::DescribeActiveCalls() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (activeCallInfos_.empty()) {
+        return "none";
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    std::ostringstream details;
+    for (size_t i = 0; i < activeCallInfos_.size(); ++i) {
+        if (i > 0) details << "; ";
+        const ActiveCallInfo& call = activeCallInfos_[i];
+        const ULONGLONG ageMs = now >= call.startedAt ? now - call.startedAt : 0;
+        details << call.name
+                << "(tid=" << call.threadId
+                << ",age_ms=" << ageMs << ")";
+    }
+    return details.str();
+}
+
 SdkLifecycleState SdkRuntime::State() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return state_;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

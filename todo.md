@@ -874,6 +874,23 @@
 详细修改、兼容性、风险、验证与回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
 
+## release/1.2.6 P0 修复清单（2026-07-10）
+
+- [x] 创建并推送修复前基线 `release/1.2.6@283883a9`。
+- [x] 终端切换成功响应等待真实路由提交。
+- [x] SDK 不可逆释放失败进入 `Faulted`，不恢复半运行状态。
+- [x] 回调终端信息使用 Session 快照并消除全局字符串并发读写。
+- [x] 固定抓拍文件使用同目录临时文件和原子替换。
+- [x] DLL 回调默认绑定 loopback，Proxy 严格校验终端来源 IP。
+- [x] 日志保留、容量、磁盘预警和批量刷新；不做业务字段脱敏。
+- [x] Native/C# VLC 不再调用进程级 `SetDllDirectory`。
+- [x] DLL `Release|Win32` 编译通过，0 警告、0 错误。
+- [x] Proxy/Tests `Release|net46` 编译通过，0 警告、0 错误。
+- [x] 非 Integration 单元测试 75/75 通过。
+- [ ] 确认真实终端 `/process/end` 协议和幂等行为。
+- [ ] 正式 Windows 测试宿主运行 7 项 `HttpListener` Integration。
+- [ ] 真实双终端、预览和 24～72 小时资源长稳验证。
+
 ## OCR ID 卡光学鉴伪兼容支持（2026-07-10）
 
 ### 当前阶段
@@ -882,6 +899,8 @@
 - [x] 支持 `data.card_type=30` 的 ID 卡人员字段和光学鉴伪字段解析。
 - [x] ID 卡扩展字段已贯通“终端推送 → C# Proxy → C++ DLL → 第三方 eventJson”。
 - [x] C# 第三方 Demo 已同步展示 ID 卡人员信息和光学鉴伪结果。
+- [x] 新建 V1.5 DOCX 和 2026-07-10 日期版 Markdown，并保持 V1.4 文档的页面、样式和代码着色体系。
+- [x] ID 卡通过现有 `mrz` 字段返回 `$证号^鉴伪分数^出生日期^签发日期^姓名^性别` 兼容串，同时保留独立 JSON 字段。
 - [x] 其他证件类型继续使用原 OCR 回调字段，不增加 ID 卡专用字段。
 - [ ] 使用真实 ID 卡终端完成现场联调。
 
@@ -896,18 +915,22 @@
 7. 增加 ID 卡完整、失败、字段缺失、`null`、非 ID 卡、旧 OCR 和非法类型测试。
 8. C# Demo 仅在 `ocr_document + card_type=30` 时展示人员字段、鉴伪分数和“通过/不通过/未知”状态；整数缺失默认值显式使用 `-1`。
 9. C# Proxy 的 ID 卡 OCR 成功日志不再打印 MRZ，改为打印经过控制字符清理和长度限制的姓名、性别、证号，以及鉴权分数和中文鉴伪结果；其他证件类型继续打印 MRZ。
+10. 接口文档增加 ID 卡字段表、`1601` 回调示例、默认值语义和 `HZCYKJTHardWare_RequestOCR` 说明；未修改 DLL 函数声明或回调签名。
+11. Proxy 向 DLL 投递 `card_type=30` 结果时，将 `mrz` 改为 `$证号^鉴伪分数^出生日期^签发日期^姓名^性别`；文本缺失保留分隔槽位，鉴伪分数缺失使用 `-1`，原独立字段继续返回。
 
 ### 涉及文件
 
 - `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Parsing/CallbackParser.cs`：OCR ID 卡模型和容错解析。
 - `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`：业务转换、鉴伪日志和 DLL 投递。
-- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCallbackSender.cs`：ID 卡扩展 JSON，保留原公开重载。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCallbackSender.cs`：ID 卡兼容串和扩展 JSON，保留原公开重载。
 - `src/event_dispatcher.cpp`：严格整数解析、ID 卡日志和第三方回调 JSON 扩展。
 - `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/OcrIdCardCallbackTests.cs`：7 个 OCR 解析场景。
-- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/DllCallbackSenderTests.cs`：ID 卡透传和旧回调字段集合测试。
-- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`：ID 卡回调字段解析和日志展示。
-- `demo/CSharpThirdPartyDemo/README.md`：ID 卡演示字段及状态说明。
-- `第三方接口调用说明.md`：ID 卡字段和状态定义。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/DllCallbackSenderTests.cs`：ID 卡兼容串、缺失槽位和旧回调兼容测试。
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`：ID 卡兼容串、回调字段解析和日志展示。
+- `demo/CSharpThirdPartyDemo/README.md`：ID 卡兼容串、演示字段及状态说明。
+- `第三方接口调用说明.md`：ID 卡兼容串、字段和状态定义。
+- `HZCYKJTHardWare接口调用说明V1.5_20260710.docx`：基于 V1.4 原格式补充 ID 卡回调说明。
+- `第三方接口调用说明20260710.md`：2026-07-10 日期版第三方接口说明。
 - `todo.md`：本次进度记录。
 
 ### 兼容性说明
@@ -916,6 +939,7 @@
 - 回调 ABI：仍为 `THZCYKJTHardWareEventCallback(const char* eventJson)`，调用约定仍为 x86 `__stdcall`。
 - 公共结构体：`HZCYKJTHardWare_EVENT` 未修改，字段布局和大小不变。
 - 第三方 JSON：仅 ID 卡 OCR 成功事件增加可选字段；其他 OCR 类型字段集合保持不变。
+- ID 卡兼容：`mrz` 从空值改为以 `$` 开头的六字段兼容串；已确认保留 `card_type`、人员和鉴伪独立字段。
 - Proxy：继续使用 `.NET Framework 4.6/x86`，未新增依赖。
 - DLL：继续生成 Win32/x86，当前导出表仍为 24 项。
 
@@ -927,6 +951,8 @@
 4. Proxy ID 卡日志包含姓名、性别和证件号码等敏感信息，需限制日志访问权限与留存周期。
 5. C++ 旧 `ResultParser::ParseOcrResult` 当前位于停用的 `#if 0` 路径，本次未修改；如恢复旧原始报文处理，需要同步支持 ID 卡字段。
 6. 自动测试使用模拟 JSON，真实终端是否存在字段大小写或协议版本差异仍需现场确认。
+7. 兼容串使用 `^` 作为固定分隔符，字段内容如果自身包含 `^` 会产生解析歧义；当前按终端原值透传，不主动改写证件数据。
+8. ID 卡兼容串包含证号、姓名、生日等敏感信息，第三方不得直接写入无访问控制的日志。
 
 ### 验证状态
 
@@ -939,6 +965,12 @@
 - [x] DLL `Release|Win32` 编译：0 warning，0 error。
 - [x] DLL 架构：PE32/x86；24 项导出及 `__stdcall` 装饰保持不变。
 - [x] 公共类型头文件和 `.def` 导出文件无修改。
+- [x] V1.5 DOCX 结构检查：除 `word/document.xml` 外，其余文档包部件与 V1.4 内容一致；原 V1.4 文件未修改。
+- [x] V1.5 DOCX 使用 Microsoft Word 导出并逐页检查：9/9 页通过，无内容截断、重叠或表格跨页断行。
+- [x] ID 卡兼容串新增测试：完整字段和缺失字段固定槽位均通过。
+- [x] Proxy/Test `Release|x86|net46` 隔离编译：0 warning，0 error；非集成测试 76/76 通过。
+- [x] C# 第三方 Demo `Release|x86|net46` 隔离编译：0 warning，0 error。
+- [x] 更新后的 V1.5 DOCX 使用 Microsoft Word 再次逐页检查：9/9 页通过。
 - [ ] 既有 `HttpListener` 集成测试：当前运行环境在 `MockTerminalServer` 初始化时抛出 `PlatformNotSupportedException`，7 项未进入业务断言；需在支持 `System.Net.HttpListener` 的正式 Windows 测试宿主复验。
 - [ ] 真实终端 `card_type=30`、鉴伪通过/不通过/缺失字段联调：待验证。
 - [ ] 第三方 Delphi/C# 程序实际解析新增 JSON 字段：待验证。
@@ -947,6 +979,7 @@
 
 - [ ] 部署最新 x86 DLL 和 C# Proxy，使用真实 ID 卡验证 `0/1/-1` 三种状态。
 - [ ] 核对第三方回调中的 `name/sex/cardId/birthday/dateOfissue` 与终端原始数据一致。
+- [ ] 使用真实 ID 卡核对 `mrz` 精确等于 `$证号^鉴伪分数^出生日期^签发日期^姓名^性别`。
 - [ ] 使用原有护照等证件回归，确认回调 JSON 不出现 ID 卡专用字段。
 - [ ] 进行重复识别、终端切换、字段异常和 2 小时稳定性验证。
 
@@ -1138,3 +1171,178 @@
 
 详细修改、兼容性、风险、验证与回退方式见：
 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+## DLL `/ping` 成功日志降级（2026-07-10）
+
+### 当前阶段
+
+- [x] 高频 `/ping` 成功日志由 `INFO` 调整为 `DEBUG`。
+- [x] 其他 HTTP GET 成功日志继续使用 `INFO`，HTTP 失败日志继续使用 `ERROR`。
+
+### 涉及文件
+
+- `src/http_client.cpp`：按 URL 后缀识别 `/ping` 并调整成功日志级别。
+- `todo.md`：记录本次修改和验证状态。
+
+### 兼容性说明
+
+- DLL 导出函数、参数、返回值、`__stdcall`、结构体和回调 JSON 均未改变。
+- HTTP 请求频率、超时、响应处理和 `/ping` 健康检查逻辑均未改变。
+- 默认 `INFO` 阈值下不再输出 `/ping` 成功日志；配置为 `debug` 时仍可查看。
+
+### 验证状态
+
+- [x] DLL `Release|Win32` 编译验证：0 warning，0 error。
+- [ ] 运行验证：默认 `INFO` 下只隐藏 `/ping` 成功日志，失败日志仍正常输出。
+
+### 回退方式
+
+- 将 `src/http_client.cpp` 中 `/ping` 成功分支恢复为 `LOG_INFO`。
+
+## P1 方案 B 压测结论与回退（2026-07-15）
+
+- [x] 分析约 18 小时 15 分钟 x86 真实双终端压力测试日志。
+- [x] 确认功能、终端隔离、队列、线程和句柄没有新增 P0 问题。
+- [x] 确认抓拍响应流式解析未达到降低 GC 压力的目标。
+- [x] 定向恢复人脸和指纹的 `PostJsonAsync + CallbackParser.ParseImageCapture` 路径。
+- [x] 删除 `PostImageCaptureAsync`、`ImageCaptureStreamParser` 和 3 项专用测试。
+- [x] 保留 P0、固定文件覆盖、x64/VLC 和 `ReleaseSdk active=1` 后续修复。
+- [x] 回退后 Proxy + Tests x86/x64 Release 编译通过，非 Integration 回归均为 91/91。
+- [ ] 真实终端 2 进行 30～60 分钟短压测，并比较指纹延迟与每次抓拍 GC。
+- [ ] 回退版本完成 24～72 小时长稳验证。
+
+详细实测数据、兼容性和回退边界见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## DLL 日志 BOM 与授权编码核对（2026-07-15）
+
+- [x] 确认 DLL 日志主体是无 BOM UTF-8，授权姓名混入 GBK 字节导致文件不再是严格 UTF-8。
+- [x] 确认 GBK 字节对应“港旅客二”，且 EXE 收到请求时字段已经损坏。
+- [x] 确认仓库 C# Demo 授权参数使用 `Utf8NativeString`，源码无需修改。
+- [x] Native Logger 仅为空白新日志写入 UTF-8 BOM，已有日志继续原样追加。
+- [x] DLL Win32 Release 和 C# Demo x86 Release 编译通过，均为 0 warning、0 error。
+- [x] 验证 Demo 将“港旅客二”编码为正确 UTF-8 字节。
+- [x] 验证新日志文件头为 `EF BB BF`，两个进程连续追加后 BOM 总数仍为 1。
+- [x] 记录 C# Demo/DLL SHA-256，供现场部署文件核对。
+- [ ] 现场用“港旅客二”验证 DLL、EXE、终端及回调全链路编码。
+
+注意：BOM 只解决查看器识别；后续已增加 `third_party_input_encoding`，DLL 可将 GBK 输入归一化为 UTF-8。
+
+## DLL 第三方输入编码兼容（2026-07-15）
+
+- [x] 根配置新增 `third_party_input_encoding`，支持 `auto`、`gbk`、`utf8`，默认 `auto`。
+- [x] `auto` 对非 ASCII 输入先严格校验 UTF-8，失败后按 Windows CP936/GBK 转换。
+- [x] `gbk` 强制将第三方输入转换成 UTF-8；`utf8` 严格校验 UTF-8。
+- [x] 已覆盖流程、人脸、指纹、虹膜、OCR、NFC 的路径参数及授权 7 个字符串字段。
+- [x] DLL 内部、日志、HTTP/JSON、Proxy 和第三方回调继续保持 UTF-8。
+- [x] DLL `Release|Win32` 编译通过，0 warning、0 error。
+- [x] x86 运行验证通过：`auto+GBK`、`auto+UTF-8`、`gbk+GBK`、`utf8+UTF-8` 以及无配置默认 `auto+GBK`。
+- [ ] 使用正式 Delphi 第三方程序执行中文路径、授权姓名和回调全链路验证。
+
+兼容性：未修改 DLL 导出名称、参数、`__stdcall`、返回值或回调签名；未修改 C# Proxy 和 Delphi 示例源码。
+
+## Proxy x64 与真实 `/process/end`（2026-07-15）
+
+- [x] Proxy/VLC x64 独立构建与 PE 架构校验。
+- [x] DLL 保持 Win32/x86，导出 ABI 和第三方调用方式不变。
+- [x] `/process/end` 同步转发当前终端，校验 HTTP 202、`status=accepted` 和一致的 `request_id`。
+- [x] 按最终定义修正：Start/End 只控制终端是否推送，Proxy 不使用本地 Session 判断是否接收。
+- [x] End 不再取消 OCR/NFC/虹膜/授权请求；End 后在途流程回调保留路由并正常转交。
+- [x] DLL 删除 End 时 `CancelAll` 和 `process_active` 回调门禁，外部导出接口不变。
+- [x] 路由缓存有界保留 10 分钟、最多 256 条；保留来源 IP 和当前终端隔离检查。
+- [x] x64 Proxy/Tests 编译通过，104/104 测试通过；Win32 DLL 编译和 24 项导出检查通过。
+- [ ] 设备方修正文档“请求体字段无/示例含 request_id”的矛盾。
+- [ ] 真实双终端抓拍延迟回归、x64 VLC 预览、异常重启与 24～72 小时长稳。
+
+详细范围、风险、验证和回退见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## x64 Proxy 句柄来源隔离验证（2026-07-16）
+
+- [x] 压测脚本增加 `Idle`、`SwitchOnly`、`CaptureOnly` 三种隔离负载，默认 `FullFlow` 行为不变。
+- [x] 静置 3 分钟：句柄未增长，线程由 31 降至 20。
+- [x] 同终端重复切换 99 次且关闭预览：句柄未增长。
+- [x] 双终端交替切换 99 次且关闭预览：句柄呈波动回收，没有按切换次数持续累积。
+- [x] 双终端交替切换 99 次且开启相机/指纹预览：预热后句柄增加 230，趋势约 `+37.4/min`。
+- [x] 固定终端高频抓拍 6 分钟：818 次调用全部成功，395 次人脸和 395 次指纹抓拍成功，句柄趋势约 `-0.75/min`。
+- [x] 句柄类型对照确认：预览切换残留比抓拍基线多约 203 个 `Thread` 句柄，即约 `2.05/次切换`。
+- [x] 代码交叉验证：每路 `VlcPreviewController` 创建一个专用线程，终端切换时两路预览控制器被销毁并重建；当前 `DisposeAsync` 等待停止动作完成，但不等待线程真正退出。
+- [ ] 按确认后的方案修正预览线程生命周期，再执行相同 99 次切换 A/B 回归。
+
+结论：当前句柄压力来自“预览开启时切换终端”的 VLC/预览线程生命周期，不来自 `Start/End`、高频抓拍或无预览的终端切换。尚未修改 Proxy 生产代码和任何第三方接口。
+
+## 预览句柄释放方案 A 实施与验证（2026-07-16）
+
+- [x] `VlcPreviewController` 增加线程退出完成信号、幂等有界释放及启动失败清理。
+- [x] `_restartInfo` 改为不持有 `Player/Thread` 的轻量 `PreviewRestartInfo`。
+- [x] 新增2项重启信息引用测试，2/2通过。
+- [x] Proxy x64 Release 编译通过，0 warning、0 error。
+- [x] 真实双终端相机+指纹预览交替切换89次，全部成功，线程退出超时0次。
+- [ ] 句柄验收未通过：预热后约678升至峰值896，停止后862，空闲3分钟后约774；仍有211个 `Thread` 句柄、实际线程约30个。
+- [ ] 方案 A 只能解决释放顺序和旧引用，不能消除反复创建 STA `Thread` 的 CLR 句柄滞留；等待确认进入固定 STA 线程复用方案。
+- [ ] 方案 B 完成后按同口径执行约100次切换、2小时短稳和24～72小时长稳。
+
+兼容性：未改变 DLL ABI、HTTP/终端协议、配置、回调格式和第三方调用方式；DLL仍为x86，本次Proxy验证为x64 Release。
+
+详细验证数据与回退说明见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## 预览句柄释放方案 B VLC 实验与回退（2026-07-16，结论已更正）
+
+- [x] B1 固定相机/指纹 STA worker，x64 Release 编译和真实双终端 89 次切换完成。
+- [x] B2 继续复用 libVLC instance；B3 复用 media player；B4 增加 stopped 状态等待。
+- [x] 四个变体功能均正常、DLL 调用 0 失败。
+- [ ] 句柄验收均未通过：B1/B2/B3/B4 后半段趋势分别约 `+56.91`、`+54.22`、`+44.21`、`+65.34/min`。
+- [x] 更正：真实人脸、指纹预览为 HTTP MJPEG，RTSP 使用为0；VLC 日志仅为启动预热，本轮实验没有覆盖实际泄漏链路。
+- [x] 未达标的方案 B 实验代码已回退，仅保留方案 A；回退后 Proxy x64 Release 0 warning/0 error，定向测试 2/2，非 Integration 96/96。
+- [x] 撤回4路 RTSP 常驻方案，改为复用当前终端的相机、指纹两个 MJPEG worker。
+
+兼容性：本轮未改变 DLL ABI、HTTP/终端协议、回调格式或第三方调用方式；未达标实验实现没有留在生产代码中。
+
+详细数据和各变体指标见：
+`demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## MJPEG 长生命周期 worker 方案 B（2026-07-17）
+
+- [x] 渲染线程和HTTP读取线程改为每个资源会话只创建一次，终端切换仅取消旧请求并替换URL。
+- [x] 增加媒体代次隔离，防止旧终端延迟帧覆盖新终端画面。
+- [x] 暂停等待旧请求脱离，最终释放分别等待渲染、读取线程退出。
+- [x] 显式停止、窗口失效和Proxy关闭仍完整释放worker；VLC/RTSP兼容路径不变。
+- [x] Proxy x64 Release编译通过，0 warning、0 error。
+- [x] 定向测试3/3；非Integration完整重跑97/97。
+- [x] 3分钟真实测试：88次切换、96次调用、0失败，结束后43个 `Thread` 句柄。
+- [x] 10分钟短稳：297次切换、305次调用、0失败；句柄范围593～633，整体斜率 `-1.20/min`，后半段 `+0.57/min`。
+- [x] 10分钟结束后总句柄581、`Thread`句柄43、实际线程26；旧版为211～234个 `Thread`句柄。
+- [x] MJPEG暂停/停止超时、流恢复失败、VLC回退和RTSP使用均为0。
+- [x] 2小时真实硬件短稳完成：120.07分钟、1437次切换、1445次DLL调用、0失败；后半程句柄斜率 `+0.0236/min`、`R²=0.0104`，最后30分钟 `+0.0578/min`。
+- [x] 测试停止后句柄类型快照为47个 `Thread`句柄、26个实际线程；旧版为211～234个 `Thread`句柄，原按切换次数累积的泄漏特征已消失。
+- [x] Private Memory后半程约58～62MB，单点89.3MB后立即回落；空闲后约59MB，2小时内未见单向累积。
+- [x] 1436次后台预览恢复全部成功；Proxy警告、错误、MJPEG暂停/停止超时、恢复失败、RTSP实际使用均为0，VLC仅有启动预热记录。
+- [ ] 通过后安排24～72小时长稳和设备断开/恢复验证。
+- [ ] 补测外部预览HWND销毁/重建和第三方程序退出/重启后的worker最终释放。
+
+兼容性：未修改DLL ABI、Proxy HTTP/终端协议、配置或第三方调用；仍只保持当前终端的两路MJPEG连接。
+## MJPEG 16小时真实硬件长稳收尾核查（2026-07-18）
+
+- [x] 仅核查 `scripts/stress_results/handle_release_mjpeg_scheme_b_16hour_real_restart_20260718_1750`；人工中断旧轮 `handle_release_mjpeg_scheme_b_16hour_real_20260718` 未混入结论。
+- [x] 确认本轮未完成 960 分钟：关闭测试 Proxy 前有效片段为 17:51:32～18:04:13，共 152 次切换、12.70 分钟、0 失败；两终端各 76 次成功。
+- [x] 关闭前切换耗时：P50/P95/P99/最大值为 3/18.45/52.64/72ms。
+- [x] 核查正式目录：仅有 cycles、metrics；本轮没有 summary、calls、callbacks CSV。
+- [x] 日志窗口无 warning/error、MJPEG pause/stop timeout 或流恢复失败；摄像头/指纹 MJPEG 预览各启动 153 次，VLC 仅 3 条预热日志且无实际预览证据，RTSP 使用为 0。
+- [x] 预热后仅约 7.5 分钟有效指标：HandleCount 668～687，斜率 `+15.70 handles/hour`、`R²=0.0144`，线程 30～35，Private Memory 53.04～54.98MB；不足以判定 16 小时趋势，后半 8 小时和最后 4 小时无数据。
+- [x] 关闭前采集 PID 47668 句柄类型快照（678 总句柄，Event 269、Thread 61、Key 46、File 31）；再次核对精确构建路径后，仅终止该测试 Proxy。
+- [ ] 修正/确认测试宿主在 Proxy 退出后的自动停止和结果封存，避免继续追加被人为终止后的失败记录。
+- [ ] 在独占、不重启、不人工中断的条件下，重新执行完整 960 分钟测试，并产出 summary/calls/cycles/metrics 完整数据后再决定是否修改生产代码。
+
+## 同名抓拍文件一致性方案 A（2026-07-20）
+
+- [x] 保留现有抓拍队列及同名覆盖语义，在 `FileSaver` 层增加有界的同路径互斥。
+- [x] 同路径锁覆盖临时文件写入、刷盘和 `MoveFileEx` 原子提交完整过程。
+- [x] 对 Win32 错误 5/32/33/1224 按 10/20/40/80ms 进行有限重试，最长额外等待 150ms。
+- [x] 增加同路径 12 路并发写入和目标文件短时占用恢复测试。
+- [x] Proxy + Tests x64/x86 Release 独立目录编译通过。
+- [x] `FileSaverTests` x64 7/7、x86 7/7 通过；x64 非 Integration 回归 99/99 通过。
+- [ ] 停止现有 Proxy、部署新构建后执行真实硬件人工抓拍核对。
+- [ ] 执行 150 分钟 FullFlow，核查抓拍失败、原子替换日志、临时文件残留及返回文件内容。
+- [ ] 真实硬件验证完成前，不将方案 A 标记为现场通过。
+
+兼容性：未修改 DLL ABI、HTTP/终端协议、队列行为、配置或第三方调用；继续覆盖同名文件。详细实现、风险和回退见 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。

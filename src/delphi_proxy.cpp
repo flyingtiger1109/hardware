@@ -108,7 +108,7 @@ bool HasErrorResponse(const std::string& response, std::string& code, std::strin
     return true;
 }
 
-} // namespace
+} // 匿名命名空间结束
 
 DelphiProxy::DelphiProxy(const std::string& baseUrl)
     : baseUrl_(TrimTrailingSlash(baseUrl)) {
@@ -146,14 +146,16 @@ bool DelphiProxy::ProcessStart(const std::string& requestId,
                                const std::string& callbacksJson) {
     std::string body = "{" + JsonStringField("request_id", requestId) +
         "," + JsonStringField("save_dir", saveDir) +
-        "," + callbacksJson.substr(1); // merge request_id + save_dir into callbacks JSON
+        "," + callbacksJson.substr(1); // 将 request_id 和 save_dir 合并到回调 JSON
     std::string response;
     return PostJson("/process/start", body, response) && IsOkResponse(response);
 }
 
-bool DelphiProxy::ProcessEnd() {
+bool DelphiProxy::ProcessEnd(const std::string& requestId, int timeoutMs) {
     std::string response;
-    return PostJson("/process/end", "{}", response) && IsOkResponse(response);
+    std::string body = "{" + JsonStringField("request_id", requestId) + "}";
+    return PostJson("/process/end", body, response, timeoutMs) &&
+        IsOkResponse(response);
 }
 
 bool DelphiProxy::SwitchTerminal(int terminalIndex) {
@@ -532,4 +534,4 @@ std::string DelphiProxy::BuildUrl(const std::string& path) const {
     return baseUrl_ + "/" + path;
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

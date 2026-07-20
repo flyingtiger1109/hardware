@@ -47,6 +47,8 @@ int CallbackServer::Start(const std::string& host, int port) {
     if (host == "0.0.0.0" || host.empty()) {
         addr.sin_addr.s_addr = INADDR_ANY;
     } else {
+        // 审查风险：未检查 inet_pton 返回值，非法地址可能使 addr 保持为 0.0.0.0 并扩大监听范围。
+        // 建议解析失败时关闭 Socket、调用 WSACleanup，并返回配置错误。
         inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
     }
 
@@ -84,7 +86,7 @@ int CallbackServer::Start(const std::string& host, int port) {
 bool CallbackServer::Stop(int timeoutMs) {
     m_running = false;
 
-    // Close both listening and active sockets so accept/recv are interrupted.
+    // 同时关闭监听 Socket 和活动 Socket，使 accept/recv 立即中断
     SOCKET listenSocket = m_listenSocket.exchange(INVALID_SOCKET);
     if (listenSocket != INVALID_SOCKET) {
         closesocket(listenSocket);
@@ -174,6 +176,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
         // 第一步：读取 HTTP 头部 + 初始 body（最多 16KB）
         char buf[16384];
+        // 审查风险：TCP 不保证一次 recv 收到完整 HTTP 头；分片到达时会误判为无效请求。
+        // 建议循环读取到 \r\n\r\n，并设置明确的请求头大小上限。
         int recvLen = recv(clientSocket, buf, sizeof(buf) - 1, 0);
 
         if (recvLen > 0) {
@@ -295,4 +299,4 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已退出");
 }
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

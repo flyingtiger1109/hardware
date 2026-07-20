@@ -10,4 +10,4 @@ public:
     static int Check(const std::string& baseUrl, int connectTimeoutMs);
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

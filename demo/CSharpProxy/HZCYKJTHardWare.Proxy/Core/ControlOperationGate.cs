@@ -4,9 +4,8 @@ using System.Threading;
 namespace HZCYKJTHardWare.Proxy.Core
 {
     /// <summary>
-    /// Serializes lifecycle-changing control operations without creating a wait
-    /// queue. StartProcess, EndProcess and terminal switching either acquire the
-    /// gate immediately or report busy to the caller.
+    /// 对改变生命周期的控制操作进行串行化，不创建等待队列。
+    /// StartProcess、EndProcess 和终端切换必须立即获得执行权，否则向调用方返回忙状态。
     /// </summary>
     internal sealed class ControlOperationGate
     {

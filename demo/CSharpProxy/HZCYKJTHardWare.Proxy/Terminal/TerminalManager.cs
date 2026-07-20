@@ -23,8 +23,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     }
 
     /// <summary>
-    /// Immutable routing context captured at request admission time.  The route,
-    /// generation and cancellation token always belong to the same terminal epoch.
+    /// 请求准入时捕获的不可变路由上下文。路由、代次和取消令牌始终属于同一终端周期。
     /// </summary>
     public sealed class TerminalRouteEpochSnapshot
     {
@@ -50,8 +49,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         private long _routeEpoch;
         private readonly object _lock = new object();
 
-        // Process state tracking (same as Delphi TTerminalManager)
-        // Thread-safe: accessed from DLL command handler and callback handler concurrently
+        // 流程状态跟踪，与 Delphi TTerminalManager 保持一致
+        // 线程安全：DLL 命令处理函数与回调处理函数可能并发访问
         private string _processSaveDir = "";
         private bool _processActive;
 
@@ -94,6 +93,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             set { lock (_lock) _processSaveDir = value ?? ""; }
         }
 
+        // 记录最近一次已确认 Start/End 命令对应的 UI 或默认路径状态
+        // 回调准入不得依赖此值
         public bool ProcessActive
         {
             get { lock (_lock) return _processActive; }

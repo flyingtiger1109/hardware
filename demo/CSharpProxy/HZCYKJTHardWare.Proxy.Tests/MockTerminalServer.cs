@@ -29,6 +29,7 @@ namespace HZCYKJTHardWare.Proxy.Tests
         public string LastIrisRequestId { get; private set; }
         public string LastAuthorizeRequestId { get; private set; }
         public string LastProcessRequestId { get; private set; }
+        public string LastProcessEndRequestId { get; private set; }
 
         // Configurable responses
         public string OcrCallbackBody { get; set; }
@@ -38,6 +39,8 @@ namespace HZCYKJTHardWare.Proxy.Tests
         public string FaceCaptureResponseBody { get; set; }
         public string FingerprintCaptureResponseBody { get; set; }
         public string ProcessStartResponseBody { get; set; }
+        public string ProcessEndResponseBody { get; set; }
+        public int ProcessEndStatusCode { get; set; } = 202;
 
         // Control flags
         public bool SimulateTerminalUnreachable { get; set; }
@@ -117,6 +120,7 @@ namespace HZCYKJTHardWare.Proxy.Tests
                 string requestId = JsonHelper.ExtractString(body, "request_id");
 
                 string responseBody;
+                var responseStatusCode = 200;
                 switch (path)
                 {
                     case "/ping":
@@ -130,7 +134,11 @@ namespace HZCYKJTHardWare.Proxy.Tests
                         break;
 
                     case "/process/end":
-                        responseBody = "{\"status\":\"ok\"}";
+                        LastProcessEndRequestId = requestId;
+                        responseStatusCode = ProcessEndStatusCode;
+                        responseBody = ProcessEndResponseBody
+                            ?? "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                               "\",\"status\":\"accepted\",\"message\":\"flow ended\"}";
                         break;
 
                     case "/resources/ocr-document/request":
@@ -180,7 +188,7 @@ namespace HZCYKJTHardWare.Proxy.Tests
                 byte[] buffer = Encoding.UTF8.GetBytes(responseBody);
                 context.Response.ContentType = "application/json; charset=utf-8";
                 context.Response.ContentLength64 = buffer.Length;
-                context.Response.StatusCode = 200;
+                context.Response.StatusCode = responseStatusCode;
                 await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
                 context.Response.Close();
             }

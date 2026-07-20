@@ -10,8 +10,8 @@ using HZCYKJTHardWare.Proxy.Preview;
 namespace HZCYKJTHardWare.Proxy.Server.Runtime
 {
     /// <summary>
-    /// Low-frequency process and resource telemetry for multi-day stability tests.
-    /// It intentionally avoids per-request timing and runs once every five minutes.
+    /// 用于多日稳定性测试的低频进程及资源遥测。
+    /// 不记录逐请求耗时，每 5 分钟执行一次。
     /// </summary>
     internal sealed class RuntimeMetricsReporter : IDisposable
     {
@@ -95,7 +95,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                        $"preview_sessions={_previewManager?.ActiveSessionCount ?? 0}, " +
                        $"preview_recoveries={_previewManager?.ActiveRecoveryCount ?? 0}, " +
                        $"requests={_requestRegistry?.ActiveCount ?? 0}, " +
-                       $"process_sessions={_processRegistry?.ActiveCount ?? 0}, " +
+                       $"callback_routes={_processRegistry?.BindingCount ?? 0}, " +
+                       $"current_callback_routes={_processRegistry?.CurrentCount ?? 0}, " +
                        $"log_pending={Logger.PendingCount}, log_dropped_total={Logger.TotalDroppedCount}, " +
                        $"disk_free_mb={diskFreeMb}";
             }

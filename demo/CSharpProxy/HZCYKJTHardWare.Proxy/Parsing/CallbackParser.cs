@@ -88,10 +88,10 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 result.RequestId = obj["request_id"]?.ToString() ?? "";
                 result.Mrz = obj["mrz"]?.ToString() ?? "";
 
-                // Search ENTIRE body for MRZ fields (same as Delphi - they might be at any nesting level)
+                // 在完整正文中查找 MRZ 字段，与 Delphi 保持一致，兼容任意嵌套层级
                 if (string.IsNullOrEmpty(result.Mrz))
                 {
-                    // Try uppercase first, then lowercase (same as Delphi)
+                    // 优先查找大写字段名，再查找小写字段名，与 Delphi 顺序一致
                     var mrz1 = FindMrzField(bodyUtf8, "MRZ1") ?? FindMrzField(bodyUtf8, "mrz1") ?? "";
                     var mrz2 = FindMrzField(bodyUtf8, "MRZ2") ?? FindMrzField(bodyUtf8, "mrz2") ?? "";
                     var mrz3 = FindMrzField(bodyUtf8, "MRZ3") ?? FindMrzField(bodyUtf8, "mrz3") ?? "";
@@ -101,14 +101,13 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                     }
                 }
 
-                // Parse evidence images
+                // 解析证据图像
                 var data = obj["data"] as JObject;
                 if (TryReadInt32(data?["card_type"], out var cardType))
                     result.CardType = cardType;
 
-                // ID card (card_type=30) adds person and optical-authentication data.
-                // Other document types deliberately skip these fields so their existing
-                // callback shape and behavior remain unchanged.
+                // 身份证（card_type=30）附加人员信息和光学核验数据。
+                // 其他证件类型不处理这些字段，以保持既有回调结构和行为。
                 if (result.CardType == 30)
                 {
                     var person = FirstObject(data?["person_info"]);
@@ -139,7 +138,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                         result.EvidenceImages.Add(item.ToString(Newtonsoft.Json.Formatting.None));
                 }
 
-                // Always valid if we got a request_id (same as Delphi)
+                // 获取 request_id 后即视为有效，与 Delphi 判定保持一致
                 result.Valid = !string.IsNullOrEmpty(result.RequestId);
             }
             catch
@@ -185,7 +184,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
 
         private static string FindMrzField(string json, string fieldName)
         {
-            // Simple string search for field value (same approach as Delphi's ExtractField)
+            // 使用简单字符串搜索提取字段值，与 Delphi 的 ExtractField 实现方式一致
             var searchKey = "\"" + fieldName + "\"";
             var idx = json.IndexOf(searchKey, StringComparison.Ordinal);
             if (idx < 0) return null;
@@ -216,7 +215,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                     ?? obj["cardId"]?.ToString()
                     ?? obj["id_number"]?.ToString()
                     ?? "";
-                // Also try inside data sub-object (same as Delphi)
+                // 同时在 data 子对象中查找，与 Delphi 兼容逻辑一致
                 if (string.IsNullOrEmpty(result.CardText))
                 {
                     var data = obj["data"];
@@ -229,7 +228,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                             ?? "";
                     }
                 }
-                // Valid only if CardText is found (same as Delphi)
+                // 仅在找到 CardText 时判定有效，与 Delphi 判定保持一致
                 result.Valid = !string.IsNullOrEmpty(result.CardText);
             }
             catch
@@ -250,10 +249,10 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 if (string.IsNullOrEmpty(result.ResourceType))
                     result.ResourceType = obj["resource_type"]?.ToString() ?? "";
 
-                // Extract data section (same as Delphi)
+                // 提取 data 数据段，与 Delphi 行为一致
                 var data = obj["data"] as JObject;
 
-                // Try resource-specific field names in data section (same order as Delphi)
+                // 按 Delphi 的顺序在 data 数据段中查找资源专用字段名
                 if (result.ResourceType == "face_image")
                 {
                     result.ImageBase64 = GetStringField(data, "face_capture")
@@ -270,8 +269,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                         ?? GetStringField(obj, "fingerprint_capture")
                         ?? "";
 
-                    // Preserve the historical lookup order used by
-                    // SaveUndistortedFingerprintImage: top-level first, then data.
+                    // 保持 SaveUndistortedFingerprintImage 的既有查找顺序：先顶层，后 data。
                     result.UndistortedImageBase64 =
                         GetStringField(obj, "undistorted_image_base64")
                         ?? GetStringField(data, "undistorted_image_base64")
@@ -285,7 +283,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                 }
                 else
                 {
-                    // Unknown resource type, try common field names
+                    // 未知资源类型时尝试通用字段名
                     result.ImageBase64 = GetStringField(data, "image_base64")
                         ?? GetStringField(obj, "image_base64")
                         ?? GetStringField(data, "face_capture")
@@ -295,7 +293,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                         ?? "";
                 }
 
-                // MIME type (same as Delphi)
+                // MIME 类型处理与 Delphi 保持一致
                 result.ImageMimeType = GetStringField(data, "image_mime_type")
                     ?? GetStringField(obj, "image_mime_type")
                     ?? GetStringField(data, "mime_type")
@@ -307,12 +305,12 @@ namespace HZCYKJTHardWare.Proxy.Parsing
                         ? "image/jpeg" : "image/bmp";
                 }
 
-                // Valid only if image data found (same as Delphi)
+                // 仅在找到图像数据时判定有效，与 Delphi 判定保持一致
                 result.Valid = !string.IsNullOrEmpty(result.ImageBase64);
             }
             catch
             {
-                // Preserve the previous malformed-JSON fallback for save_path.
+                // 保留格式异常 JSON 中 save_path 的原有回退提取逻辑
                 result.SavePath = JsonHelper.ExtractString(bodyUtf8, "save_path");
                 result.Valid = false;
             }
@@ -406,7 +404,7 @@ namespace HZCYKJTHardWare.Proxy.Parsing
             try
             {
                 var obj = JObject.Parse(bodyUtf8);
-                // Protocol: evidence_images is inside data section (same as Delphi/C++ behavior)
+                // 协议规定 evidence_images 位于 data 数据段内，与 Delphi/C++ 行为一致
                 var data = obj["data"] as JObject;
                 var arr = data?["evidence_images"] as JArray ?? obj["evidence_images"] as JArray;
                 if (arr != null)

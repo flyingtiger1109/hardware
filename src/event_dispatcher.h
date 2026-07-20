@@ -1,7 +1,7 @@
 #pragma once
 #include "pch.h"
 #include "include/HZCYKJTHardWare_types.h"
-#include "callback_server.h"   // for CallbackData definition
+#include "callback_server.h"   // CallbackData 定义
 
 namespace HZCYKJTHardWare {
 
@@ -104,4 +104,4 @@ private:
     std::queue<EventStrings> m_stringsQueue;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束

@@ -32,8 +32,8 @@ public:
              int& responseStatusCode);
 
 private:
-    // WinHTTP session handle
+    // WinHTTP 会话句柄
     HINTERNET m_hSession = nullptr;
 };
 
-} // namespace HZCYKJTHardWare
+} // HZCYKJTHardWare 命名空间结束
