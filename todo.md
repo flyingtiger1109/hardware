@@ -1346,3 +1346,26 @@
 - [ ] 真实硬件验证完成前，不将方案 A 标记为现场通过。
 
 兼容性：未修改 DLL ABI、HTTP/终端协议、队列行为、配置或第三方调用；继续覆盖同名文件。详细实现、风险和回退见 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+## MJPEG 16 小时真实硬件长稳收尾复核（2026-07-20）
+
+- [x] 仅复核 `scripts/stress_results/handle_release_mjpeg_scheme_b_16hour_real_restart_20260718_1750`；旧的人工中断轮未混入结论。
+- [x] 确认本轮未完成 960 分钟。有效片段为 17:51:32～18:04:13（12.70 分钟），152 次切换、两终端各 76 次、0 失败；P50/P95/P99/Max 为 3/19/71/72 ms（nearest-rank）。
+- [x] 确认目录实际有 `calls`、`cycles`、`metrics` CSV，但没有 summary/callbacks CSV。104.40 分钟的 cycles 尾段含 546 次失败，发生在 Proxy 退出后测试宿主仍继续运行期间，不能作为有效长稳数据。
+- [x] 预热后可用 Proxy 指标仅 8 分钟：HandleCount 668～687，斜率 `+13.5226/h`、`R²=0.0128`，线程 30～35，PrivateMemory 53.04～54.98 MB；不足以判定长时趋势，后半 8 小时和最后 4 小时没有数据。
+- [x] 测试窗口 Proxy 日志无 warning/error、MJPEG pause/stop timeout 或流恢复失败；VLC 只有测试前预热记录，测试窗口 VLC/RTSP 均无实际预览证据。
+- [x] 本次检查时 PID 47668 已不存在，未关闭任何进程。
+- [ ] 修复测试宿主的失败/Proxy 退出联动停止、结果封存与 summary 生成，防止无效尾段继续追加。
+- [ ] 在独占、不中断条件下重新完成完整 960 分钟，产出 summary、calls、cycles、metrics 后再评价句柄趋势和是否需要修改生产代码。
+
+## Proxy 日志可靠性方案 B（2026-07-22）
+
+- [x] 将 `Logger.Flush()` 改为后台写线程确认的刷新屏障，消除“队列已空但文件尚未刷新”的竞态。
+- [x] 主日志显式使用 `FileShare.ReadWrite`，支持 Proxy 运行期间读取日志和文件长度。
+- [x] 增加写失败、最后刷新时距、当前文件长度、停止状态指标，以及限频应急日志。
+- [x] Proxy 正常关闭时停止接收、排空队列，并有界等待 Logger 写线程退出。
+- [x] x64/x86 Release 编译；Logger 定向测试各 3/3；非 Integration 回归各 101/101。
+- [ ] 在新构建上人工验证运行中 tail、文件长度持续增长及正常关闭后的末尾日志完整性。
+- [ ] Integration 10 项需在支持 `HttpListener` 的 Windows 测试宿主重跑；当前环境未验证。
+- [ ] 需要长稳复核时再执行真实硬件测试；修复前的 36 小时日志不能作为方案 B 现场通过证据。
+
+风险：5 秒退出上限遇到极端磁盘阻塞时仍可能丢失尾部少量日志；应急日志也依赖程序目录可写。兼容性：未修改 DLL ABI、HTTP/终端协议、配置、回调或第三方调用方式。

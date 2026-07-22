@@ -98,6 +98,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                        $"callback_routes={_processRegistry?.BindingCount ?? 0}, " +
                        $"current_callback_routes={_processRegistry?.CurrentCount ?? 0}, " +
                        $"log_pending={Logger.PendingCount}, log_dropped_total={Logger.TotalDroppedCount}, " +
+                       $"log_write_failures={Logger.WriteFailureCount}, " +
+                       $"log_last_flush_age_ms={Logger.LastFlushAgeMs}, " +
+                       $"log_current_bytes={Logger.CurrentFileLength}, " +
+                       $"log_stopping={(Logger.IsStopping ? 1 : 0)}, " +
                        $"disk_free_mb={diskFreeMb}";
             }
         }

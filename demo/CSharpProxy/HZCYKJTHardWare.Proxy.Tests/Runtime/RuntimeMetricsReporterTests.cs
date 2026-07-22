@@ -19,6 +19,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Runtime
                 StringAssert.Contains(snapshot, "handles=");
                 StringAssert.Contains(snapshot, "gdi_handles=");
                 StringAssert.Contains(snapshot, "gc2=");
+                StringAssert.Contains(snapshot, "log_write_failures=");
+                StringAssert.Contains(snapshot, "log_last_flush_age_ms=");
+                StringAssert.Contains(snapshot, "log_current_bytes=");
+                StringAssert.Contains(snapshot, "log_stopping=");
                 StringAssert.Contains(snapshot, "disk_free_mb=");
             }
         }

@@ -3105,3 +3105,76 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 ## 回退方式
 
 - 仅撤销 `FileSaver.cs` 中的路径分片锁、有限重试及对应两个测试；无需修改抓拍队列、DLL、配置或第三方程序。
+## MJPEG 16 小时真实硬件长稳收尾复核（2026-07-20）
+
+### 结论
+
+- 仅使用 `scripts/stress_results/handle_release_mjpeg_scheme_b_16hour_real_restart_20260718_1750`；人工中断旧轮 `handle_release_mjpeg_scheme_b_16hour_real_20260718` 未纳入任何统计。
+- 本轮**未完成**目标的 960 分钟，不能标记为 16 小时长稳通过，也不能据此确认长时句柄趋势。
+- 正式目录实际包含 `calls`、`cycles`、`metrics` 三份 CSV；没有 `summary` 或 callbacks CSV。此前“无 calls CSV”的记录已由本次复核更正。
+
+### 有效片段与无效尾段
+
+- 可确认的有效片段为 17:51:32.042 至 18:04:13.730：共 152 次交替切换（12.70 分钟），终端 1、终端 2 各 76 次，均成功、无失败。
+- 该片段的 `SwitchDurationMs` 按 nearest-rank 统计为 P50/P95/P99/Max = **3/19/71/72 ms**。
+- `cycles` 原始文件虽累计 1,250 行、覆盖 104.40 分钟（704 成功、546 失败），但左终端从 18:04:43 起开始以返回码 0、约 2.0 秒失败；右终端随后仍显示成功。`calls` 仅记录 995 次切换调用，其中 419 次失败，且 19:14 后停止追加，`cycles` 却持续到 19:35。
+- 上述不一致与测试 Proxy 退出后测试宿主继续运行相符；关闭后的尾段不是有效的硬件长稳样本，不得把右终端的后续“成功”混入结论。
+
+### Proxy 资源与日志核查
+
+- Proxy 指标在预热 5 分钟后仅覆盖 17:56:31.867 至 18:04:32.099（8.00 分钟）：HandleCount 668～687，线性斜率 `+13.5226 handles/hour`，`R²=0.0128`；线程数 30～35（首/末 33/31）；PrivateMemory 53.04～54.98 MB（首/末 53.04/54.94 MB，变化 +1.90 MB）。这是短时有界波动，样本量不足以判断持续增长。
+- 后半段 8 小时、最后 4 小时均没有可用 Proxy 指标，不能计算其斜率或 `R²`。
+- x64 Proxy 日志在测试窗口（17:51:31～18:04:39）共 2,357 行，`[警告]`/`[错误]` 均为 0；MJPEG pause/stop timeout、流恢复失败均为 0。日志中的 3 个“超时=0”是队列指标，不是超时事件。
+- 日志末尾记录到恢复批次 157 已开始而未完成，符合测试 Proxy 结束时的截断；不能将它判作流恢复失败。
+- 测试窗口内无 VLC 或 RTSP 记录；现有 VLC 仅为测试前的预热日志，RTSP 为 0。因此本轮没有“VLC 实际出画”或 RTSP 预览的验证证据。
+
+### 进程处置、风险与下一步
+
+- 本次收尾检查时 PID 47668 已不存在，未执行关闭操作，也未影响其他 Proxy 进程。
+- 不建议仅依据本轮继续修改生产 MJPEG 句柄释放代码；当前证据不足以显示持续句柄增长。
+- 应先修正测试宿主：监测到目标 Proxy 退出或关键切换失败后立即停止、封存结果并生成 summary；随后在独占、不中断条件下重新完成 960 分钟，才可重新评估生产代码和句柄趋势。
+
+### 验证状态
+
+- [x] 指定正式数据目录、CSV 时间线、x64 Proxy 日志及 PID 47668 状态已核查。
+- [ ] 16 小时完整真实硬件长稳：未完成，待重新执行。
+- [ ] 后半段 8 小时与最后 4 小时资源趋势：无数据，待完整测试。
+- [ ] VLC 实际预览与 RTSP 预览：本轮无覆盖证据，待单独现场验证。
+
+# Proxy 日志实时可见与可靠收尾方案 B（2026-07-22）
+
+## 原因与修复结论
+
+- 7 月 22 日日志在 Proxy 运行时显示 0 字节，关闭后形成 6,861,856 字节、57,083 行，覆盖 00:00:02～08:27:45；这批日志最终已落盘，不能判定为日志内容丢失。
+- 定向测试复现并确认旧 `Logger.Flush()` 存在竞态：后台线程从队列取走消息后，队列数量已经为 0，但消息可能尚未进入 `StreamWriter` 或尚未执行文件刷新；调用方会过早认为刷新完成。
+- 方案 B 已将 `Flush()` 改为队列内刷新屏障，只有同一后台写线程处理完此前消息并实际执行 `StreamWriter.Flush()` 后才返回。
+- 主日志文件改为显式 `FileShare.ReadWrite`，允许运行中的只读日志查看器稳定读取，不开放删除共享。
+- 正常退出改为停止接收新消息、`CompleteAdding()`、排空已有队列并在 5 秒内等待写线程退出；不再只等待队列计数后直接结束。
+- 增加 `log_write_failures`、`log_last_flush_age_ms`、`log_current_bytes`、`log_stopping` 长稳指标；主日志写入失败时，按 30 秒限频尝试写入程序目录下的 `HZCYKJTHardWareExe_Logs_Emergency_yyyyMMdd.log`。
+
+## 涉及文件与兼容性
+
+- `Infrastructure/Logger.cs`：共享读、刷新屏障、写入健康状态、应急日志和有界退出。
+- `Server/Runtime/RuntimeMetricsReporter.cs`：输出 Logger 健康指标。
+- `MainForm.cs`：关闭时调用 `Logger.Shutdown(5000)`。
+- `HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`：覆盖写入期间共享读取、队列排空与真实刷新。
+- `HZCYKJTHardWare.Proxy.Tests/Runtime/RuntimeMetricsReporterTests.cs`：覆盖新增指标字段。
+- DLL ABI、HTTP/终端协议、回调、错误码、配置文件和主日志正文格式均未改变；第三方调用方式不变。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64`：编译通过，0 warning、0 error。
+- [x] Proxy + Tests `Release|x86`：编译通过，0 error；首次还原仅出现 NuGet 漏洞源不可访问的 `NU1900`，禁用审计后还原正常。
+- [x] Logger 与指标定向测试：x64 3/3、x86 3/3 通过。
+- [x] 非 Integration 回归：x64 101/101、x86 101/101 通过。
+- [x] x86 最终首轮曾有既有 `ActiveTasksTrackerTests.TryRun_RejectsWorkBeyondCapacity` 时序断言瞬时失败；同一二进制单项重跑 1/1、完整重跑 101/101 通过，未修改该测试或业务代码。
+- [ ] Integration 10 项：当前测试宿主在 `HttpListener` 构造阶段抛出 `PlatformNotSupportedException`，未执行到业务断言，本环境未验证。
+- [ ] 新构建现场部署、运行中持续 tail/文件长度核对、正常退出末尾完整性：待验证。
+- [ ] 新构建 36 小时真实硬件长稳：未执行，原 36 小时日志来自修复前版本，不能作为本方案通过证据。
+
+## 风险与回退
+
+- 退出等待上限为 5 秒；若磁盘或文件系统写入阻塞超过上限，进程仍可退出，但最后少量日志可能无法完成落盘，应结合 `log_write_failures` 和应急日志判断。
+- 应急日志是 best-effort；如果程序目录本身不可写或磁盘故障，主日志与应急日志都可能失败，此时只能依赖 Debug/Trace 或外部进程监控。
+- `Shutdown()` 开始后产生的迟到日志会被计入 dropped 而不再写入；因此必须保持当前顺序，先停止服务和业务生产者，再关闭 Logger。
+- 回退时仅撤销上述 5 个代码/测试文件中的本节差异并恢复 `MainForm` 的旧 `Logger.Flush(1000)`；不涉及 DLL、协议或部署结构回退。

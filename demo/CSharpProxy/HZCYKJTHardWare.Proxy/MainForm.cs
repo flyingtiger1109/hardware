@@ -519,7 +519,7 @@ namespace HZCYKJTHardWare.Proxy
             _uiLogTimer?.Stop();
             FlushPendingUiLogs();
             StopServer();
-            Logger.Flush(1000);
+            Logger.Shutdown(5000);
         }
 
         private void MainForm_Resize(object sender, EventArgs e)

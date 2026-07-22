@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -27,6 +28,13 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static int _pendingLines;
         private static DateTime _lastFlushUtc = DateTime.UtcNow;
         private static string _lastCleanupDate = "";
+        private static long _lastSuccessfulWriteUtcTicks;
+        private static long _lastSuccessfulFlushUtcTicks;
+        private static long _currentFileLength;
+        private static long _writeFailureCount;
+        private static string _lastWriteError = "";
+        private static long _lastEmergencyReportUtcTicks;
+        private static int _shutdownState;
 
         // 日志级别过滤：0=Debug，1=Info，2=Warn，3=Error
         private static int _minLevel = 1; // default Info
@@ -45,6 +53,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static string LogDirectory => _logDir;
         internal static int PendingCount => _queue.Count;
         internal static long TotalDroppedCount => Interlocked.Read(ref _totalDroppedCount);
+        internal static long WriteFailureCount => Interlocked.Read(ref _writeFailureCount);
+        internal static long CurrentFileLength => Interlocked.Read(ref _currentFileLength);
+        internal static long LastFlushAgeMs => GetLastFlushAgeMs();
+        internal static bool IsStopping => Volatile.Read(ref _shutdownState) != 0;
+        internal static string LastWriteError => Volatile.Read(ref _lastWriteError) ?? "";
 
         static Logger()
         {
@@ -62,7 +75,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 IsBackground = true
             };
             _workerThread.Start();
-            AppDomain.CurrentDomain.ProcessExit += (s, e) => Flush(1000);
+            AppDomain.CurrentDomain.ProcessExit += (s, e) => Shutdown(5000);
         }
 
         public static void Configure(int retentionDays, int maxTotalSizeMb,
@@ -96,6 +109,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static void Write(string level, string message, int levelNum)
         {
             if (levelNum < _minLevel) return;
+            if (Volatile.Read(ref _shutdownState) != 0)
+            {
+                RecordDroppedEntry();
+                return;
+            }
             try
             {
                 var now = DateTime.Now;
@@ -105,9 +123,12 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 if (!_queue.TryAdd(new LogEntry
                     { Date = date, Line = line, LevelNum = levelNum }, 0))
                 {
-                    Interlocked.Increment(ref _droppedCount);
-                    Interlocked.Increment(ref _totalDroppedCount);
+                    RecordDroppedEntry();
                 }
+            }
+            catch (InvalidOperationException)
+            {
+                RecordDroppedEntry();
             }
             catch
             {
@@ -117,36 +138,107 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         public static void Flush(int timeoutMs = 2000)
         {
-            var deadline = Environment.TickCount + timeoutMs;
-            while (_queue.Count > 0 && Environment.TickCount < deadline)
-                Thread.Sleep(20);
+            timeoutMs = Math.Max(0, timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var signal = new ManualResetEventSlim(false);
+            try
+            {
+                if (Volatile.Read(ref _shutdownState) != 0)
+                {
+                    if (Thread.CurrentThread != _workerThread)
+                        _workerThread.Join(timeoutMs);
+                    return;
+                }
+
+                if (!_queue.TryAdd(new LogEntry { FlushSignal = signal }, timeoutMs))
+                    return;
+
+                var remaining = Math.Max(0, timeoutMs - (int)stopwatch.ElapsedMilliseconds);
+                signal.Wait(remaining);
+            }
+            catch (InvalidOperationException)
+            {
+                // Shutdown may complete the collection between the state check and TryAdd.
+            }
+            catch (Exception ex)
+            {
+                RecordWriterFailure(ex);
+            }
+        }
+
+        public static bool Shutdown(int timeoutMs = 5000)
+        {
+            timeoutMs = Math.Max(0, timeoutMs);
+            if (Interlocked.CompareExchange(ref _shutdownState, 1, 0) == 0)
+            {
+                try { _queue.CompleteAdding(); }
+                catch (InvalidOperationException) { }
+            }
+
+            if (Thread.CurrentThread == _workerThread)
+                return false;
+
+            var stopped = false;
+            try { stopped = _workerThread.Join(timeoutMs); }
+            catch (ThreadStateException) { stopped = true; }
+
+            if (!stopped)
+            {
+                Trace.WriteLine("Logger shutdown timed out before the queue was fully drained.");
+            }
+
+            return stopped && _queue.Count == 0;
+        }
+
+        private static void WriterLoop()
+        {
+            while (!_queue.IsCompleted)
+            {
+                try
+                {
+                    LogEntry entry;
+                    if (_queue.TryTake(out entry, _flushIntervalMs))
+                    {
+                        if (entry.FlushSignal != null)
+                        {
+                            try { FlushWriter(); }
+                            finally { entry.FlushSignal.Set(); }
+                        }
+                        else
+                        {
+                            WriteToFile(entry);
+                        }
+                    }
+                    else
+                        FlushWriter();
+                }
+                catch (ThreadAbortException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    RecordWriterFailure(ex);
+                    // 日志组件不得向外抛出异常
+                }
+            }
 
             try
             {
                 lock (_writerLock)
                 {
                     FlushWriterLocked();
+                    _writer?.Dispose();
+                    _writer = null;
                 }
             }
-            catch { }
-        }
-
-        private static void WriterLoop()
-        {
-            while (true)
+            catch (Exception ex)
             {
-                try
-                {
-                    LogEntry entry;
-                    if (_queue.TryTake(out entry, _flushIntervalMs))
-                        WriteToFile(entry);
-                    else
-                        FlushWriter();
-                }
-                catch
-                {
-                    // 日志组件不得向外抛出异常
-                }
+                RecordWriterFailure(ex);
+            }
+            finally
+            {
+                Volatile.Write(ref _shutdownState, 2);
             }
         }
 
@@ -161,7 +253,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 if (_writer == null || !string.Equals(_currentLogPath, filePath, StringComparison.OrdinalIgnoreCase))
                 {
                     _writer?.Dispose();
-                    _writer = new StreamWriter(filePath, true, Encoding.UTF8) { AutoFlush = false };
+                    _writer = CreateSharedWriter(filePath);
                     _currentLogPath = filePath;
                     _pendingLines = 0;
                     _lastFlushUtc = DateTime.UtcNow;
@@ -177,6 +269,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 }
 
                 _writer.WriteLine(entry.Line);
+                Interlocked.Exchange(ref _lastSuccessfulWriteUtcTicks, DateTime.UtcNow.Ticks);
                 _pendingLines++;
                 if (entry.LevelNum >= 3 || _pendingLines >= _flushBatchSize ||
                     (DateTime.UtcNow - _lastFlushUtc).TotalMilliseconds >= _flushIntervalMs)
@@ -194,9 +287,68 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static void FlushWriterLocked()
         {
-            _writer?.Flush();
+            if (_writer != null)
+            {
+                _writer.Flush();
+                Interlocked.Exchange(ref _currentFileLength, _writer.BaseStream.Length);
+                Interlocked.Exchange(ref _lastSuccessfulFlushUtcTicks, DateTime.UtcNow.Ticks);
+            }
             _pendingLines = 0;
             _lastFlushUtc = DateTime.UtcNow;
+        }
+
+        internal static StreamWriter CreateSharedWriter(string filePath)
+        {
+            var stream = new FileStream(filePath, FileMode.Append, FileAccess.Write,
+                FileShare.ReadWrite, 4096, FileOptions.SequentialScan);
+            return new StreamWriter(stream, Encoding.UTF8) { AutoFlush = false };
+        }
+
+        private static void RecordDroppedEntry()
+        {
+            Interlocked.Increment(ref _droppedCount);
+            Interlocked.Increment(ref _totalDroppedCount);
+        }
+
+        private static long GetLastFlushAgeMs()
+        {
+            var ticks = Interlocked.Read(ref _lastSuccessfulFlushUtcTicks);
+            if (ticks <= 0) return -1;
+            return Math.Max(0L, (DateTime.UtcNow.Ticks - ticks) / TimeSpan.TicksPerMillisecond);
+        }
+
+        private static void RecordWriterFailure(Exception ex)
+        {
+            Interlocked.Increment(ref _writeFailureCount);
+            var error = ex == null ? "unknown" : ex.ToString();
+            Volatile.Write(ref _lastWriteError, error);
+            Trace.WriteLine("Logger writer failure: " + error);
+
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var previous = Interlocked.Read(ref _lastEmergencyReportUtcTicks);
+            if (previous > 0 && nowTicks - previous < TimeSpan.FromSeconds(30).Ticks)
+                return;
+            if (Interlocked.CompareExchange(ref _lastEmergencyReportUtcTicks, nowTicks, previous) != previous)
+                return;
+
+            try
+            {
+                var emergencyPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "HZCYKJTHardWareExe_Logs_Emergency_" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+                using (var stream = new FileStream(emergencyPath, FileMode.Append, FileAccess.Write,
+                    FileShare.ReadWrite, 4096, FileOptions.WriteThrough))
+                using (var writer = new StreamWriter(stream, Encoding.UTF8))
+                {
+                    writer.WriteLine("[{0:yyyy-MM-dd HH:mm:ss.fff}] [ERROR] primary logger write failed: {1}",
+                        DateTime.Now, error.Replace(Environment.NewLine, " | "));
+                    writer.Flush();
+                    stream.Flush(true);
+                }
+            }
+            catch (Exception fallbackEx)
+            {
+                Trace.WriteLine("Logger emergency write failure: " + fallbackEx);
+            }
         }
 
         private static void CleanupOldLogsLocked()
@@ -265,7 +417,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 }
                 System.Diagnostics.Debug.WriteLine(warning);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                RecordWriterFailure(ex);
+            }
         }
 
         private struct LogEntry
@@ -273,6 +428,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             public string Date;
             public string Line;
             public int LevelNum;
+            public ManualResetEventSlim FlushSignal;
         }
     }
 }
