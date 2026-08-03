@@ -40,6 +40,11 @@ namespace HZCYKJTHardWare.Proxy
         private readonly HashSet<string> _activeLocalPreviews =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private int _previewControlBusy;
+        private SplitContainer _mainContentSplit;
+        private Panel _previewGridHost;
+        private Panel _previewToolbar;
+        private Button _btnToggleLog;
+        private int _lastExpandedLogHeight;
 
         private System.Windows.Forms.Timer _monitorTimer;
         private System.Threading.Timer _midnightClearTimer;
@@ -91,6 +96,8 @@ namespace HZCYKJTHardWare.Proxy
         public MainForm()
         {
             InitializeComponent();
+            ApplyVersionDisplay();
+            ApplyCompactVerticalLayout();
             InitializeHardwareHealthPanel();
             memoLog.Font = _logFont;
             DisableLogUndoBuffer();
@@ -172,11 +179,64 @@ namespace HZCYKJTHardWare.Proxy
 
             InitCardLayouts();
             ApplyUIPolish();
+            InitializeResponsiveMainLayout();
             InitializeTrayIcon();
             InitializeUiLogTimer();
             InitializeMonitorTimer();
             InitializeMidnightClearTimer();
             UpdateMonitorInfo();
+        }
+
+        private void ApplyVersionDisplay()
+        {
+            Text = "HZCYJKTHardWare - 后端服务 " + ProductVersionInfo.DisplayVersion;
+            lblPageTitle.Text = "HZCYJKTHardWare\r\n后台服务 " +
+                ProductVersionInfo.DisplayVersion;
+        }
+
+        private int ScaleDesignPixels(int designPixels, int minimum)
+        {
+            return HardwareHealthDpiLayout.ScaleFromDesignDpi(
+                this, designPixels, minimum);
+        }
+
+        private void ApplyCompactVerticalLayout()
+        {
+            panelHeader.Height = ScaleDesignPixels(180, 120);
+            panelHeader.Padding = new Padding(
+                ScaleDesignPixels(48, 24),
+                ScaleDesignPixels(12, 8),
+                ScaleDesignPixels(48, 24),
+                ScaleDesignPixels(12, 8));
+
+            var headerCaptionHeight = ScaleDesignPixels(44, 28);
+            lblDllListenCaption.Height = headerCaptionHeight;
+            lblCallbackListenCaption.Height = headerCaptionHeight;
+            lblTerminalCaption.Height = headerCaptionHeight;
+            lblMonitorCaption.Height = headerCaptionHeight;
+
+            panelTop.Height = ScaleDesignPixels(288, 180);
+            panelTop.Padding = new Padding(
+                ScaleDesignPixels(32, 20),
+                ScaleDesignPixels(12, 8),
+                ScaleDesignPixels(32, 20),
+                ScaleDesignPixels(12, 8));
+
+            var cardTitleHeight = ScaleDesignPixels(36, 26);
+            lblCardService.Height = cardTitleHeight;
+            lblCardOperation.Height = cardTitleHeight;
+            lblCardPreviewControl.Height = cardTitleHeight;
+
+            var cardPadding = ScaleDesignPixels(6, 4);
+            cardService.Padding = new Padding(cardPadding);
+            cardOperation.Padding = new Padding(cardPadding);
+            cardPreviewControl.Padding = new Padding(cardPadding);
+
+            lblLogTitle.Height = ScaleDesignPixels(56, 36);
+            panelLog.Padding = new Padding(
+                ScaleDesignPixels(32, 20), 0,
+                ScaleDesignPixels(32, 20),
+                ScaleDesignPixels(24, 16));
         }
 
         private void InitializeHardwareHealthPanel()
@@ -250,12 +310,253 @@ namespace HZCYKJTHardWare.Proxy
             // 3. 视频容器
             panelPreview.BackColor = Color.FromArgb(249, 250, 251);
             panelPreview.Padding = new Padding(12, 8, 12, 12);
-            panelCamera.Margin = new Padding(0, 0, 0, 6);
-            panelFingerprint.Margin = new Padding(0, 0, 0, 6);
-            panelIris.Margin = new Padding(0, 0, 0, 6);
-            panelPlateCJ.Margin = new Padding(0, 6, 0, 0);
-            panelPlateRJ2.Margin = new Padding(0, 6, 0, 0);
-            panelPlateRJ3.Margin = new Padding(0, 6, 0, 0);
+            panelCamera.Margin = Padding.Empty;
+            panelFingerprint.Margin = Padding.Empty;
+            panelIris.Margin = Padding.Empty;
+            panelPlateCJ.Margin = Padding.Empty;
+            panelPlateRJ2.Margin = Padding.Empty;
+            panelPlateRJ3.Margin = Padding.Empty;
+        }
+
+        private void InitializeResponsiveMainLayout()
+        {
+            SuspendLayout();
+            try
+            {
+                Controls.Remove(panelPreview);
+                Controls.Remove(panelLog);
+
+                _mainContentSplit = new SplitContainer
+                {
+                    Dock = DockStyle.Fill,
+                    Orientation = Orientation.Horizontal,
+                    FixedPanel = FixedPanel.None,
+                    IsSplitterFixed = false,
+                    SplitterWidth = ScaleDesignPixels(8, 5),
+                    Panel1MinSize = ScaleDesignPixels(260, 160),
+                    Panel2MinSize = ScaleDesignPixels(120, 80),
+                    BackColor = Color.FromArgb(226, 232, 240),
+                    TabStop = false
+                };
+
+                panelPreview.Dock = DockStyle.Fill;
+                panelLog.Dock = DockStyle.Fill;
+                _mainContentSplit.Panel1.Controls.Add(panelPreview);
+                _mainContentSplit.Panel2.Controls.Add(panelLog);
+                _mainContentSplit.SplitterMoved += MainContentSplit_SplitterMoved;
+
+                Controls.Add(_mainContentSplit);
+                Controls.SetChildIndex(_mainContentSplit, 0);
+
+                InitializePreviewToolbar();
+                ConfigureResponsivePreviewGrid();
+                Shown += MainForm_Shown;
+            }
+            finally
+            {
+                ResumeLayout(true);
+            }
+        }
+
+        private void InitializePreviewToolbar()
+        {
+            panelPreview.Controls.Remove(previewLayout);
+            panelPreview.Controls.Remove(splitter1);
+            panelPreview.Controls.Remove(splitter2);
+
+            _previewGridHost = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = panelPreview.BackColor,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+
+            _previewToolbar = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = ScaleDesignPixels(44, 32),
+                BackColor = panelPreview.BackColor,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+
+            var previewTitle = new Label
+            {
+                Dock = DockStyle.Fill,
+                Font = new Font("Microsoft YaHei", 9F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(52, 64, 84),
+                Text = "视频预览（16:9）",
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = Padding.Empty
+            };
+
+            _btnToggleLog = new Button
+            {
+                Dock = DockStyle.Right,
+                Width = ScaleDesignPixels(132, 92),
+                Text = "折叠日志",
+                Font = new Font("Microsoft YaHei", 8.5F),
+                ForeColor = Color.FromArgb(13, 110, 253),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Margin = Padding.Empty,
+                UseVisualStyleBackColor = false
+            };
+            _btnToggleLog.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
+            _btnToggleLog.FlatAppearance.BorderSize = 1;
+            _btnToggleLog.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+            _btnToggleLog.Click += btnToggleLog_Click;
+
+            _previewToolbar.Controls.Add(previewTitle);
+            _previewToolbar.Controls.Add(_btnToggleLog);
+            _previewGridHost.Controls.Add(previewLayout);
+            panelPreview.Controls.Add(_previewGridHost);
+            panelPreview.Controls.Add(_previewToolbar);
+        }
+
+        private void ConfigureResponsivePreviewGrid()
+        {
+            var gap = ScaleDesignPixels(16, 10);
+
+            previewLayout.SuspendLayout();
+            try
+            {
+                previewLayout.Dock = DockStyle.None;
+                previewLayout.Margin = Padding.Empty;
+                previewLayout.Padding = Padding.Empty;
+                previewLayout.GrowStyle = TableLayoutPanelGrowStyle.FixedSize;
+
+                previewLayout.Controls.Clear();
+                previewLayout.ColumnStyles.Clear();
+                previewLayout.RowStyles.Clear();
+                previewLayout.ColumnCount = 5;
+                previewLayout.RowCount = 3;
+
+                previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+                previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, gap));
+                previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+                previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, gap));
+                previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334F));
+
+                previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+                previewLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, gap));
+                previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+
+                AddPreviewPanel(panelCamera, 0, 0);
+                AddPreviewPanel(panelFingerprint, 2, 0);
+                AddPreviewPanel(panelIris, 4, 0);
+                AddPreviewPanel(panelPlateCJ, 0, 2);
+                AddPreviewPanel(panelPlateRJ2, 2, 2);
+                AddPreviewPanel(panelPlateRJ3, 4, 2);
+            }
+            finally
+            {
+                previewLayout.ResumeLayout(true);
+            }
+
+            _previewGridHost.SizeChanged += (s, e) => LayoutResponsivePreviewGrid();
+            LayoutResponsivePreviewGrid();
+        }
+
+        private void AddPreviewPanel(Panel panel, int column, int row)
+        {
+            panel.Dock = DockStyle.Fill;
+            panel.Margin = Padding.Empty;
+            previewLayout.Controls.Add(panel, column, row);
+        }
+
+        private void LayoutResponsivePreviewGrid()
+        {
+            if (_previewGridHost == null || _previewGridHost.IsDisposed)
+                return;
+
+            var area = _previewGridHost.ClientRectangle;
+            var gap = ScaleDesignPixels(16, 10);
+            var usableWidth = Math.Max(0, area.Width - gap * 2);
+            var usableHeight = Math.Max(0, area.Height - gap);
+            var cellWidthByWindow = usableWidth / 3;
+            var cellHeightByWindow = usableHeight / 2;
+            var cellWidth = Math.Min(
+                cellWidthByWindow,
+                (int)Math.Floor(cellHeightByWindow * (16.0 / 9.0)));
+            var cellHeight = (int)Math.Floor(cellWidth * (9.0 / 16.0));
+
+            if (cellWidth <= 0 || cellHeight <= 0)
+            {
+                previewLayout.Bounds = Rectangle.Empty;
+                return;
+            }
+
+            var gridWidth = cellWidth * 3 + gap * 2;
+            var gridHeight = cellHeight * 2 + gap;
+            previewLayout.SetBounds(
+                Math.Max(0, (area.Width - gridWidth) / 2),
+                Math.Max(0, (area.Height - gridHeight) / 2),
+                gridWidth,
+                gridHeight);
+        }
+
+        private void MainForm_Shown(object sender, EventArgs e)
+        {
+            SetLogPanelHeight((int)Math.Round(_mainContentSplit.ClientSize.Height * 0.22));
+            LayoutResponsivePreviewGrid();
+        }
+
+        private void MainContentSplit_SplitterMoved(object sender, SplitterEventArgs e)
+        {
+            if (_mainContentSplit == null || _mainContentSplit.Panel2Collapsed)
+                return;
+
+            _lastExpandedLogHeight = _mainContentSplit.Panel2.Height;
+        }
+
+        private void btnToggleLog_Click(object sender, EventArgs e)
+        {
+            if (_mainContentSplit.Panel2Collapsed)
+            {
+                _mainContentSplit.Panel2Collapsed = false;
+                BeginInvoke(new Action(() =>
+                {
+                    SetLogPanelHeight(_lastExpandedLogHeight);
+                    UpdateLogToggleButton();
+                }));
+                return;
+            }
+
+            _lastExpandedLogHeight = _mainContentSplit.Panel2.Height;
+            _mainContentSplit.Panel2Collapsed = true;
+            UpdateLogToggleButton();
+        }
+
+        private void SetLogPanelHeight(int requestedHeight)
+        {
+            if (_mainContentSplit == null || _mainContentSplit.Panel2Collapsed)
+                return;
+
+            var totalHeight = _mainContentSplit.ClientSize.Height;
+            var maximumHeight = totalHeight - _mainContentSplit.Panel1MinSize -
+                _mainContentSplit.SplitterWidth;
+            if (maximumHeight < _mainContentSplit.Panel2MinSize)
+                return;
+
+            var defaultHeight = (int)Math.Round(totalHeight * 0.22);
+            var height = requestedHeight > 0 ? requestedHeight : defaultHeight;
+            height = Math.Max(_mainContentSplit.Panel2MinSize,
+                Math.Min(maximumHeight, height));
+
+            _mainContentSplit.SplitterDistance =
+                totalHeight - height - _mainContentSplit.SplitterWidth;
+            _lastExpandedLogHeight = height;
+            UpdateLogToggleButton();
+        }
+
+        private void UpdateLogToggleButton()
+        {
+            if (_btnToggleLog != null)
+                _btnToggleLog.Text = _mainContentSplit.Panel2Collapsed
+                    ? "展开日志"
+                    : "折叠日志";
         }
 
         private static void AddSeparator(Control parent)
@@ -472,7 +773,7 @@ namespace HZCYKJTHardWare.Proxy
         private void MainForm_Load(object sender, EventArgs e)
         {
             UpdateHeaderStatus();
-            Logger.Info("应用程序启动中...");
+            Logger.Info("应用程序启动中... 版本=" + ProductVersionInfo.DisplayVersion);
             Logger.Info("[运行环境] 进程架构=" +
                 (Environment.Is64BitProcess ? "x64" : "x86") +
                 ", 操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +

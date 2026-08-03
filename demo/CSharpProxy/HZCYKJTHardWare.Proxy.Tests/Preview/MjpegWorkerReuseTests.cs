@@ -17,6 +17,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
     public class MjpegWorkerReuseTests
     {
         [TestMethod]
+        public void CalculateRenderDelayMs_SubtractsFrameProcessingTime()
+        {
+            Assert.AreEqual(23, MjpegPreviewController.CalculateRenderDelayMs(33, 10));
+            Assert.AreEqual(33, MjpegPreviewController.CalculateRenderDelayMs(33, 0));
+            Assert.AreEqual(0, MjpegPreviewController.CalculateRenderDelayMs(33, 33));
+            Assert.AreEqual(0, MjpegPreviewController.CalculateRenderDelayMs(33, 60));
+            Assert.AreEqual(0, MjpegPreviewController.CalculateRenderDelayMs(0, 10));
+        }
+
+        [TestMethod]
         public async Task SwitchStream_ReusesRenderAndReaderThreads()
         {
             using (var firstServer = new MjpegTestServer(Color.Red))
@@ -28,9 +38,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                 var renderBefore = MjpegPreviewController.LiveRenderThreadCount;
                 var readerBefore = MjpegPreviewController.LiveReaderThreadCount;
 
-                var controller = await MjpegPreviewController.StartAsync(
+                var controller = await MjpegPreviewController.StartAsyncWithScaleMode(
                     "reuse-test", firstServer.Url, hostHwnd,
-                    2, 2, false, true, 3000).ConfigureAwait(false);
+                    2, 2, false, PreviewScaleMode.Stretch,
+                    true, 3000).ConfigureAwait(false);
 
                 Assert.IsNotNull(controller);
                 Assert.IsTrue(controller.IsRunning);

@@ -100,9 +100,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
                 if (!ok || string.IsNullOrEmpty(response))
                 {
-                    status = CreateFailedStatus("终端不可达或超时");
+                    status = CreateFailedStatus("终端连接失败或超时");
                     nextDelayMs = ResolveNextDelayAndUpdateRetry(status);
-                    _log("[健康检测] 状态异常: 终端不可达");
+                    _log("[健康检测] 状态异常: 终端连接失败");
                 }
                 else
                 {

@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy;
+using HZCYKJTHardWare.Proxy.Terminal;
 using HZCYKJTHardWare.Proxy.UI;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -14,6 +15,32 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
     [TestClass]
     public class MainFormLogRenderingTests
     {
+        [TestMethod]
+        public void ProductVersion_IsEmbeddedAndVisibleInMainWindow()
+        {
+            var assembly = typeof(MainForm).Assembly;
+            Assert.AreEqual(new Version(1, 2, 9, 0), assembly.GetName().Version);
+            Assert.AreEqual("1.2.9.0",
+                assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version);
+            Assert.AreEqual("1.2.9",
+                assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    .InformationalVersion);
+
+            RunInSta(() =>
+            {
+                using (var form = new MainForm())
+                {
+                    StopTimer(form, "_uiLogTimer");
+                    StopTimer(form, "_monitorTimer");
+
+                    var titleLabel = (Label)GetField(
+                        typeof(MainForm), "lblPageTitle").GetValue(form);
+                    StringAssert.Contains(form.Text, ProductVersionInfo.DisplayVersion);
+                    StringAssert.Contains(titleLabel.Text, ProductVersionInfo.DisplayVersion);
+                }
+            });
+        }
+
         [TestMethod]
         public void HardwareHealthPanel_IsEmbeddedWithoutOverlappingHeaderOrContent()
         {
@@ -37,6 +64,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                     var panelTop = (Panel)GetField(formType, "panelTop").GetValue(form);
                     var panelPreview = (Panel)GetField(formType, "panelPreview").GetValue(form);
                     var panelLog = (Panel)GetField(formType, "panelLog").GetValue(form);
+                    var mainContentSplit = (SplitContainer)GetField(
+                        formType, "_mainContentSplit").GetValue(form);
                     var titleRequiredHeight = titleLabel.GetPreferredSize(
                         new Size(titleLabel.Width, 0)).Height;
 
@@ -51,10 +80,15 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                         "顶部运行信息区不得与硬件健康卡片重叠");
                     Assert.AreEqual(panelHeader.Bottom, panelTop.Top,
                         "硬件健康卡片加入后，下方操作区必须随 Header 高度顺延");
-                    Assert.AreEqual(
-                        panelHeader.Height + panelTop.Height + panelPreview.Height,
-                        panelLog.Top,
-                        "新增健康区域后应保持原有固定内容总高度");
+                    Assert.AreSame(form, mainContentSplit.Parent);
+                    Assert.AreEqual(DockStyle.Fill, mainContentSplit.Dock);
+                    Assert.AreEqual(Orientation.Horizontal, mainContentSplit.Orientation);
+                    Assert.IsFalse(mainContentSplit.IsSplitterFixed,
+                        "预览区与日志区之间的分隔条必须允许用户拖拽");
+                    Assert.AreSame(mainContentSplit.Panel1, panelPreview.Parent);
+                    Assert.AreSame(mainContentSplit.Panel2, panelLog.Parent);
+                    Assert.AreEqual(DockStyle.Fill, panelPreview.Dock);
+                    Assert.AreEqual(DockStyle.Fill, panelLog.Dock);
                 }
             });
         }
@@ -134,10 +168,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     Assert.IsTrue(buttonBounds.Left - summaryBounds.Right >= 8,
                         "检测摘要与刷新按钮之间应保留可读横向间距");
-                    Assert.IsTrue(contentGridBounds.Top - buttonBounds.Bottom >= 20,
-                        "Header Row 下方距离设备卡片上边缘应至少保留 20px");
-                    Assert.IsTrue(contentGridBounds.Top - summaryBounds.Bottom >= 20,
-                        "检测摘要下方距离设备卡片上边缘应至少保留 20px");
+                    Assert.IsTrue(contentGridBounds.Top - buttonBounds.Bottom >= 8,
+                        "紧凑 Header Row 下方仍应保留至少 8px 间距");
+                    Assert.IsTrue(contentGridBounds.Top - summaryBounds.Bottom >= 8,
+                        "检测摘要下方仍应保留至少 8px 间距");
                     Assert.AreEqual(lastCardBounds.Right, buttonBounds.Right,
                         "刷新按钮右边界必须与最右侧人脸设备卡片右边框对齐");
                     Assert.AreEqual(lastCardBounds.Right, statusRowBounds.Right,
@@ -148,6 +182,29 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     panel.SetRefreshEnabled(true);
                     Assert.IsTrue(refreshButtons[0].Enabled);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void HardwareHealthPanel_UsesConnectionFailureCopyInSummary()
+        {
+            RunInSta(() =>
+            {
+                using (var panel = new HardwareHealthPanel())
+                {
+                    panel.CreateControl();
+                    panel.UpdateHealth(new HealthStatus
+                    {
+                        ErrorMessage = "终端连接失败或超时"
+                    });
+
+                    var summaryLabel = CollectLabels(panel)
+                        .Single(l => l.Text.StartsWith("检测失败 · "));
+                    Assert.AreEqual(
+                        "检测失败 · 终端连接失败或超时",
+                        summaryLabel.Text);
+                    Assert.IsFalse(summaryLabel.Text.Contains("终端不可达"));
                 }
             });
         }
@@ -168,10 +225,22 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                     {
                         var codeLabel = (Label)GetField(
                             typeof(DeviceHealthCard), "_codeLabel").GetValue(card);
+                        var nameLabel = (Label)GetField(
+                            typeof(DeviceHealthCard), "_nameLabel").GetValue(card);
+                        var messageLabel = (Label)GetField(
+                            typeof(DeviceHealthCard), "_messageLabel").GetValue(card);
                         var statusLabel = (Label)GetField(
                             typeof(DeviceHealthCard), "_statusLabel").GetValue(card);
 
                         Assert.IsFalse(codeLabel.Text.Contains(Environment.NewLine));
+                        Assert.AreEqual(ContentAlignment.MiddleLeft, nameLabel.TextAlign);
+                        Assert.AreEqual(ContentAlignment.MiddleLeft, messageLabel.TextAlign);
+                        Assert.IsTrue(
+                            nameLabel.Height >= nameLabel.Font.Height + 2,
+                            "Device name row must leave enough vertical space for the full glyph height.");
+                        Assert.IsTrue(
+                            messageLabel.Height >= messageLabel.Font.Height + 2,
+                            "Device message row must leave enough vertical space for the full glyph height.");
                         Assert.IsTrue(
                             codeLabel.Width >= codeLabel.GetPreferredSize(Size.Empty).Width,
                             "设备短码列必须足够显示单行文本，避免 OCR 被拆成 OC/R");
@@ -256,6 +325,54 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                         "预览控制应仅保留开始/停止两个操作按钮，避免按钮重叠");
                     Assert.IsFalse(previewControl.Controls.ContainsKey("btnStartCameraPreview"));
                     Assert.IsFalse(previewControl.Controls.ContainsKey("btnStopPlatePreviewRJ3"));
+                }
+            });
+        }
+
+        [TestMethod]
+        public void PreviewArea_UsesResponsiveSixteenByNineGrid()
+        {
+            RunInSta(() =>
+            {
+                using (var form = new MainForm())
+                {
+                    StopTimer(form, "_uiLogTimer");
+                    StopTimer(form, "_monitorTimer");
+                    form.CreateControl();
+
+                    var formType = typeof(MainForm);
+                    var gridHost = (Panel)GetField(
+                        formType, "_previewGridHost").GetValue(form);
+                    var previewLayout = (TableLayoutPanel)GetField(
+                        formType, "previewLayout").GetValue(form);
+                    var panelCamera = (Panel)GetField(
+                        formType, "panelCamera").GetValue(form);
+                    var panelPlateRJ3 = (Panel)GetField(
+                        formType, "panelPlateRJ3").GetValue(form);
+                    var toggleLog = (Button)GetField(
+                        formType, "_btnToggleLog").GetValue(form);
+
+                    gridHost.Dock = DockStyle.None;
+                    gridHost.Size = new Size(1800, 700);
+                    var layoutMethod = formType.GetMethod(
+                        "LayoutResponsivePreviewGrid",
+                        BindingFlags.Instance | BindingFlags.NonPublic);
+                    Assert.IsNotNull(layoutMethod);
+                    layoutMethod.Invoke(form, null);
+                    previewLayout.PerformLayout();
+
+                    Assert.AreSame(gridHost, previewLayout.Parent);
+                    Assert.AreEqual(5, previewLayout.ColumnCount);
+                    Assert.AreEqual(3, previewLayout.RowCount);
+                    Assert.IsTrue(panelCamera.Width > 0 && panelCamera.Height > 0);
+                    Assert.AreEqual(
+                        16.0 / 9.0,
+                        (double)panelCamera.Width / panelCamera.Height,
+                        0.02,
+                        "每个预览卡片必须保持 16:9");
+                    Assert.IsTrue(panelPlateRJ3.Left > panelCamera.Left);
+                    Assert.IsTrue(panelPlateRJ3.Top > panelCamera.Top);
+                    Assert.AreEqual("折叠日志", toggleLog.Text);
                 }
             });
         }

@@ -108,9 +108,9 @@ namespace HZCYKJTHardWare.Proxy.UI
 
     internal sealed class HardwareHealthPanel : Panel
     {
-        public const int DefaultHeight = 140;
-        private const int HeaderRowHeight = 48;
-        private const int HeaderGridGap = 20;
+        public const int DefaultHeight = 132;
+        private const int HeaderRowHeight = 44;
+        private const int HeaderGridGap = 8;
         private const int RightStatusColumnWidth = 760;
         private const int RefreshButtonWidth = 188;
         private const int RefreshButtonHeight = 40;
@@ -216,7 +216,7 @@ namespace HZCYKJTHardWare.Proxy.UI
                 ForeColor = Color.FromArgb(13, 110, 253),
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(0, 4, 0, 4),
+                Margin = new Padding(0, 2, 0, 2),
                 TextAlign = ContentAlignment.MiddleCenter,
                 UseVisualStyleBackColor = false
             };
@@ -265,8 +265,8 @@ namespace HZCYKJTHardWare.Proxy.UI
                     descriptor.Id, descriptor.Code, descriptor.Name, _toolTip)
                 {
                     Dock = DockStyle.Fill,
-                    Margin = new Padding(i == 0 ? 0 : 5, 2,
-                        i == DeviceDescriptors.Length - 1 ? 0 : 5, 4)
+                    Margin = new Padding(i == 0 ? 0 : 5, 1,
+                        i == DeviceDescriptors.Length - 1 ? 0 : 5, 2)
                 };
                 _cards.Add(descriptor.Id, card);
                 grid.Controls.Add(card, i, 0);
@@ -453,6 +453,7 @@ namespace HZCYKJTHardWare.Proxy.UI
 
         private readonly string _deviceId;
         private readonly Label _codeLabel;
+        private readonly Label _nameLabel;
         private readonly Label _messageLabel;
         private readonly Label _statusLabel;
         private readonly ToolTip _toolTip;
@@ -508,13 +509,13 @@ namespace HZCYKJTHardWare.Proxy.UI
                 Margin = new Padding(0, 0, codeRightMargin, 0),
                 BackColor = Color.Transparent
             };
-            var nameLabel = new Label
+            _nameLabel = new Label
             {
                 Dock = DockStyle.Fill,
                 Font = new Font("Microsoft YaHei", 8.5F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(31, 41, 55),
                 Text = deviceName,
-                TextAlign = ContentAlignment.BottomLeft,
+                TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true,
                 Margin = Padding.Empty,
                 BackColor = Color.Transparent
@@ -524,7 +525,7 @@ namespace HZCYKJTHardWare.Proxy.UI
                 Dock = DockStyle.Fill,
                 Font = new Font("Microsoft YaHei", 8F),
                 ForeColor = Color.FromArgb(100, 116, 139),
-                TextAlign = ContentAlignment.TopLeft,
+                TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true,
                 Margin = Padding.Empty,
                 BackColor = Color.Transparent
@@ -541,7 +542,7 @@ namespace HZCYKJTHardWare.Proxy.UI
 
             layout.Controls.Add(_codeLabel, 0, 0);
             layout.SetRowSpan(_codeLabel, 2);
-            layout.Controls.Add(nameLabel, 1, 0);
+            layout.Controls.Add(_nameLabel, 1, 0);
             layout.Controls.Add(_messageLabel, 1, 1);
             layout.Controls.Add(_statusLabel, 2, 0);
             layout.SetRowSpan(_statusLabel, 2);

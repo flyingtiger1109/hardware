@@ -205,6 +205,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private static PreviewScaleMode GetScaleMode(PreviewResourceType resType)
+        {
+            // 所有资源统一拉伸到宿主 HWND 客户区，恢复旧版“完整覆盖句柄”的行为。
+            return PreviewScaleMode.Stretch;
+        }
+
         private static string PreviewUrlCacheKey(PreviewResourceType resType, string terminalBaseUrl)
         {
             return $"{terminalBaseUrl}|{resType}";
@@ -410,9 +416,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             // 获取视频源尺寸
             var (srcW, srcH, swap) = GetSourceDimensions(resType);
+            var scaleMode = GetScaleMode(resType);
             var isHttpPreview = IsHttpPreviewUrl(rtspUrl);
             if (!isHttpPreview && string.IsNullOrWhiteSpace(explicitPreviewUrl))
-                await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
+                await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap, scaleMode)
+                    .ConfigureAwait(false);
 
             if (shouldContinue != null && !shouldContinue())
                 return false;
@@ -422,7 +430,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var playTick = totalSw.ElapsedMilliseconds;
             var description = $"{ResourceToName(resType)} {sessionType}";
             player = await StartPreviewPlayerAsync(key, description, rtspUrl, parentHwnd, srcW, srcH, swap,
-                isHttpPreview, directRenderTarget)
+                scaleMode, isHttpPreview, directRenderTarget)
                 .ConfigureAwait(false);
             var playElapsed = totalSw.ElapsedMilliseconds - playTick;
             var ok2 = player != null && player.IsRunning;
@@ -444,10 +452,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     rtspUrl = retryUrl;
                     isHttpPreview = IsHttpPreviewUrl(rtspUrl);
                     if (!isHttpPreview)
-                        await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap).ConfigureAwait(false);
+                        await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap, scaleMode)
+                            .ConfigureAwait(false);
                     playTick = totalSw.ElapsedMilliseconds;
                     player = await StartPreviewPlayerAsync(key, description, rtspUrl, parentHwnd, srcW, srcH, swap,
-                        isHttpPreview, directRenderTarget)
+                        scaleMode, isHttpPreview, directRenderTarget)
                         .ConfigureAwait(false);
                     playElapsed = totalSw.ElapsedMilliseconds - playTick;
                     ok2 = player != null && player.IsRunning;
@@ -494,7 +503,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         private async Task<IPreviewController> StartPreviewPlayerAsync(string key, string description, string previewUrl,
-            IntPtr parentHwnd, int srcW, int srcH, bool swap, bool isHttpPreview,
+            IntPtr parentHwnd, int srcW, int srcH, bool swap,
+            PreviewScaleMode scaleMode, bool isHttpPreview,
             bool directRenderTarget = false)
         {
             if (isHttpPreview)
@@ -512,8 +522,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
                 else
                 {
-                    mjpegPlayer = await MjpegPreviewController.StartAsync(description, previewUrl, parentHwnd,
-                        srcW, srcH, swap, visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
+                    mjpegPlayer = await MjpegPreviewController.StartAsyncWithScaleMode(
+                        description, previewUrl, parentHwnd,
+                        srcW, srcH, swap, scaleMode,
+                        visible: true, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
                     if (mjpegPlayer != null && mjpegPlayer.IsRunning)
                         _mjpegWorkers[key] = mjpegPlayer;
                 }
@@ -527,10 +539,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Logger.Debug($"HTTP MJPEG预览失败，回退到VLC: {description}");
             }
 
-            var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
+            var vlcPlayer = await VlcPreviewController.StartAsyncWithScaleMode(
+                description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
                 visible: true, timeoutMs: VlcPlayTimeoutMs,
-                directRenderTarget: directRenderTarget).ConfigureAwait(false);
+                directRenderTarget: directRenderTarget,
+                scaleMode: scaleMode).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
                 Logger.Debug($"预览播放器选择: vlc");
 
@@ -653,14 +667,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!string.IsNullOrEmpty(previewUrl))
                     {
                         var (srcW, srcH, swap) = GetSourceDimensions(current.ResourceType);
+                        var scaleMode = GetScaleMode(current.ResourceType);
                         var isHttpPreview = IsHttpPreviewUrl(previewUrl);
                         if (!isHttpPreview)
                             await WarmupPreviewStreamIfNeeded(current.ResourceType, previewUrl,
-                                current.HostHwnd, srcW, srcH, swap).ConfigureAwait(false);
+                                current.HostHwnd, srcW, srcH, swap, scaleMode).ConfigureAwait(false);
 
                         var description = $"{ResourceToName(current.ResourceType)} {current.SessionType}";
                         var replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
-                            current.HostHwnd, srcW, srcH, swap, isHttpPreview).ConfigureAwait(false);
+                            current.HostHwnd, srcW, srcH, swap, scaleMode, isHttpPreview).ConfigureAwait(false);
                         if (replacement != null && replacement.IsRunning)
                         {
                             // 替换操作创建新的生命周期代次。新实例立即失败时，不得因当前代次任务结束而抑制其恢复。
@@ -1126,7 +1141,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         private async Task WarmupPreviewStreamIfNeeded(PreviewResourceType resType, string rtspUrl,
-            IntPtr parentHwnd, int srcW, int srcH, bool swap)
+            IntPtr parentHwnd, int srcW, int srcH, bool swap, PreviewScaleMode scaleMode)
         {
             var key = resType.ToString();
             if (!_coldStartWarmups.TryAdd(key, 1))
@@ -1137,9 +1152,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var ok = false;
             try
             {
-                warmupPlayer = await VlcPreviewController.StartAsync($"{ResourceToName(resType)} 预热",
+                warmupPlayer = await VlcPreviewController.StartAsyncWithScaleMode(
+                    $"{ResourceToName(resType)} 预热",
                     rtspUrl, parentHwnd, _networkCachingMs, _liveCachingMs, _rtspTransport,
-                    srcW, srcH, swap, visible: false, timeoutMs: VlcPlayTimeoutMs).ConfigureAwait(false);
+                    srcW, srcH, swap, visible: false, timeoutMs: VlcPlayTimeoutMs,
+                    directRenderTarget: false,
+                    scaleMode: scaleMode).ConfigureAwait(false);
                 ok = warmupPlayer != null && warmupPlayer.IsRunning;
 
                 if (ok)

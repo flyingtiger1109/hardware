@@ -93,17 +93,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Terminal
         public void GetNextDelay_UsesBoundedBackoffAndFallsBackToSlowProbe()
         {
             Assert.AreEqual(5000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 0));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 0));
             Assert.AreEqual(10000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 1));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 1));
             Assert.AreEqual(20000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 2));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 2));
             Assert.AreEqual(40000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 3));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 3));
             Assert.AreEqual(60000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 4));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 4));
             Assert.AreEqual(5 * 60 * 1000, TerminalHealthChecker.GetNextDelayMs(
-                new HealthStatus { ErrorMessage = "终端不可达" }, 5));
+                new HealthStatus { ErrorMessage = "终端连接失败" }, 5));
             Assert.AreEqual(5000, TerminalHealthChecker.GetNextDelayMs(
                 new HealthStatus { IsHealthy = false }, 0));
             Assert.AreEqual(5 * 60 * 1000, TerminalHealthChecker.GetNextDelayMs(

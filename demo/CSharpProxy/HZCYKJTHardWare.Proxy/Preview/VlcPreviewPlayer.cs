@@ -26,10 +26,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private static readonly object RiskyPluginCheckLock = new object();
         private static readonly HashSet<string> RiskyPluginCheckedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Cover 布局使用的源图像尺寸
+        // 预览布局使用的源图像尺寸
         private int _sourceWidth;
         private int _sourceHeight;
         private bool _swapDimensions;
+        private PreviewScaleMode _scaleMode;
 
         // 布局缓存
         private int _lastHostW, _lastHostH, _lastSrcW, _lastSrcH;
@@ -235,6 +236,16 @@ namespace HZCYKJTHardWare.Proxy.Preview
             string rtspTransport = "", int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false,
             bool visible = true, bool directRenderTarget = false)
         {
+            return PlayWithScaleMode(rtspUrl, parentHwnd, networkCachingMs, liveCachingMs,
+                rtspTransport, sourceWidth, sourceHeight, swapDimensions,
+                visible, directRenderTarget, PreviewScaleMode.Stretch);
+        }
+
+        internal bool PlayWithScaleMode(string rtspUrl, IntPtr parentHwnd,
+            int networkCachingMs, int liveCachingMs, string rtspTransport,
+            int sourceWidth, int sourceHeight, bool swapDimensions,
+            bool visible, bool directRenderTarget, PreviewScaleMode scaleMode)
+        {
             if (_fnNew == null && !LoadVlc()) return false;
             if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd)) return false;
 
@@ -244,6 +255,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sourceWidth = sourceWidth;
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
+            _scaleMode = scaleMode;
             _directRenderTarget = directRenderTarget;
             _lastHostW = _lastHostH = _lastSrcW = _lastSrcH = 0;
 
@@ -378,8 +390,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (_fnVideoSetScale != null)
                     _fnVideoSetScale(_mediaPlayer, 0.0f);
 
-                // 8）播放后应用 Cover 布局，调用顺序与 Delphi 一致
-                ApplyCoverLayout();
+                // 8）播放后按资源配置应用 Contain/Cover 布局
+                ApplyVideoLayout();
                 Logger.Info($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
                 Logger.Info($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
@@ -451,7 +463,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     SetParent(_videoHwnd, newParentHwnd);
                     ShowWindow(_videoHwnd, SW_SHOWNOACTIVATE);
-                    ApplyCoverLayout();
+                    ApplyVideoLayout();
                 }
                 else
                 {
@@ -468,10 +480,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         /// <summary>
-        /// 对视频子窗口应用 Cover 布局，算法与 Delphi ApplyCoverLayout 一致。
-        /// 使用 MulDiv 进行精确整数缩放，避免浮点舍入差异。
+        /// 对视频子窗口应用预览布局。
+        /// Stretch 模式统一覆盖宿主 HWND 的完整客户区。
         /// </summary>
-        public void ApplyCoverLayout()
+        public void ApplyVideoLayout()
         {
             if (!_running || _mediaPlayer == IntPtr.Zero) return;
             if (_videoHwnd == IntPtr.Zero || !IsWindow(_videoHwnd)) return;
@@ -498,13 +510,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     displayH = srcW;
                 }
 
-                if (_directRenderTarget)
-                {
-                    if (_fnVideoSetScale != null)
-                        _fnVideoSetScale(_mediaPlayer, 0.0f);
-                    return;
-                }
-
                 if (hostW == _lastHostW && hostH == _lastHostH &&
                     displayW == _lastSrcW && displayH == _lastSrcH)
                     return;
@@ -514,44 +519,46 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastSrcW = displayW;
                 _lastSrcH = displayH;
 
-                // 1）通知 VLC 精确缩放并填满窗口，与 Delphi 的 libvlc_video_set_scale(0.0) 一致
+                // 1）通知 VLC 使用自动缩放，最终子窗口尺寸由下方布局结果决定。
                 if (_fnVideoSetScale != null)
                     _fnVideoSetScale(_mediaPlayer, 0.0f);
 
-                // 2）设置宽高比，与 Delphi 一致
+                // 2）Stretch 使用宿主宽高比，确保 VLC 画面完整覆盖客户区。
                 if (_fnVideoSetAspectRatio != null)
                 {
-                    var ratioStr = $"{displayW}:{displayH}";
+                    var ratioStr = _scaleMode == PreviewScaleMode.Stretch
+                        ? $"{hostW}:{hostH}"
+                        : $"{displayW}:{displayH}";
                     var ratioPtr = Marshal.StringToHGlobalAnsi(ratioStr);
-                    _fnVideoSetAspectRatio(_mediaPlayer, ratioPtr);
-                    Marshal.FreeHGlobal(ratioPtr);
+                    try
+                    {
+                        _fnVideoSetAspectRatio(_mediaPlayer, ratioPtr);
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(ratioPtr);
+                    }
                 }
 
-                // 3）使用与 Delphi 一致的 MulDiv 算法计算 Cover 布局位置和尺寸
-                int videoW, videoH, videoX, videoY;
-                if (displayW * hostH > displayH * hostW)
-                {
-                    // 按高度适配并产生左右黑边，计算方式与 Delphi MulDiv 一致
-                    videoH = hostH;
-                    videoW = (displayW * hostH) / displayH;
-                    videoX = (hostW - videoW) / 2;
-                    videoY = 0;
-                }
-                else
-                {
-                    // 按宽度适配并产生上下黑边，计算方式与 Delphi MulDiv 一致
-                    videoW = hostW;
-                    videoH = (displayH * hostW) / displayW;
-                    videoX = 0;
-                    videoY = (hostH - videoH) / 2;
-                }
+                // 直接绑定调用方 HWND 时只调整 VLC 宽高比，不能移动调用方窗口本身。
+                if (_directRenderTarget)
+                    return;
 
-                SetWindowPos(_videoHwnd, HWND_BOTTOM, videoX, videoY, videoW, videoH,
+                // 3）子窗口按统一策略覆盖宿主客户区。
+                var bounds = PreviewLayoutMath.CalculateVideoBounds(
+                    new System.Drawing.Size(displayW, displayH),
+                    new System.Drawing.Size(hostW, hostH),
+                    _scaleMode);
+                if (bounds.IsEmpty)
+                    return;
+
+                SetWindowPos(_videoHwnd, HWND_BOTTOM,
+                    bounds.X, bounds.Y, bounds.Width, bounds.Height,
                     SWP_NOACTIVATE);
             }
             catch (Exception ex)
             {
-                Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
+                Logger.Error($"ApplyVideoLayout failed: {ex.Message}");
             }
         }
 

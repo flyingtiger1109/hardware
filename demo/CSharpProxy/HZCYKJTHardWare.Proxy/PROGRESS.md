@@ -3178,3 +3178,141 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 - 应急日志是 best-effort；如果程序目录本身不可写或磁盘故障，主日志与应急日志都可能失败，此时只能依赖 Debug/Trace 或外部进程监控。
 - `Shutdown()` 开始后产生的迟到日志会被计入 dropped 而不再写入；因此必须保持当前顺序，先停止服务和业务生产者，再关闭 Logger。
 - 回退时仅撤销上述 5 个代码/测试文件中的本节差异并恢复 `MainForm` 的旧 `Logger.Flush(1000)`；不涉及 DLL、协议或部署结构回退。
+
+# MJPEG 16 小时真实硬件长稳收尾复核（2026-07-22）
+
+## 结论与有效性
+
+- 本次仅使用 `scripts/stress_results/handle_release_mjpeg_scheme_b_16hour_real_restart_20260718_1750`；人工中断的 `handle_release_mjpeg_scheme_b_16hour_real_20260718` 未参与统计。
+- 正式目录只有 `calls`、`cycles`、`metrics` CSV，缺少 `summary` 与 `callbacks` CSV；未完成目标的 960 分钟，不能标记为 16 小时长稳通过。
+- 可确认的有效运行窗口为 2026-07-18 17:51:32.042～18:04:13.730，共 12.69 分钟、152 次交替切换、0 失败；终端 1/2 各 76 次成功。`SwitchDurationMs` 的 nearest-rank P50/P95/P99/Max 为 3/19/71/72 ms。
+- 原始 `cycles` 虽有 1,250 行（704 成功、546 失败），`calls` 有 995 次切换调用（576 成功、419 失败），但 Proxy 停止后测试宿主仍继续写入；其中左终端从 18:04:43 起失败而右终端继续报成功。因此该尾段不是有效的硬件长稳样本，不得混入结论。
+
+## Proxy 资源与日志
+
+- 预热 5 分钟后的可用 Proxy 采样仅覆盖 17:56:31.867～18:04:32.099（17 点、约 8 分钟）：HandleCount 668～687，线性斜率 `+13.5226 handles/hour`、`R²=0.0128`；线程数 30～35（首/末 33/31）；PrivateMemory 53.04～54.98 MB（首/末 53.04/54.94 MB，`+1.90 MB`）。样本长度不足，不能据此区分持续增长或确认长期有界波动。
+- 后半 8 小时与最后 4 小时均没有 Proxy 采样，无法计算斜率或 `R²`。
+- x64 Proxy 测试窗口日志共 2,357 行，warning/error、MJPEG pause/stop timeout、流恢复失败均为 0；测试窗口没有 VLC 或 RTSP 实际预览记录，VLC 仅见测试前预热，RTSP 为 0。
+- 本次复核时 PID 47668 不存在，未关闭任何进程；因此未影响其他 Proxy。
+
+## 验证状态与下一步
+
+- [x] 指定目录、CSV 时序、x64 Proxy 日志和 PID 47668 状态已复核。
+- [ ] 960 分钟真实硬件长稳、后半 8 小时/最后 4 小时资源趋势、VLC/RTSP 实际预览覆盖：均未完成或无数据。
+- [ ] 应先修复测试宿主：目标 Proxy 退出或关键切换失败时立即停止、封存结果并生成 summary，避免继续追加无效尾段。
+- [ ] 在独占且不中断条件下重新完成 960 分钟后，再评价句柄长期趋势。
+
+不建议仅依据本轮继续修改生产 MJPEG 句柄释放逻辑；当前应优先修复测试宿主的停止与结果封存链路。外部 DLL ABI、HTTP/终端协议、配置、回调和第三方调用行为均未改动；本次仅更新验证记录。
+
+# 健康检测卡片文字显示修复（2026-07-24）
+
+## 本次修改
+
+- 将健康检测面板默认高度由 112px 调整为 132px，为设备名称和状态说明各自保留完整单行高度。
+- 设备名称和状态说明由分界线贴边对齐改为各自行内垂直居中，避免文字挤压、字形下沿被裁切。
+- 终端请求失败文案由“终端不可达”统一调整为“终端连接失败”；汇总标签显示“检测失败 · 终端连接失败或超时”。
+- 增加 UI 回归断言，检查两行文字的对齐方式和实际控件高度。
+
+## 兼容性与回退
+
+- 仅修改 Proxy 内部 WinForms 布局，不改变 DLL ABI、HTTP/终端协议、设备调用、配置或第三方 HWND 行为。
+- 不涉及 x86 构建；回退时仅恢复 `HardwareHealthPanel.DefaultHeight`、两处 `TextAlign` 及对应测试。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64` 独立输出编译成功，0 error；仅有 2 条 NuGet 漏洞元数据源不可达的 `NU1900` 警告。
+- [x] 健康检测、终端检测与主窗体布局定向测试 15/15 通过。
+- [x] x64 非 Integration 回归 107/107 通过。
+- [ ] 现场在实际窗口与 100%/150%/200% DPI 下复核卡片文字视觉效果。
+
+# 全部预览统一拉伸填满 HWND（2026-07-29）
+
+## 当前阶段
+
+- [x] 方案 A 代码修改、x64/x86 编译及非 Integration 回归已完成。
+- [ ] 真实摄像头、指纹、虹膜和三路车牌现场视觉验证待执行。
+
+## 本次修改内容
+
+1. `PreviewManager` 对摄像头、指纹、虹膜、车牌 CJ、车牌 RJ2、车牌 RJ3 统一返回 `PreviewScaleMode.Stretch`。
+2. `MjpegPreviewController` 将每帧拉伸绘制到完整渲染客户区，并移除每帧 `Clear(Black)`，降低直接 HDC 绘制时出现黑色闪帧的风险。
+3. `VlcPreviewPlayer` 在 Stretch 模式下使用宿主客户区宽高比，子窗口覆盖完整宿主；直接绑定调用方 HWND 时只调整 VLC 宽高比，不移动调用方窗口。
+4. VLC 布局尺寸缓存移到直接绑定判断之前，宿主尺寸未变化时跳过重复的缩放与宽高比设置。
+5. 增加 4:3 摄像头和 1:1 指纹拉伸到 16:9 HWND 的布局断言，并同步 MJPEG worker 测试的缩放模式。
+
+## 涉及文件
+
+- `Preview/PreviewLayoutMath.cs`
+- `Preview/PreviewManager.cs`
+- `Preview/MjpegPreviewController.cs`
+- `Preview/VlcPreviewController.cs`
+- `Preview/VlcPreviewPlayer.cs`
+- `HZCYKJTHardWare.Proxy.Tests/Preview/PreviewLayoutMathTests.cs`
+- `HZCYKJTHardWare.Proxy.Tests/Preview/MjpegWorkerReuseTests.cs`
+- `todo.md`
+- `PROGRESS.md`
+
+## 兼容性与风险
+
+- DLL ABI、导出函数、调用约定、结构体、错误码、HTTP/终端协议、回调、配置和第三方 HWND 参数均未改变。
+- 摄像头、指纹、虹膜和车牌均会填满宿主客户区；非 16:9 源不裁剪、不留黑边，但会发生比例拉伸。
+- 未更改 MJPEG/VLC 的启动、停止、复用、恢复、线程退出和资源释放逻辑。
+
+## 验证状态
+
+- [x] `Release|x64` Proxy + Tests 隔离编译：0 error；首次构建有 1 条 `NU1900` 环境警告。
+- [x] `Release|x86` Proxy + Tests 隔离编译：0 warning、0 error。
+- [x] x64/x86 定向测试：各 7/7 通过。
+- [x] x64/x86 非 Integration 回归：各 109/109 通过。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 转换提示。
+- [ ] 真实硬件画面覆盖、连续闪屏观察、DPI、日志区拖拽/折叠及终端切换回归：待现场验证。
+
+## 回退方式
+
+恢复 `PreviewLayoutMath`、`PreviewManager`、`MjpegPreviewController`、`VlcPreviewController`、`VlcPreviewPlayer` 及两个预览测试文件中的本节差异；无需回退 DLL 接口、协议、配置或部署结构。
+
+# MJPEG 30fps 节拍补偿与 v1.2.9 版本标识（2026-07-29）
+
+## 当前阶段
+
+- [x] 方案 B 节拍补偿、v1.2.9 元数据和界面展示已实现。
+- [x] x64/x86 编译、定向测试、版本元数据检查和非 Integration 回归已完成。
+- [ ] 真实终端帧率、CPU/GDI 和部署版本识别待现场验证。
+
+## 本次修改内容
+
+1. `MjpegPreviewController` 每轮使用 `Stopwatch` 测量 `DoEvents`、HWND 布局、JPEG 解码和 GDI+ 绘制总耗时。
+2. 休眠时间由固定33ms改为 `max(0, 33ms - 本轮耗时)`；本轮超时则不追加固定休眠，只执行 `Thread.Yield()`。
+3. `AssemblyInfo` 增加统一版本常量，写入 Assembly/File Version `1.2.9.0` 和 Informational Version `1.2.9`。
+4. `MainForm` 的窗口标题、页面标题和启动日志统一显示 `v1.2.9`。
+5. 增加节拍补偿边界测试、Assembly/File/Informational Version 测试及窗口版本可见性测试。
+
+## 涉及文件
+
+- `Preview/MjpegPreviewController.cs`
+- `Properties/AssemblyInfo.cs`
+- `MainForm.cs`
+- `HZCYKJTHardWare.Proxy.Tests/Preview/MjpegWorkerReuseTests.cs`
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`
+- `todo.md`
+- `PROGRESS.md`
+
+## 兼容性与风险
+
+- DLL ABI、导出函数、调用约定、结构体、错误码、HTTP/终端协议、回调、配置及第三方 HWND 参数均未改变。
+- MJPEG 请求和接收线程未修改，目标最大渲染帧率仍约30fps；仅消除处理耗时叠加在33ms固定休眠之后的问题。
+- 实际渲染工作频率提高后 CPU/GDI 占用可能小幅上升；如果终端源帧率低于30fps或网络抖动，流畅度提升会受到源端限制。
+
+## 验证状态
+
+- [x] Gitee 远程引用：最高标签 `v1.2.8`，无 `v1.2.9` 标签和 `release/1.2.9` 分支。
+- [x] x64/x86 Proxy + Tests Release 隔离编译：均为 0 warning、0 error。
+- [x] x64/x86 EXE：FileVersion=`1.2.9.0`，ProductVersion=`1.2.9`。
+- [x] x64/x86 定向测试：各 9/9 通过。
+- [x] x64/x86 非 Integration 回归：各 111/111 通过。
+- [x] `git diff --check`：通过，仅有工作区既有 LF/CRLF 转换提示。
+- [ ] 真实摄像头流畅度、端到端延迟、CPU/GDI、连续运行及正式部署版本识别：待现场验证。
+
+## 回退方式
+
+恢复 `MjpegPreviewController`、`Properties/AssemblyInfo.cs`、`MainForm.cs` 和两个对应测试文件中的本节差异；无需回退 DLL 接口、协议、配置或部署结构。
