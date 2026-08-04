@@ -35,7 +35,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly int _sourceWidth;
         private readonly int _sourceHeight;
         private readonly bool _swapDimensions;
-        private readonly PreviewScaleMode _scaleMode;
         private readonly bool _visible;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly AutoResetEvent _streamChanged = new AutoResetEvent(false);
@@ -70,15 +69,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private static int _liveReaderThreadCount;
 
         private MjpegPreviewController(string description, IntPtr parentHwnd,
-            int sourceWidth, int sourceHeight, bool swapDimensions,
-            PreviewScaleMode scaleMode, bool visible)
+            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible)
         {
             _description = description;
             _requestedParentHwnd = parentHwnd;
             _sourceWidth = sourceWidth;
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
-            _scaleMode = scaleMode;
             _visible = visible;
 
             _thread = new Thread(ThreadMain)
@@ -99,15 +96,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal static int CreatedWorkerCount => Volatile.Read(ref _createdWorkerCount);
         internal static int LiveRenderThreadCount => Volatile.Read(ref _liveRenderThreadCount);
         internal static int LiveReaderThreadCount => Volatile.Read(ref _liveReaderThreadCount);
-
-        internal static int CalculateRenderDelayMs(int targetIntervalMs, long elapsedMilliseconds)
-        {
-            if (targetIntervalMs <= 0 || elapsedMilliseconds >= targetIntervalMs)
-                return 0;
-            if (elapsedMilliseconds <= 0)
-                return targetIntervalMs;
-            return targetIntervalMs - (int)elapsedMilliseconds;
-        }
 
         public bool IsRunning
         {
@@ -130,13 +118,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             TryDispatchStreamFault();
         }
 
-        internal static async Task<MjpegPreviewController> StartAsyncWithScaleMode(
-            string description, string url,
+        public static async Task<MjpegPreviewController> StartAsync(string description, string url,
             IntPtr parentHwnd, int sourceWidth, int sourceHeight, bool swapDimensions,
-            PreviewScaleMode scaleMode, bool visible, int timeoutMs)
+            bool visible, int timeoutMs)
         {
             var controller = new MjpegPreviewController(description, parentHwnd,
-                sourceWidth, sourceHeight, swapDimensions, scaleMode, visible);
+                sourceWidth, sourceHeight, swapDimensions, visible);
 
             controller._thread.Start();
             controller._readerThread.Start();
@@ -158,14 +145,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             return controller;
-        }
-
-        public static Task<MjpegPreviewController> StartAsync(string description, string url,
-            IntPtr parentHwnd, int sourceWidth, int sourceHeight, bool swapDimensions,
-            bool visible, int timeoutMs)
-        {
-            return StartAsyncWithScaleMode(description, url, parentHwnd, sourceWidth, sourceHeight,
-                swapDimensions, PreviewScaleMode.Stretch, visible, timeoutMs);
         }
 
         internal async Task<bool> SwitchStreamAsync(string url, IntPtr parentHwnd, int timeoutMs)
@@ -294,21 +273,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 _workerStartTcs.TrySetResult(true);
 
-                var renderCycle = new System.Diagnostics.Stopwatch();
                 while (!_stopRequested)
                 {
-                    renderCycle.Restart();
                     Application.DoEvents();
                     ApplyRequestedParentAndVisibility();
                     ApplyFillLayout();
                     RenderLatestFrame();
-
-                    var delayMs = CalculateRenderDelayMs(
-                        RenderIntervalMs, renderCycle.ElapsedMilliseconds);
-                    if (delayMs > 0)
-                        Thread.Sleep(delayMs);
-                    else
-                        Thread.Yield();
+                    Thread.Sleep(RenderIntervalMs);
                 }
             }
             catch (Exception ex)
@@ -690,21 +661,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 using (var g = Graphics.FromHdc(hdc))
                 {
                     ConfigureGraphics(g, InterpolationMode.Bilinear);
-
-                    var displayWidth = _swapDimensions ? _sourceHeight : _sourceWidth;
-                    var displayHeight = _swapDimensions ? _sourceWidth : _sourceHeight;
-                    if (displayWidth <= 0 || displayHeight <= 0)
-                    {
-                        displayWidth = image.Width;
-                        displayHeight = image.Height;
-                    }
-
-                    var targetBounds = PreviewLayoutMath.CalculateVideoBounds(
-                        new Size(displayWidth, displayHeight),
-                        new Size(width, height),
-                        _scaleMode);
-                    if (!targetBounds.IsEmpty)
-                        g.DrawImage(image, targetBounds);
+                    g.DrawImage(image, new Rectangle(0, 0, width, height));
                 }
                 ValidateRect(_videoHwnd, IntPtr.Zero);
             }

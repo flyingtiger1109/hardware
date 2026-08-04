@@ -3316,3 +3316,544 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 ## 回退方式
 
 恢复 `MjpegPreviewController`、`Properties/AssemblyInfo.cs`、`MainForm.cs` 和两个对应测试文件中的本节差异；无需回退 DLL 接口、协议、配置或部署结构。
+
+# Proxy/DLL 长稳生命周期加固方案 A（2026-08-03）
+
+## 当前阶段
+
+- [x] Native DLL 恢复线程、Proxy 健康检测与传输层停止边界已加固。
+- [x] Win32/x86 DLL 与 x64 Proxy 编译、x64 自动测试已完成。
+- [ ] 修改后真实 Delphi 7 宿主、真实设备与多日长稳回归待执行。
+
+## 本次修改内容
+
+1. Native `IrisPreviewRestoreWorker` 改为按需启动、可显式停止并可在下次 Init 后重启；`ReleaseSdk` 在删除共享 `HttpClient` 前先等待该 Worker 退出。
+2. Worker 改为进程级显式生命周期对象，避免 DLL 卸载的 loader lock 阶段在静态析构中等待线程。
+3. `TerminalHealthChecker` 将 Timer 的 `async void` 工作改为可跟踪 `Task`，增加取消令牌、有界停止等待和幂等停止；停止后不再发送健康通知。
+4. `ProxyServer` 先收敛健康检测，再进入 Runtime 关闭，并在 `TerminalClient` 前释放健康检测器。
+5. `TransportLayer` 改用稳定 Handler 快照，消除 `Count`/枚举并发窗口；活动 Handler 结束后再释放 `SemaphoreSlim`。
+6. `ProxyRuntime` 真正等待并观察 `TransportLayer.StopAsync` 结果；关键异常同时保留 UI 摘要、`ERROR` 级别和完整堆栈。
+7. 增加健康检测器停止幂等与停止后禁止重启测试。
+
+## 涉及文件
+
+- `src/exports.cpp`
+- `Server/ProxyServer.cs`
+- `Server/Runtime/ProxyRuntime.cs`
+- `Server/Runtime/TransportLayer.cs`
+- `Terminal/TerminalHealthChecker.cs`
+- `HZCYKJTHardWare.Proxy.Tests/Terminal/TerminalHealthCheckerTests.cs`
+- `PROGRESS.md`
+- `todo.md`
+
+## 兼容性与风险
+
+- 部署基线明确为 Native DLL `Release|Win32`/x86，供 Delphi 7 调用；Proxy 为 `Release|x64`，本轮未编译 x86 Proxy。
+- DLL 导出函数名、`__stdcall`、C ABI、参数、结构体、错误码、回调签名、HTTP/终端协议和配置均未改变。
+- 性能热路径未修改；新增等待仅发生在 Stop/Release 边界。Native 释放可能等待当前单次恢复 HTTP 请求返回，Proxy 健康检测停止上限为 5000ms。
+- 异常路径会同时写入 UI 摘要和 ERROR 堆栈；只增加低频异常日志，正常请求日志量不变。
+
+## 验证状态
+
+- [x] Native DLL `Release|Win32`：0 warning、0 error，产物链接为 `MACHINE:X86`。
+- [x] Proxy + Tests `Release|x64`：0 warning、0 error。
+- [x] x64 非 Integration 回归：112/112 通过。
+- [x] x64 Mock Integration：10/10 通过；沙箱内 `HttpListener` 不受支持，已在沙箱外使用同一测试程序集重跑通过。
+- [ ] Delphi 7 Demo 重复 Init/Release、终端切换后立即 Release、设备断开/重连和多日长稳：待现场验证。
+
+## 回退方式
+
+恢复上述 6 个代码/测试文件中的本节差异即可；无配置、数据、依赖、DLL ABI 或部署结构迁移。
+
+# MJPEG预览启用后托盘恢复卡顿修复（2026-08-03）
+
+## 当前阶段
+
+- [x] 已完成版本差异定位、方案实施、x64隔离编译和自动化回归。
+- [ ] 第三方Delphi 7双路真实预览下的托盘恢复速度、CPU/GDI和GC变化待现场验证。
+
+## 本次修改内容
+
+1. `MjpegPreviewController` 缓存子窗口显示状态，仅在预览活动状态或父窗口发生变化时调用 `ShowWindow`，不再每个33ms渲染周期重复调用。
+2. 外部父HWND尺寸检查由每个渲染周期调整为每250ms一次；切换父窗口时仍立即刷新布局。
+3. 保留约30 FPS节拍补偿；当单帧处理达到或超过33ms时至少休眠1ms，避免连续 `Thread.Yield()` 形成无休眠重载循环。
+4. 增加渲染超预算退让边界测试，保留原MJPEG切流、暂停、复用和线程释放测试。
+
+## 涉及文件
+
+- `Preview/MjpegPreviewController.cs`
+- `HZCYKJTHardWare.Proxy.Tests/Preview/MjpegWorkerReuseTests.cs`
+- `PROGRESS.md`
+
+## 兼容性说明
+
+- 仅修改x64 Proxy内部MJPEG渲染调度，不修改x86 DLL、Delphi 7调用接口、DLL导出、调用约定、结构体、错误码、HTTP协议、配置或第三方HWND参数。
+- 外部宿主窗口尺寸变化最多延迟约250ms跟随；预览启停和父窗口切换仍在下一渲染周期处理。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64`隔离编译：0 warning、0 error。
+- [x] MJPEG定向测试：3/3通过。
+- [x] x64非Integration回归：113/113通过。
+- [x] `git diff --check`：通过，仅有既有LF/CRLF转换提示。
+- [ ] 第三方Delphi 7启用摄像头和指纹预览后，连续执行20次最小化/恢复：待现场验证。
+- [ ] 对比修复前后Proxy CPU、DWM/GPU、GC计数及恢复耗时：待现场验证。
+
+## 回退方式
+
+恢复 `MjpegPreviewController.cs`、`MjpegWorkerReuseTests.cs` 和本节进度记录中的差异即可；无需回退DLL或部署配置。
+
+# 托盘恢复避免WinForms句柄重建方案A（2026-08-03）
+
+## 当前阶段
+
+- [x] 已移除托盘隐藏/恢复中的 `ShowInTaskbar` 切换，并完成句柄保持测试、x64隔离编译和自动化回归。
+- [ ] 第三方Delphi 7启用双路外部预览后的实际恢复速度和任务栏行为待现场验证。
+
+## 本次修改内容
+
+1. `HideToTray` 仅隐藏主窗体，不再将 `ShowInTaskbar` 从 `true` 切换为 `false`。
+2. `RestoreFromTray` 先将最小化状态恢复为 `Normal`，再显示并激活窗体，不再切换 `ShowInTaskbar`。
+3. 抽取 `SetTrayWindowVisible`，统一托盘可见性处理并允许使用普通WinForms窗体验证句柄生命周期。
+4. 新增测试验证Form、Panel和Button在隐藏/恢复前后HWND保持一致，且不触发 `HandleDestroyed`。
+
+## 涉及文件
+
+- `MainForm.cs`
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`
+- `PROGRESS.md`
+
+## 兼容性与风险
+
+- 不修改x86 DLL、Delphi 7调用接口、DLL导出、调用约定、结构体、错误码、HTTP协议、配置或第三方预览HWND。
+- `Hide()`仍会使不可见主窗体从任务栏消失；`Show()`后按原设置恢复任务栏按钮，但不同Windows版本的任务栏刷新时序仍需现场观察。
+- 外部预览流、预览线程和渲染帧率均未改变。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64`隔离编译：0 warning、0 error。
+- [x] 托盘句柄保持定向测试：1/1通过。
+- [x] x64非Integration回归：114/114通过。
+- [x] `git diff --check`：通过，仅有既有LF/CRLF转换提示。
+- [ ] 第三方Delphi 7开启摄像头和指纹预览后连续20次最小化/恢复：待现场验证。
+
+## 回退方式
+
+恢复 `MainForm.cs`、`MainFormLogRenderingTests.cs` 和本节进度记录中的差异即可；无需回退DLL、协议或部署配置。
+
+# 回退至v1.2.8预览并保留生命周期加固（2026-08-03）
+
+## 当前阶段
+
+- [x] 当前托盘句柄实验已完全撤销。
+- [x] Proxy预览源码及预览测试已精确恢复为Git标签 `v1.2.8`，目录差异校验为零。
+- [x] 今天完成的线程退出、资源释放、日志可靠性、Proxy停机边界和x86 DLL生命周期加固均保留。
+- [ ] 真实Delphi 7双路预览、托盘恢复速度和画面比例待现场验证。
+
+## 本次回退内容
+
+1. `MjpegPreviewController` 恢复为处理完一帧后固定休眠33ms，移除v1.2.9节拍补偿及随后增加的显示状态缓存、布局节流和超预算退让。
+2. MJPEG绘制恢复v1.2.8直接拉伸到渲染客户区的行为。
+3. `PreviewManager`、`VlcPreviewController`、`VlcPreviewPlayer` 恢复v1.2.8启动、预热和Cover布局链路。
+4. 删除仅属于v1.2.9预览的 `PreviewLayoutMath` 及其测试，恢复v1.2.8的MJPEG worker测试。
+5. `MainForm` 和UI测试仅撤销本轮托盘句柄方案，保留现有响应式界面、日志和版本显示。
+
+## 保留的今日加固
+
+- `src/exports.cpp`：x86 DLL恢复Worker显式生命周期与Release等待。
+- `Server/ProxyServer.cs`：停止顺序和健康检测收敛。
+- `Server/Runtime/ProxyRuntime.cs`：观察并等待传输层停止结果。
+- `Server/Runtime/TransportLayer.cs`：稳定Handler快照和活动Handler释放边界。
+- `Terminal/TerminalHealthChecker.cs`：可取消、可等待和幂等停止。
+- `HZCYKJTHardWare.Proxy.Tests/Terminal/TerminalHealthCheckerTests.cs`：对应生命周期回归测试。
+- 日志关闭、异常级别和完整堆栈相关修改保持不变。
+
+## 兼容性与风险
+
+- DLL导出、`__stdcall`、C ABI、参数、结构体、错误码、回调、HTTP协议和第三方HWND参数均未改变。
+- Proxy版本号及其他UI/日志功能未整体回退；仅预览引擎和预览测试恢复为v1.2.8。
+- VLC画面比例恢复v1.2.8 Cover算法；与v1.2.9统一Stretch相比可能重新出现裁剪，这是本次精确回退的预期行为。
+- MJPEG实际帧率可能降低，但可减少JPEG解码、GDI绘制和GC工作频率。
+
+## 验证状态
+
+- [x] Preview源码和Preview测试目录对 `v1.2.8`：零差异。
+- [x] 当前托盘实验涉及的 `MainForm` 和UI测试对回退前HEAD：零差异。
+- [x] Proxy + Tests `Release|x64`隔离编译：0 warning、0 error。
+- [x] x64预览定向测试：12/12通过。
+- [x] x64非Integration回归：105/105通过。
+- [x] 已部署正式x64 Proxy EXE/PDB，EXE SHA-256=`B820F64A4E29DA0A93D2425678D0E2D0C6E274C52672B48D591B9F99C8AB4AAC`。
+- [x] 被替换的托盘方案A产物仍保留在 `_codex_build/tray_handle_fix`，可直接恢复。
+- [x] 未编译x86 Proxy；未修改或重建x86 DLL。
+- [ ] Delphi 7真实摄像头和指纹双路预览连续20次最小化/恢复：待现场验证。
+
+## 回退方式
+
+如需撤销本次预览回退，可恢复v1.2.9提交 `8fd8b30e` 中Preview目录及对应Preview测试差异；无需调整今天保留的生命周期加固文件。
+
+# 五合一车道硬件平台可见标题统一（2026-08-04）
+
+## 本次修改内容
+
+1. 标题栏统一显示 `五合一车道硬件平台 - 后台服务 v1.2.9`，版本仅保留在Windows标题栏。
+2. 页面主标题统一显示 `五合一车道硬件平台` 和 `后台服务`，不再显示版本。
+3. 托盘提示、重复启动提示框标题和EXE文件属性统一使用“五合一车道硬件平台”。
+4. UI启动日志移除版本号，避免版本信息出现在页面日志区。
+5. EXE文件名、AssemblyName、命名空间、x86 DLL、Delphi 7接口和部署结构均保持不变。
+
+## 涉及文件
+
+- `Properties/AssemblyInfo.cs`
+- `MainForm.cs`
+- `MainForm.Designer.cs`
+- `Program.cs`
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`
+- `PROGRESS.md`
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64`隔离编译：0 warning、0 error。
+- [x] 标题、版本位置、托盘提示和文件属性定向测试：1/1通过。
+- [x] x64非Integration回归：105/105通过。
+- [x] 正式x64 EXE/PDB已部署，EXE SHA-256=`CB605F7824822F4467DCCC3E73B1E19B68CFF746CB2366DCD375E631E83EE18E`。
+- [x] 正式EXE FileVersion=`1.2.9.0`、ProductVersion=`1.2.9`、ProductName/FileDescription=`五合一车道硬件平台`。
+- [x] 未编译x86 Proxy；未修改或重建x86 DLL。
+- [ ] 实际窗口标题、页面换行、托盘提示和高DPI视觉效果：待现场确认。
+
+## 回退方式
+
+恢复上述5个代码/测试文件中的可见标题差异并删除本节记录即可；无需回退预览引擎、生命周期加固、DLL或配置。
+
+# 正式名称移除后台服务副标题（2026-08-04）
+
+## 最终显示规则
+
+- Windows标题栏：`五合一车道硬件平台 v1.2.9`。
+- 页面主标题：`五合一车道硬件平台`，不显示版本和“后台服务”。
+- 托盘提示、重复启动弹窗、关闭窗口弹窗：统一使用“五合一车道硬件平台”。
+- 最小化提示统一描述为“程序继续运行”，不再使用“后台服务/后端服务”。
+
+## 验证状态
+
+- [x] 代码和资源中可见的 `后台服务`、`后端服务`、旧英文程序名及UI日志版本字段搜索结果为零。
+- [x] Proxy + Tests `Release|x64`隔离编译：0 warning、0 error。
+- [x] 标题和版本位置定向测试：1/1通过。
+- [x] x64非Integration回归：105/105通过。
+- [x] 隔离产物SHA-256=`5F65FECAE6E37A12C26278B7134268ACD3DE9B7106EFDD7AB3B71E7459DE0835`。
+- [x] 正式目录部署：已在Proxy进程退出后替换x64 EXE/PDB；正式EXE SHA-256=`5F65FECAE6E37A12C26278B7134268ACD3DE9B7106EFDD7AB3B71E7459DE0835`。
+- [x] 部署前EXE已备份为 `bin/x64/Release/net46/HZCYKJTHardWare.Proxy.exe.pre-formal-name-20260804.bak`，可用于快速回退。
+- [x] 未编译x86 Proxy；未修改或重建x86 DLL。
+
+## 回退方式
+
+恢复本节涉及的正式名称文本和对应UI测试即可；无需回退预览、生命周期加固、DLL或配置。
+
+# Windows 10 首次启动布局补偿方案 A（2026-08-04）
+
+## 当前阶段
+
+- [x] 已完成首次显示后的延迟布局补偿和 Resize 响应式刷新。
+- [x] 已完成 `Release|x64` 隔离编译、UI 定向测试和非 Integration 回归。
+- [ ] Windows 10 真实桌面首次启动及 100%/125%/150%/200% DPI 视觉验证待现场执行。
+
+## 本次修改内容
+
+1. `MainForm_Shown` 改为通过 `BeginInvoke` 延迟执行最终启动布局，等待窗口句柄、实际 DPI 和客户区尺寸稳定。
+2. 最终启动布局重新应用顶部固定区域尺寸，并统一刷新 Header、健康检测面板、操作区、主分隔容器、日志区和预览区。
+3. `MainForm_Resize` 复用响应式刷新逻辑，但不重新设置日志区默认比例，避免覆盖用户手动拖动后的分隔条位置。
+4. 增加 UI 定向测试，验证最终启动布局立即产生有效客户区和预览网格，并验证普通 Resize 保留用户分隔条位置。
+
+## 涉及文件
+
+- `MainForm.cs`：首次显示延迟布局和统一响应式刷新。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：首次布局与 Resize 回归测试。
+- `PROGRESS.md`：本次进度、验证及回退记录。
+
+## 兼容性说明
+
+- DLL 导出函数、`__stdcall`、C ABI、参数、结构体、错误码和第三方调用方式均未改变。
+- HTTP/终端协议、配置文件、设备调用、预览 URL 和第三方 HWND 行为均未改变。
+- 仅首次显示时重新设置日志区默认 22% 高度；后续窗口缩放保留用户已调整的分隔条位置。
+
+## 风险与注意事项
+
+1. 首次显示后会增加一次 WinForms 布局计算，可能产生一次轻微重绘，但不执行网络或设备操作。
+2. 当前仍沿用 192 DPI Designer 基准、`SetProcessDPIAware` 和既有手工 DPI 换算；方案 A 修复布局时序，不等同于完整的 DPI 架构重构。
+3. 自动化测试只能验证控件边界与布局关系，不能替代 Windows 10 真实字体渲染和多显示器视觉检查。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 新增首次布局定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 10 首次启动：待现场验证。
+- [ ] 100%/125%/150%/200% DPI 与 1920x1080 分辨率：待现场验证。
+
+## 下一步计划
+
+- [ ] 在 Windows 10 删除或避开已有窗口状态后首次启动，确认无需拖动即可完整显示顶部信息、操作区、预览区和日志区。
+- [ ] 在常用 DPI 下分别执行首次启动、最大化、还原和手动拖动分隔条回归。
+
+## 回退方式
+
+恢复 `MainForm.cs`、`MainFormLogRenderingTests.cs` 中本节新增的首次布局差异，并删除本节进度记录即可；无需回退 DLL、协议、配置或部署文件。
+
+# Windows 10 顶部空白压缩方案 A（2026-08-04）
+
+## 当前阶段
+
+- [x] 已修复最终启动布局重复叠加健康检测区高度的问题。
+- [x] 已补充布局幂等性测试，并完成 `Release|x64` 编译和自动化回归。
+- [ ] Windows 10 真实窗口和多 DPI 视觉效果待现场验证。
+
+## 本次修改内容
+
+1. `ApplyCompactVerticalLayout()` 明确区分顶部运行信息区高度和包含健康检测区的总高度。
+2. `EnsureHeaderHasHealthPanelSpace()` 改为精确设置“运行信息区高度 + 一次健康检测区高度”，允许清除此前被放大的 `MinimumSize`，不再只增不减。
+3. `ApplyFinalStartupLayout()` 不再把已经包含健康检测区的 `panelHeader.Height` 作为基础高度再次传入。
+4. UI 测试增加精确高度和重复执行校验，保证连续执行最终启动布局时顶部高度保持不变。
+
+## 涉及文件
+
+- `MainForm.cs`：顶部高度精确计算与重复计高修复。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：顶部高度和布局幂等性回归测试。
+- `PROGRESS.md`：本次修改、验证和回退记录。
+
+## 兼容性与风险
+
+- DLL 导出、调用约定、C ABI、HTTP/终端协议、配置、设备调用、预览和第三方 HWND 行为均未改变。
+- 仅压缩错误重复增加的一个健康检测区高度；顶部各信息项和健康检测卡片的内部尺寸、字体及排列方式未改变。
+- 自动化测试不能替代 Windows 10 在 100%/125%/150%/200% DPI 下的真实视觉确认。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 顶部精确高度及重复布局定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 10 真实窗口首次启动视觉检查：待验证。
+- [ ] 100%/125%/150%/200% DPI：待验证。
+
+## 回退方式
+
+恢复 `MainForm.cs` 中顶部高度计算、移除 `MainFormLogRenderingTests.cs` 中新增的两项高度断言，并删除本节进度记录即可；无需回退 DLL、协议、配置或部署文件。
+
+# 首次启动预览与日志均衡布局方案 A（2026-08-04）
+
+## 当前阶段
+
+- [x] 已移除首次启动日志区固定占主内容区 22% 的布局规则。
+- [x] 已按日志控件实际组成动态计算首选高度，并保留预览区安全下限。
+- [x] 已完成 `Release|x64` 编译、UI 定向测试和非 Integration 回归。
+- [ ] Windows 10 真实窗口与多 DPI 视觉效果待现场验证。
+
+## 本次修改内容
+
+1. 新增 `CalculatePreferredStartupLogPanelHeight()`，按日志标题、工具栏、Panel Padding 和日志正文最低可视高度动态计算启动高度。
+2. 常规 100% DPI 下日志正文目标高度至少为 180px，日志面板目标总高度约为 292px，接近现场截图中手动调整后的布局。
+3. `RefreshResponsiveWindowLayout(true)` 和 `SetLogPanelHeight(0)` 统一使用动态首选高度，不再使用固定 22%。
+4. 继续通过 `Panel1MinSize`、`Panel2MinSize` 和分隔条宽度限制最终结果；窗口空间不足时优先保留预览区安全高度。
+5. 普通 Resize 仍不重置用户手动拖动后的分隔条位置，日志折叠与展开行为保持不变。
+
+## 涉及文件
+
+- `MainForm.cs`：日志区首选高度动态计算与启动布局应用。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：空间充足和受限场景的布局断言。
+- `PROGRESS.md`：本次修改、验证和回退记录。
+
+## 兼容性与风险
+
+- DLL 导出、调用约定、C ABI、HTTP/终端协议、配置、设备调用、预览接口和第三方 HWND 行为均未改变。
+- 不保存分隔条位置到配置；每次重新启动都从动态均衡布局开始，启动后仍允许用户手动调整。
+- 在高度过小或高 DPI 导致可用空间不足时，无法同时达到 180px 日志正文和完整预览首选尺寸；此时自动钳制日志高度以避免预览区继续被压缩。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 启动均衡布局定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 10 实际首次启动与图 1 布局对比：待验证。
+- [ ] 100%/125%/150%/200% DPI：待验证。
+
+## 回退方式
+
+恢复 `MainForm.cs` 中启动日志区的固定 22% 计算，移除对应 UI 测试断言并删除本节进度记录即可；无需回退 DLL、协议、配置或部署文件。
+
+# Windows 11 操作按钮低饱和配色与文字底色统一（2026-08-04）
+
+## 当前阶段
+
+- [x] 已将服务、业务和预览控制按钮统一为低饱和钢蓝配色。
+- [x] 已统一预览控制标题、提示文字、下拉框和布局容器的白色背景。
+- [x] 已完成 `Release|x64` 编译、UI 定向测试和非 Integration 回归。
+- [ ] Windows 11 真实窗口视觉效果待现场确认。
+
+## 本次修改内容
+
+1. 普通按钮由高饱和 `#0D6EFD` 蓝字调整为较柔和的钢蓝色文字，并统一边框、Hover 和 Pressed 背景。
+2. 选中/运行状态由纯蓝底白字调整为浅蓝底、深蓝字和柔和蓝色边框，降低大面积纯蓝带来的视觉刺激。
+3. `AddToGrid()`、`StylePreviewActionButton()` 和 `SetPersistentButtonStyle()` 复用同一组配色规则，避免服务按钮与“预览中”按钮状态不一致。
+4. `cardService`、`cardOperation`、`cardPreviewControl`、三个 TableLayout、三个卡片标题以及预览提示文字均显式使用白色背景。
+5. 预览设备下拉框继续使用白底自绘，选中项不使用系统默认高饱和蓝色背景。
+
+## 涉及文件
+
+- `MainForm.cs`：统一按钮配色、状态配色及卡片文字背景。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：按钮颜色一致性和白底回归断言。
+- `PROGRESS.md`：本次修改、验证和回退记录。
+
+## 兼容性与风险
+
+- DLL 导出、调用约定、C ABI、HTTP/终端协议、配置、设备调用、预览接口和第三方 HWND 行为均未改变。
+- 按钮 Enabled 状态、点击事件、服务状态判断、通道选择及预览生命周期均未改变，仅调整视觉属性。
+- WinForms 对 Disabled 文字仍可能应用系统级抗锯齿和灰度渲染，但浅蓝状态底色可避免原先“深色文字压在纯蓝底”造成的突兀感。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 按钮配色与文字白底定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 11 实际按钮颜色与文字底色：待现场验证。
+- [ ] Windows 10 及 100%/125%/150%/200% DPI：待验证。
+
+## 回退方式
+
+恢复 `MainForm.cs` 中原有按钮颜色值及预览控制背景继承方式，移除对应 UI 测试断言并删除本节进度记录即可；无需回退 DLL、协议、配置或部署文件。
+
+# Windows 11 选中状态底色小幅增强（2026-08-04）
+
+## 本次修改内容
+
+1. 选中状态底色由 `#DBEAF7` 调整为 `#C7DFF4`，提高状态辨识度但不恢复原高饱和纯蓝。
+2. 选中状态边框由 `#93B8DB` 调整为 `#7FAFD8`。
+3. 选中状态 Hover 底色由 `#CFE1F2` 调整为 `#B9D6EF`。
+4. 选中文字 `#2C5684`、默认白底按钮、普通文字颜色、预览控制白色背景及所有按钮状态逻辑均保持不变。
+
+## 涉及文件
+
+- `MainForm.cs`：选中状态三个颜色常量。
+- `PROGRESS.md`：本次调整、验证和回退记录。
+
+## 兼容性说明
+
+- 仅修改 WinForms 内部视觉颜色，不改变 DLL、协议、配置、设备调用、按钮 Enabled 状态、事件或第三方兼容行为。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 按钮配色定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 11 真实窗口颜色观感：待现场确认。
+
+## 回退方式
+
+将 `ActionButtonActiveBackColor`、`ActionButtonActiveBorderColor` 和 `ActionButtonActiveHoverBackColor` 恢复为上一版数值，并删除本节进度记录即可。
+
+# Windows 11 按钮参考蓝配色定稿（2026-08-04）
+
+## 本次修改内容
+
+1. 从用户参考图中提取蓝色笔画主色 `#4E95D9`（RGB 78,149,217）。
+2. 普通按钮统一为白底、`#4E95D9` 蓝字。
+3. 选中/运行状态统一为 `#4E95D9` 蓝底、白字和 `#3F82C5` 边框。
+4. 选中状态 Hover 使用 `#438BCD`，Pressed 继续使用选中边框色。
+5. 默认白色背景、预览控制文字白底、按钮 Enabled 状态、事件和业务逻辑保持不变。
+
+## 涉及文件
+
+- `MainForm.cs`：按钮参考蓝、选中文字、边框和 Hover 色。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：参考蓝和白字精确颜色断言。
+- `PROGRESS.md`：本次修改、验证和回退记录。
+
+## 兼容性说明
+
+- 仅修改 WinForms 内部视觉颜色，不改变 DLL、协议、配置、设备调用、按钮状态判断或第三方兼容行为。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 参考蓝配色定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 11 真实窗口参考图对比：待现场确认。
+
+## 回退方式
+
+恢复 `ActionButtonTextColor`、`ActionButtonActiveBackColor`、`ActionButtonActiveTextColor`、`ActionButtonActiveBorderColor` 和 `ActionButtonActiveHoverBackColor` 的上一版数值，恢复对应测试断言并删除本节进度记录即可。
+
+# 健康检测刷新按钮参考蓝同步（2026-08-04）
+
+## 本次修改内容
+
+1. “刷新状态”按钮启用文字颜色由旧 `#0D6EFD` 调整为统一参考蓝 `#4E95D9`。
+2. 按钮保持白底，边框统一为 `#BED3E9`，Hover 为 `#EEF5FC`，Pressed 为 `#DCE9F7`。
+3. “正在刷新状态…”和设备“启动中”汇总提示同步使用 `#4E95D9` 信息蓝。
+4. 按钮禁用灰色、正常绿色、异常红色、离线/未知灰色及所有刷新逻辑保持不变。
+
+## 涉及文件
+
+- `UI/HardwareHealthPanel.cs`：刷新按钮及刷新中信息配色。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：刷新按钮与刷新中提示精确颜色断言。
+- `PROGRESS.md`：本次修改、验证和回退记录。
+
+## 兼容性说明
+
+- 仅修改 WinForms 内部视觉颜色，不改变健康检测请求、刷新事件、定时器、DLL、协议、配置或设备调用。
+
+## 验证状态
+
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] 刷新按钮参考蓝定向测试：1/1 通过。
+- [x] `MainFormLogRenderingTests`：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [ ] Windows 11 真实窗口颜色观感：待现场确认。
+
+## 回退方式
+
+恢复 `HardwareHealthPanel.cs` 中刷新按钮和刷新中提示的旧颜色值，移除对应测试颜色断言并删除本节进度记录即可。
+
+# v1.3.0 发布记录（2026-08-04）
+
+## 当前阶段
+
+- [x] 当前已确认的生命周期加固、预览回退、Windows 10 首次布局适配及 Windows 11 UI 配色修改已纳入发布范围。
+- [x] Proxy 产品版本已统一更新为 `1.3.0`，Assembly/File Version 为 `1.3.0.0`。
+- [x] Gitee 远程不存在同名 `v1.3.0` 标签，可安全创建新标签。
+
+## 本次发布内容
+
+1. 加固 Native DLL 与 Proxy 的停止、释放和工作线程收敛边界，降低退出阶段长时间等待及资源竞争风险。
+2. Proxy 预览链路精确恢复至 v1.2.8 的稳定行为，同时保留本轮生命周期与日志可靠性修复。
+3. 修复 Windows 10 首次启动后顶部、预览区和日志区布局未完成的问题，并压缩顶部空白、动态保证日志正文可见高度。
+4. 统一 Windows 11 服务、业务、预览及健康刷新按钮的参考蓝配色与文字背景。
+5. 窗口标题、文件属性及自动化版本断言统一更新为 `v1.3.0`。
+
+## 兼容性说明
+
+- DLL 导出函数名、`__stdcall`、C ABI、参数、结构体布局、回调签名和错误码均未改变。
+- HTTP/终端协议、配置文件、设备调用、第三方 HWND 参数和部署结构均未改变。
+- 未引入新的运行时依赖；现有 Delphi 7、x86 Native DLL 与 x64 Proxy 调用边界保持兼容。
+
+## 验证状态
+
+- [x] Proxy + Tests `Release|x64`：编译成功，0 error；仅有 NuGet 漏洞审计源不可访问产生的 `NU1900` 环境警告。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [x] Native DLL `Release|Win32`：0 warning、0 error。
+- [x] Proxy EXE：FileVersion=`1.3.0.0`、ProductVersion=`1.3.0`、ProductName=`五合一车道硬件平台`。
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 转换提示。
+- [ ] Windows 10/11 真实设备、100%/125%/150%/200% DPI 与 Delphi 7 长稳回归：待现场验证。
+
+## 回退方式
+
+回退本次发布提交及 `v1.3.0` 标签即可恢复发布前版本；DLL ABI、协议、配置和数据结构未迁移，无需执行额外兼容性回退。

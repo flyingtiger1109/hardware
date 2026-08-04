@@ -119,6 +119,14 @@ namespace HZCYKJTHardWare.Proxy.UI
         private const int MinRefreshButtonWidth = 156;
         private const int MinRefreshButtonMinimumWidth = 132;
         private const int MinStatusButtonGap = 8;
+        private static readonly Color RefreshAccentColor =
+            Color.FromArgb(78, 149, 217);
+        private static readonly Color RefreshBorderColor =
+            Color.FromArgb(190, 211, 233);
+        private static readonly Color RefreshHoverBackColor =
+            Color.FromArgb(238, 245, 252);
+        private static readonly Color RefreshPressedBackColor =
+            Color.FromArgb(220, 233, 247);
 
         private sealed class DeviceDescriptor
         {
@@ -213,16 +221,17 @@ namespace HZCYKJTHardWare.Proxy.UI
                 MinimumSize = new Size(refreshButtonMinimumWidth, RefreshButtonHeight),
                 Text = "刷新状态",
                 Font = new Font("Microsoft YaHei", 8.5F),
-                ForeColor = Color.FromArgb(13, 110, 253),
+                ForeColor = RefreshAccentColor,
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Margin = new Padding(0, 2, 0, 2),
                 TextAlign = ContentAlignment.MiddleCenter,
                 UseVisualStyleBackColor = false
             };
-            _refreshButton.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
+            _refreshButton.FlatAppearance.BorderColor = RefreshBorderColor;
             _refreshButton.FlatAppearance.BorderSize = 1;
-            _refreshButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+            _refreshButton.FlatAppearance.MouseOverBackColor = RefreshHoverBackColor;
+            _refreshButton.FlatAppearance.MouseDownBackColor = RefreshPressedBackColor;
             _refreshButton.Click += (s, e) => RefreshRequested?.Invoke(this, EventArgs.Empty);
             _toolTip.SetToolTip(_refreshButton, "刷新状态");
 
@@ -284,14 +293,14 @@ namespace HZCYKJTHardWare.Proxy.UI
         {
             _refreshButton.Enabled = enabled;
             _refreshButton.ForeColor = enabled
-                ? Color.FromArgb(13, 110, 253)
+                ? RefreshAccentColor
                 : Color.FromArgb(148, 163, 184);
         }
 
         public void ShowRefreshPending()
         {
             _summaryLabel.Text = "正在刷新状态…";
-            _summaryLabel.ForeColor = Color.FromArgb(22, 119, 255);
+            _summaryLabel.ForeColor = RefreshAccentColor;
             _toolTip.SetToolTip(_summaryLabel, "正在读取当前终端硬件状态");
         }
 
@@ -370,7 +379,7 @@ namespace HZCYKJTHardWare.Proxy.UI
             if (states.Contains(HardwareVisualState.Abnormal))
                 _summaryLabel.ForeColor = Color.FromArgb(220, 38, 38);
             else if (states.Contains(HardwareVisualState.Starting))
-                _summaryLabel.ForeColor = Color.FromArgb(22, 119, 255);
+                _summaryLabel.ForeColor = RefreshAccentColor;
             else if (states.Contains(HardwareVisualState.Offline) ||
                      states.Contains(HardwareVisualState.Unknown))
                 _summaryLabel.ForeColor = Color.FromArgb(100, 116, 139);

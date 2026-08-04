@@ -19,12 +19,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
         public void ProductVersion_IsEmbeddedAndVisibleInMainWindow()
         {
             var assembly = typeof(MainForm).Assembly;
-            Assert.AreEqual(new Version(1, 2, 9, 0), assembly.GetName().Version);
-            Assert.AreEqual("1.2.9.0",
+            Assert.AreEqual(new Version(1, 3, 0, 0), assembly.GetName().Version);
+            Assert.AreEqual("1.3.0.0",
                 assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version);
-            Assert.AreEqual("1.2.9",
+            Assert.AreEqual("1.3.0",
                 assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                     .InformationalVersion);
+            Assert.AreEqual(ProductVersionInfo.DisplayName,
+                assembly.GetCustomAttribute<AssemblyTitleAttribute>().Title);
+            Assert.AreEqual(ProductVersionInfo.DisplayName,
+                assembly.GetCustomAttribute<AssemblyProductAttribute>().Product);
 
             RunInSta(() =>
             {
@@ -35,8 +39,12 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     var titleLabel = (Label)GetField(
                         typeof(MainForm), "lblPageTitle").GetValue(form);
-                    StringAssert.Contains(form.Text, ProductVersionInfo.DisplayVersion);
-                    StringAssert.Contains(titleLabel.Text, ProductVersionInfo.DisplayVersion);
+                    var trayIcon = (NotifyIcon)GetField(
+                        typeof(MainForm), "_trayIcon").GetValue(form);
+                    Assert.AreEqual(ProductVersionInfo.WindowTitle, form.Text);
+                    Assert.AreEqual(ProductVersionInfo.DisplayName, titleLabel.Text);
+                    Assert.IsFalse(titleLabel.Text.Contains(ProductVersionInfo.DisplayVersion));
+                    Assert.AreEqual(ProductVersionInfo.DisplayName, trayIcon.Text);
                 }
             });
         }
@@ -126,6 +134,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     Assert.AreEqual(1, refreshButtons.Count);
                     Assert.AreEqual("刷新状态", refreshButtons[0].Text);
+                    Assert.AreEqual(Color.FromArgb(78, 149, 217),
+                        refreshButtons[0].ForeColor,
+                        "刷新按钮文字应与主操作按钮使用相同参考蓝");
+                    Assert.AreEqual(Color.White, refreshButtons[0].BackColor);
+                    Assert.AreEqual(Color.FromArgb(190, 211, 233),
+                        refreshButtons[0].FlatAppearance.BorderColor);
+                    Assert.AreEqual(Color.FromArgb(238, 245, 252),
+                        refreshButtons[0].FlatAppearance.MouseOverBackColor);
+                    Assert.AreEqual(Color.FromArgb(220, 233, 247),
+                        refreshButtons[0].FlatAppearance.MouseDownBackColor);
                     Assert.IsInstanceOfType(refreshButtons[0].Parent, typeof(TableLayoutPanel),
                         "刷新按钮应位于右侧横向布局中，避免被摘要文字遮挡");
                     var refreshTextSize = TextRenderer.MeasureText(
@@ -179,9 +197,19 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     panel.SetRefreshEnabled(false);
                     Assert.IsFalse(refreshButtons[0].Enabled);
+                    Assert.AreEqual(Color.FromArgb(148, 163, 184),
+                        refreshButtons[0].ForeColor);
 
                     panel.SetRefreshEnabled(true);
                     Assert.IsTrue(refreshButtons[0].Enabled);
+                    Assert.AreEqual(Color.FromArgb(78, 149, 217),
+                        refreshButtons[0].ForeColor);
+
+                    panel.ShowRefreshPending();
+                    Assert.AreEqual("正在刷新状态…", summaryLabel.Text);
+                    Assert.AreEqual(Color.FromArgb(78, 149, 217),
+                        summaryLabel.ForeColor,
+                        "刷新中的信息提示应与按钮使用相同参考蓝");
                 }
             });
         }
@@ -325,6 +353,147 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                         "预览控制应仅保留开始/停止两个操作按钮，避免按钮重叠");
                     Assert.IsFalse(previewControl.Controls.ContainsKey("btnStartCameraPreview"));
                     Assert.IsFalse(previewControl.Controls.ContainsKey("btnStopPlatePreviewRJ3"));
+
+                    var serviceButton = (Button)GetField(
+                        formType, "btnStopServer").GetValue(form);
+                    var previewStartButton = (Button)GetField(
+                        formType, "_btnStartSelectedPreview").GetValue(form);
+                    var previewHint = (Label)GetField(
+                        formType, "_lblPreviewControlHint").GetValue(form);
+                    var serviceLayout = (TableLayoutPanel)GetField(
+                        formType, "tlpService").GetValue(form);
+                    var operationLayout = (TableLayoutPanel)GetField(
+                        formType, "tlpOperation").GetValue(form);
+                    var previewTitle = (Label)GetField(
+                        formType, "lblCardPreviewControl").GetValue(form);
+
+                    Assert.AreEqual(serviceButton.BackColor, previewStartButton.BackColor,
+                        "三组操作按钮的默认底色应一致");
+                    Assert.AreEqual(serviceButton.ForeColor, previewStartButton.ForeColor,
+                        "三组操作按钮的默认文字颜色应一致");
+                    Assert.AreEqual(Color.FromArgb(78, 149, 217),
+                        serviceButton.ForeColor,
+                        "普通按钮文字应使用参考图提取的蓝色");
+                    Assert.AreEqual(Color.White, serviceLayout.BackColor);
+                    Assert.AreEqual(Color.White, operationLayout.BackColor);
+                    Assert.AreEqual(Color.White, previewControl.BackColor);
+                    Assert.AreEqual(Color.White, comboBox.BackColor);
+                    Assert.AreEqual(Color.White, previewHint.BackColor,
+                        "预览控制提示文字底色应与其他卡片统一为白色");
+                    Assert.AreEqual(Color.White, previewTitle.BackColor,
+                        "预览控制标题底色应与其他卡片统一为白色");
+
+                    var setPersistentStyle = GetMethod(
+                        formType, "SetPersistentButtonStyle");
+                    setPersistentStyle.Invoke(form, new object[] { serviceButton, true });
+                    setPersistentStyle.Invoke(form, new object[] { previewStartButton, true });
+
+                    Assert.AreEqual(serviceButton.BackColor, previewStartButton.BackColor,
+                        "服务状态和预览状态按钮应使用相同的选中底色");
+                    Assert.AreEqual(serviceButton.ForeColor, previewStartButton.ForeColor,
+                        "服务状态和预览状态按钮应使用相同的选中文字颜色");
+                    Assert.AreNotEqual(Color.FromArgb(13, 110, 253),
+                        serviceButton.BackColor,
+                        "选中状态不得继续使用原高饱和纯蓝底色");
+                    Assert.AreEqual(Color.FromArgb(78, 149, 217),
+                        serviceButton.BackColor,
+                        "选中状态应使用参考图提取的蓝色底色");
+                    Assert.AreEqual(Color.White, serviceButton.ForeColor,
+                        "参考蓝底色应使用白色选中文字");
+                }
+            });
+        }
+
+        [TestMethod]
+        public void FinalStartupLayout_ReflowsStableClientAreaAndResizeKeepsUserSplitter()
+        {
+            RunInSta(() =>
+            {
+                using (var form = new MainForm())
+                {
+                    StopTimer(form, "_uiLogTimer");
+                    StopTimer(form, "_monitorTimer");
+                    form.CreateControl();
+                    form.Size = new Size(
+                        Math.Max(form.MinimumSize.Width, 1600),
+                        Math.Max(form.MinimumSize.Height, 1000));
+                    form.PerformLayout();
+
+                    var formType = typeof(MainForm);
+                    GetMethod(formType, "ApplyFinalStartupLayout").Invoke(form, null);
+
+                    var panelHeader = (Panel)GetField(
+                        formType, "panelHeader").GetValue(form);
+                    var panelTop = (Panel)GetField(
+                        formType, "panelTop").GetValue(form);
+                    var headerLayout = (TableLayoutPanel)GetField(
+                        formType, "headerLayout").GetValue(form);
+                    var hardwareHealthPanel = (HardwareHealthPanel)GetField(
+                        formType, "_hardwareHealthPanel").GetValue(form);
+                    var mainContentSplit = (SplitContainer)GetField(
+                        formType, "_mainContentSplit").GetValue(form);
+                    var previewLayout = (TableLayoutPanel)GetField(
+                        formType, "previewLayout").GetValue(form);
+                    var memoLog = (RichTextBox)GetField(
+                        formType, "memoLog").GetValue(form);
+
+                    var expectedHeaderHeight = headerLayout.MinimumSize.Height +
+                        panelHeader.Padding.Vertical + hardwareHealthPanel.Height;
+                    Assert.AreEqual(expectedHeaderHeight, panelHeader.Height,
+                        "顶部总高度只能包含一次健康检测区高度");
+
+                    var firstLayoutHeight = panelHeader.Height;
+                    GetMethod(formType, "ApplyFinalStartupLayout").Invoke(form, null);
+                    Assert.AreEqual(firstLayoutHeight, panelHeader.Height,
+                        "重复执行最终启动布局不应继续增加顶部高度");
+
+                    Assert.AreEqual(panelHeader.Bottom, panelTop.Top,
+                        "最终启动布局后顶部信息区与操作区应连续排列");
+                    Assert.IsTrue(mainContentSplit.ClientSize.Height >
+                        mainContentSplit.Panel1MinSize + mainContentSplit.Panel2MinSize,
+                        "最终启动布局应为预览区和日志区保留有效客户区");
+                    Assert.IsTrue(previewLayout.Width > 0 && previewLayout.Height > 0,
+                        "最终启动布局后预览网格应立即获得有效尺寸");
+
+                    var preferredLogHeight = (int)GetMethod(
+                        formType, "CalculatePreferredStartupLogPanelHeight")
+                        .Invoke(form, null);
+                    var maximumLogHeight = mainContentSplit.ClientSize.Height -
+                        mainContentSplit.Panel1MinSize - mainContentSplit.SplitterWidth;
+                    var expectedLogHeight = Math.Max(mainContentSplit.Panel2MinSize,
+                        Math.Min(maximumLogHeight, preferredLogHeight));
+                    Assert.AreEqual(expectedLogHeight, mainContentSplit.Panel2.Height,
+                        "首次启动应优先使用日志首选高度，空间不足时必须为预览区保留最小高度");
+                    if (maximumLogHeight >= preferredLogHeight)
+                    {
+                        Assert.IsTrue(memoLog.Height >= 180,
+                            "空间充足时应至少保留 180px 日志正文可视区域");
+                    }
+                    else
+                    {
+                        Assert.AreEqual(mainContentSplit.Panel1MinSize,
+                            mainContentSplit.Panel1.Height,
+                            "空间不足时只能压缩日志区，不能继续挤压预览区");
+                    }
+                    Assert.IsTrue(mainContentSplit.Panel1.Height >=
+                        mainContentSplit.Panel1MinSize,
+                        "增加日志区高度时不能挤压预览区到最小高度以下");
+
+                    var maximumDistance = mainContentSplit.ClientSize.Height -
+                        mainContentSplit.Panel2MinSize - mainContentSplit.SplitterWidth;
+                    if (maximumDistance > mainContentSplit.Panel1MinSize)
+                    {
+                        mainContentSplit.SplitterDistance =
+                            mainContentSplit.Panel1MinSize +
+                            (maximumDistance - mainContentSplit.Panel1MinSize) / 2;
+                        var userDistance = mainContentSplit.SplitterDistance;
+
+                        GetMethod(formType, "RefreshResponsiveWindowLayout")
+                            .Invoke(form, new object[] { false });
+
+                        Assert.AreEqual(userDistance, mainContentSplit.SplitterDistance,
+                            "普通 Resize 刷新不能重置用户拖动后的日志分隔条位置");
+                    }
                 }
             });
         }

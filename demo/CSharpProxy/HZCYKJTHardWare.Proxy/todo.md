@@ -325,6 +325,30 @@ Code Review + 长期运行稳定性修复（已完成）
 - [x] C# Proxy x86 Release formal `bin\x86\Release\net46` build: passed, 0 errors, 0 warnings.
 - [ ] Third-party Demo现场铺满与闪屏验证：待验证。
 
+## 2026-08-03 Proxy/DLL long-run lifecycle hardening (Plan A)
+
+### Completed
+
+1. Native iris restore worker is now started on demand, explicitly stopped before the shared HTTP client is deleted, and restartable after a later SDK initialization.
+2. Proxy health polling is now a cancelable and awaitable task; shutdown waits for the in-flight poll before disposing `TerminalClient`.
+3. Transport shutdown uses a stable handler snapshot, observes stop-task failures, and defers semaphore disposal until active handlers exit.
+4. Critical shutdown/request exceptions retain concise UI text plus `ERROR` severity and full stack traces in file logs.
+5. Added a health-checker shutdown idempotency regression test.
+
+### Platform and compatibility
+
+- Native DLL: `Release|Win32` / x86 for Delphi 7.
+- Proxy: `Release|x64`; x86 Proxy was intentionally not built.
+- DLL exports, calling convention, C ABI, parameters, structures, error codes, callbacks, HTTP formats, configuration, and hot-path behavior are unchanged.
+
+### Verification
+
+- [x] Native DLL `Release|Win32`: 0 warnings, 0 errors, `MACHINE:X86`.
+- [x] Proxy + Tests `Release|x64`: 0 warnings, 0 errors.
+- [x] x64 non-Integration tests: 112/112 passed.
+- [x] x64 Mock Integration tests: 10/10 passed outside the sandbox where `HttpListener` is supported.
+- [ ] Delphi 7 repeated Init/Release, immediate Release after terminal switch, device reconnect, and multi-day real-hardware soak test.
+
 ## 2026-06-16 MJPEG direct paint without clear
 
 ### Cause

@@ -167,7 +167,7 @@ namespace HZCYKJTHardWare.Proxy
             this.lblPageTitle.Name = "lblPageTitle";
             this.lblPageTitle.Size = new System.Drawing.Size(528, 180);
             this.lblPageTitle.TabIndex = 0;
-            this.lblPageTitle.Text = "HZCYJKTHardWare\r\n后台服务";
+            this.lblPageTitle.Text = "五合一车道硬件平台";
             this.lblPageTitle.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // 控件：lblServiceStatus
@@ -1001,7 +1001,7 @@ namespace HZCYKJTHardWare.Proxy
             this.MinimumSize = new System.Drawing.Size(1894, 1369);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "HZCYJKTHardWare - 后端服务";
+            this.Text = "五合一车道硬件平台";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.MainForm_FormClosing);
             this.Load += new System.EventHandler(this.MainForm_Load);
             this.Resize += new System.EventHandler(this.MainForm_Resize);

@@ -247,6 +247,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (Interlocked.Exchange(ref _stopped, 1) != 0)
                 return;
+            // 先取消并收敛健康轮询，确保后续释放 TerminalClient 时
+            // 不再存在访问共享 HttpClient 或发送 UI 通知的在途任务。
+            try { _healthChecker.StopAsync(5000).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Logger.Error("[服务] 健康检测器停止异常", ex); }
             // 通过 Runtime 有序关闭，所有步骤共享约 5 秒时限
             try { _runtime.StopAsync().GetAwaiter().GetResult(); }
             catch (Exception ex) { Logger.Error("[服务] 关闭异常", ex); }
@@ -265,9 +269,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             SafeDispose(_taskTracker, nameof(ActiveTasksTracker));
             SafeDispose(_transport, nameof(TransportLayer));
             SafeDispose(_previewManager, nameof(PreviewManager));
+            SafeDispose(_healthChecker, nameof(TerminalHealthChecker));
             SafeDispose(_terminalClient, nameof(TerminalClient));
             SafeDispose(_dllCallback, nameof(DllCallbackSender));
-            SafeDispose(_healthChecker, nameof(TerminalHealthChecker));
         }
 
         private static void SafeDispose(IDisposable component, string name)
@@ -295,7 +299,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         result, 2000).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex) { _log($"[DLL请求] 处理异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[DLL请求] 处理异常", ex); }
         }
 
         private async Task HandleCallbackRequest(TcpClient client)
@@ -332,7 +336,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                             await _callbackHandler.HandleAsync(body, remoteAddress, callbackPath)
                                 .ConfigureAwait(false);
                         }
-                        catch (Exception ex) { _log("[终端回调] 后台处理异常: " + ex.Message); }
+                        catch (Exception ex) { LogException("[终端回调] 后台处理异常", ex); }
                     }, "terminal_callback_handler");
 
                     if (!accepted)
@@ -349,7 +353,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                         "\",\"status\":\"accepted\"}", 30000).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex) { _log($"[终端回调] HTTP处理异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[终端回调] HTTP处理异常", ex); }
+        }
+
+        private void LogException(string context, Exception ex)
+        {
+            Logger.Error(context, ex);
+            _log($"{context}: {ex.Message}");
         }
 
         private static async Task<(string method, string path, string body)>

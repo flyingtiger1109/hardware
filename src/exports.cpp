@@ -76,38 +76,49 @@ static std::string LogValue(const char* value, size_t maxLength = 256) {
 class IrisPreviewRestoreWorker {
 public:
     static IrisPreviewRestoreWorker& Instance() {
-        static IrisPreviewRestoreWorker worker;
-        return worker;
+        // 由 ReleaseSdk 显式停止线程。进程退出时不析构该对象，避免在
+        // Windows loader lock 中等待后台线程。
+        static IrisPreviewRestoreWorker* worker = new IrisPreviewRestoreWorker();
+        return *worker;
     }
 
     void Enqueue(const std::string& delphiServerUrl,
                  const std::string& requestId,
                  HWND hwnd) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        delphiServerUrl_ = delphiServerUrl;
-        requestId_ = requestId;
-        hwnd_ = hwnd;
-        hasPending_ = true;
+        std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!thread_.joinable()) {
+                stopping_ = false;
+                thread_ = std::thread([this]() { Run(); });
+            }
+            delphiServerUrl_ = delphiServerUrl;
+            requestId_ = requestId;
+            hwnd_ = hwnd;
+            hasPending_ = true;
+        }
         LOG_INFO("接口", "虹膜预览恢复已进入后台队列");
         cv_.notify_one();
     }
 
-private:
-    IrisPreviewRestoreWorker()
-        : thread_([this]() { Run(); }) {
-    }
-
-    ~IrisPreviewRestoreWorker() {
+    void Stop() {
+        std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stopping_ = true;
             hasPending_ = false;
+            delphiServerUrl_.clear();
+            requestId_.clear();
+            hwnd_ = nullptr;
         }
-        cv_.notify_one();
+        cv_.notify_all();
         if (thread_.joinable()) {
             thread_.join();
         }
     }
+
+private:
+    IrisPreviewRestoreWorker() = default;
 
     void Run() {
         for (;;) {
@@ -156,6 +167,7 @@ private:
         }
     }
 
+    std::mutex lifecycleMutex_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::thread thread_;
@@ -1070,6 +1082,9 @@ static int ReleaseSdkBody(bool& canResumeRunning) {
         LOG_ERROR("接口", "释放SDK失败：第三方事件回调线程未能在1000ms内退出");
         return HZCYKJTHardWare_RET_FAILED;
     }
+    // 该 Worker 会通过 DelphiProxy 使用 ctx.http_client，必须在删除
+    // 共享 HTTP 客户端前停止并等待在途恢复请求。
+    IrisPreviewRestoreWorker::Instance().Stop();
     ExternalPreviewLeaseMonitor::Instance().Stop();
     StopProxyExternalPreviewsOnRelease();
     EventDispatcher::Instance().SetCallback(nullptr);

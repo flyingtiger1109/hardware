@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Infrastructure;
 using Newtonsoft.Json.Linq;
 
@@ -23,7 +24,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         private readonly TerminalManager _terminalManager;
         private readonly Action<string> _log;
         private readonly Action<HealthStatus> _onStatusChanged;
+        private readonly object _lifecycleLock = new object();
+        private readonly CancellationTokenSource _stopCts = new CancellationTokenSource();
         private System.Threading.Timer _timer;
+        private Task _activePollTask = Task.CompletedTask;
         private int _running;
         private int _refreshPending;
         private int _retryAttempt;
@@ -40,13 +44,16 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
         public void Start()
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(TerminalHealthChecker));
-            if (_timer != null)
-                return;
+            lock (_lifecycleLock)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(TerminalHealthChecker));
+                if (_timer != null)
+                    return;
 
-            _timer = new System.Threading.Timer(PollCallback, null,
-                InitialDelayMs, Timeout.Infinite);
+                _timer = new System.Threading.Timer(PollCallback, null,
+                    InitialDelayMs, Timeout.Infinite);
+            }
             _log("[健康检测] 已启动，正常轮询间隔 5 分钟；异常状态按 5/10/20/40/60 秒退避复查");
         }
 
@@ -57,30 +64,37 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
         public void RequestCheck(bool resetRetryAttempt)
         {
-            if (_disposed)
-                return;
+            lock (_lifecycleLock)
+            {
+                if (_disposed)
+                    return;
 
-            Interlocked.Exchange(ref _refreshPending, 1);
-            if (resetRetryAttempt)
-                Interlocked.Exchange(ref _retryAttempt, 0);
-            var timer = _timer;
-            timer?.Change(0, Timeout.Infinite);
+                Interlocked.Exchange(ref _refreshPending, 1);
+                if (resetRetryAttempt)
+                    Interlocked.Exchange(ref _retryAttempt, 0);
+                _timer?.Change(0, Timeout.Infinite);
+            }
         }
 
-        // 审查风险：async void 回调在 Dispose 后仍可能继续执行并触发状态通知。
-        // 建议使用可等待的 Task、取消令牌及 Timer.Dispose(WaitHandle)，确保释放前完成在途轮询。
-        private async void PollCallback(object state)
+        private void PollCallback(object state)
         {
-            if (_disposed)
-                return;
-            if (Interlocked.Exchange(ref _running, 1) == 1)
+            lock (_lifecycleLock)
             {
-                Interlocked.Exchange(ref _refreshPending, 1);
-                return;
+                if (_disposed)
+                    return;
+                if (Interlocked.Exchange(ref _running, 1) == 1)
+                {
+                    Interlocked.Exchange(ref _refreshPending, 1);
+                    return;
+                }
+
+                Interlocked.Exchange(ref _refreshPending, 0);
+                _activePollTask = PollAsync(_stopCts.Token);
             }
+        }
 
-            Interlocked.Exchange(ref _refreshPending, 0);
-
+        private async Task PollAsync(CancellationToken cancellationToken)
+        {
             TerminalRouteSnapshot route = null;
             var nextDelayMs = PollIntervalMs;
             try
@@ -94,7 +108,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 }
 
                 var (ok, response) = await _terminalClient.GetJsonAsync(
-                    route.BaseUrl, "/resources/devices/status", 5000).ConfigureAwait(false);
+                    route.BaseUrl, "/resources/devices/status", 5000,
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 HealthStatus status;
 
@@ -129,29 +145,41 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
                 NotifyStatus(status);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 服务停止时的预期取消，不记录为运行异常。
+            }
             catch (Exception ex)
             {
                 Logger.Error("[健康检测] 轮询异常", ex);
                 nextDelayMs = ResolveNextDelayAndUpdateRetry(
                     CreateFailedStatus("健康检测执行失败"));
-                if (route == null ||
-                    _terminalManager.CurrentRoute.RouteEpoch == route.RouteEpoch)
+                if (!cancellationToken.IsCancellationRequested && (route == null ||
+                    _terminalManager.CurrentRoute.RouteEpoch == route.RouteEpoch))
                     NotifyStatus(CreateFailedStatus("健康检测执行失败"));
-                else
+                else if (!cancellationToken.IsCancellationRequested)
                     RequestCheck();
             }
             finally
             {
                 Interlocked.Exchange(ref _running, 0);
-                if (!_disposed)
-                {
-                    if (Interlocked.Exchange(ref _refreshPending, 0) == 1)
-                        _timer?.Change(0, Timeout.Infinite);
-                    else if (nextDelayMs == Timeout.Infinite)
-                        _timer?.Change(Timeout.Infinite, Timeout.Infinite);
-                    else
-                        _timer?.Change(nextDelayMs, Timeout.Infinite);
-                }
+                ScheduleNext(nextDelayMs, cancellationToken);
+            }
+        }
+
+        private void ScheduleNext(int nextDelayMs, CancellationToken cancellationToken)
+        {
+            lock (_lifecycleLock)
+            {
+                if (_disposed || cancellationToken.IsCancellationRequested || _timer == null)
+                    return;
+
+                if (Interlocked.Exchange(ref _refreshPending, 0) == 1)
+                    _timer.Change(0, Timeout.Infinite);
+                else if (nextDelayMs == Timeout.Infinite)
+                    _timer.Change(Timeout.Infinite, Timeout.Infinite);
+                else
+                    _timer.Change(nextDelayMs, Timeout.Infinite);
             }
         }
 
@@ -324,12 +352,67 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             };
         }
 
+        public async Task StopAsync(int timeoutMs = 5000)
+        {
+            Timer timer;
+            Task activePollTask;
+            var initiateStop = false;
+
+            lock (_lifecycleLock)
+            {
+                if (!_disposed)
+                {
+                    _disposed = true;
+                    initiateStop = true;
+                }
+                timer = _timer;
+                _timer = null;
+                activePollTask = _activePollTask;
+            }
+
+            if (initiateStop)
+            {
+                try { timer?.Change(Timeout.Infinite, Timeout.Infinite); }
+                catch (ObjectDisposedException) { }
+                timer?.Dispose();
+                try { _stopCts.Cancel(); }
+                catch (ObjectDisposedException) { }
+            }
+
+            if (activePollTask == null || activePollTask.IsCompleted)
+            {
+                if (activePollTask != null)
+                    await ObserveStoppedPollAsync(activePollTask).ConfigureAwait(false);
+                return;
+            }
+
+            var boundedTimeoutMs = Math.Max(0, timeoutMs);
+            var completed = await Task.WhenAny(activePollTask,
+                Task.Delay(boundedTimeoutMs)).ConfigureAwait(false);
+            if (completed != activePollTask)
+            {
+                Logger.Warn($"[健康检测] 停止等待超时: timeout_ms={boundedTimeoutMs}");
+                return;
+            }
+
+            await ObserveStoppedPollAsync(activePollTask).ConfigureAwait(false);
+        }
+
+        private static async Task ObserveStoppedPollAsync(Task activePollTask)
+        {
+            try
+            {
+                await activePollTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 预期取消。
+            }
+        }
+
         public void Dispose()
         {
-            _disposed = true;
-            _timer?.Change(Timeout.Infinite, Timeout.Infinite);
-            _timer?.Dispose();
-            _timer = null;
+            StopAsync().GetAwaiter().GetResult();
         }
     }
 

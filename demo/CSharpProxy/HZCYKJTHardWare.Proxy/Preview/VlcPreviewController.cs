@@ -22,7 +22,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly int _sourceWidth;
         private readonly int _sourceHeight;
         private readonly bool _swapDimensions;
-        private readonly PreviewScaleMode _scaleMode;
         private readonly bool _visible;
         private readonly bool _directRenderTarget;
 
@@ -38,8 +37,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private VlcPreviewController(string description, string rtspUrl, IntPtr parentHwnd,
             int networkCachingMs, int liveCachingMs, string rtspTransport,
-            int sourceWidth, int sourceHeight, bool swapDimensions,
-            PreviewScaleMode scaleMode, bool visible,
+            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible,
             bool directRenderTarget)
         {
             _description = description;
@@ -51,7 +49,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sourceWidth = sourceWidth;
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
-            _scaleMode = scaleMode;
             _visible = visible;
             _directRenderTarget = directRenderTarget;
 
@@ -74,20 +71,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             int sourceWidth, int sourceHeight, bool swapDimensions, bool visible, int timeoutMs,
             bool directRenderTarget = false)
         {
-            return await StartAsyncWithScaleMode(description, rtspUrl, parentHwnd,
-                networkCachingMs, liveCachingMs, rtspTransport,
-                sourceWidth, sourceHeight, swapDimensions, visible, timeoutMs,
-                directRenderTarget, PreviewScaleMode.Stretch).ConfigureAwait(false);
-        }
-
-        internal static async Task<VlcPreviewController> StartAsyncWithScaleMode(
-            string description, string rtspUrl,
-            IntPtr parentHwnd, int networkCachingMs, int liveCachingMs, string rtspTransport,
-            int sourceWidth, int sourceHeight, bool swapDimensions, bool visible, int timeoutMs,
-            bool directRenderTarget, PreviewScaleMode scaleMode)
-        {
             var controller = new VlcPreviewController(description, rtspUrl, parentHwnd, networkCachingMs,
-                liveCachingMs, rtspTransport, sourceWidth, sourceHeight, swapDimensions, scaleMode, visible,
+                liveCachingMs, rtspTransport, sourceWidth, sourceHeight, swapDimensions, visible,
                 directRenderTarget);
 
             Interlocked.Increment(ref _createdThreadCount);
@@ -165,10 +150,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 _player = new VlcPreviewPlayer();
-                var ok = _player.PlayWithScaleMode(
-                    _rtspUrl, _parentHwnd, _networkCachingMs, _liveCachingMs,
+                var ok = _player.Play(_rtspUrl, _parentHwnd, _networkCachingMs, _liveCachingMs,
                     _rtspTransport, _sourceWidth, _sourceHeight, _swapDimensions, _visible,
-                    _directRenderTarget, _scaleMode);
+                    _directRenderTarget);
 
                 _running = ok && _player.IsRunning;
                 _startTcs.TrySetResult(ok);
@@ -176,15 +160,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (!ok || _abandoned)
                     return;
 
-                var nextLayoutRefreshUtc = DateTime.UtcNow;
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
-                    if (DateTime.UtcNow >= nextLayoutRefreshUtc)
-                    {
-                        _player.ApplyVideoLayout();
-                        nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(250);
-                    }
                     Thread.Sleep(20);
                 }
             }

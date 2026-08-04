@@ -28,7 +28,7 @@ namespace HZCYKJTHardWare.Proxy
                 if (!createdNew)
                 {
                     Application.EnableVisualStyles();
-                    MessageBox.Show("程序已在运行，请勿重复打开。", "HZCYKJTHardWare 后台服务",
+                    MessageBox.Show("程序已在运行，请勿重复打开。", ProductVersionInfo.DisplayName,
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }

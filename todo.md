@@ -1432,3 +1432,18 @@
 - [ ] 正式部署前在目标目录核对 EXE 文件属性、窗口标题和启动日志版本号一致。
 
 兼容性：未改变 DLL ABI、导出函数、调用约定、HTTP/终端协议、回调、配置、第三方 HWND、MJPEG 请求频率或目标最大帧率。预期实际显示帧率更接近30fps，CPU/GDI 占用可能小幅上升。回退时恢复 `MjpegPreviewController`、`AssemblyInfo`、`MainForm` 和对应测试中的本节差异。
+
+## Proxy/DLL 长稳生命周期加固方案 A（2026-08-03）
+
+- [x] `IrisPreviewRestoreWorker` 改为按需启动、可显式停止/重启，`ReleaseSdk` 在删除共享 `HttpClient` 前先等待 Worker 退出。
+- [x] 移除 Worker 在 DLL 卸载静态析构期间等待线程的 loader-lock 风险。
+- [x] `TerminalHealthChecker` 改为可取消、可等待 Task，停止后不再访问 `TerminalClient` 或发送 UI 通知。
+- [x] 健康检测器先于 `TerminalClient` 释放；新增停止幂等测试。
+- [x] `TransportLayer` 使用 Handler 快照排空，待 Handler 完成后再释放 `SemaphoreSlim`。
+- [x] `ProxyRuntime` 显式观察 Transport 停止异常，关键异常写入 `ERROR` 级别和完整堆栈，UI 保留精简摘要。
+- [x] Native DLL `Release|Win32` 编译：0 warning、0 error，`MACHINE:X86`。
+- [x] Proxy + Tests `Release|x64` 编译：0 warning、0 error；本轮未编译 x86 Proxy。
+- [x] x64 非 Integration 112/112、Mock Integration 10/10 通过。
+- [ ] 修改后使用 Delphi 7 Demo 验证重复 Init/Release、终端切换后立即 Release 和多日真实设备长稳。
+
+兼容性：DLL 导出、`__stdcall`/C ABI、参数、结构体、错误码、回调、HTTP/终端协议和配置均未改变；性能热路径未改变。详细风险、验证与回退见 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。

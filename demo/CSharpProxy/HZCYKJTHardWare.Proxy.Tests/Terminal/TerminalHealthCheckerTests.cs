@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using HZCYKJTHardWare.Proxy.Terminal;
 using HZCYKJTHardWare.Proxy.UI;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -128,6 +129,19 @@ namespace HZCYKJTHardWare.Proxy.Tests.Terminal
                 "内部刷新仍应能在终端切换等场景重置退避链路");
 
             checker.Dispose();
+        }
+
+        [TestMethod]
+        public async Task StopAsync_BeforeInitialPoll_IsIdempotentAndPreventsRestart()
+        {
+            var checker = new TerminalHealthChecker(null, null, _ => { }, null);
+
+            checker.Start();
+            await checker.StopAsync(1000);
+            await checker.StopAsync(1000);
+            checker.Dispose();
+
+            Assert.ThrowsException<ObjectDisposedException>(() => checker.Start());
         }
 
         private static void AssertPresentation(

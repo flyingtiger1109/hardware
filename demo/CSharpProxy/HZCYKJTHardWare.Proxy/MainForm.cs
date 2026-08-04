@@ -26,6 +26,7 @@ namespace HZCYKJTHardWare.Proxy
         private System.Windows.Forms.Timer _uiLogTimer;
         private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
         private int _pendingUiLogCount;
+        private bool _finalStartupLayoutScheduled;
         private int _pendingFaceCaptureSuccessCount;
         private int _pendingFingerprintCaptureSuccessCount;
         private DateTime _lastCaptureSummaryUtc = DateTime.UtcNow;
@@ -45,6 +46,24 @@ namespace HZCYKJTHardWare.Proxy
         private Panel _previewToolbar;
         private Button _btnToggleLog;
         private int _lastExpandedLogHeight;
+        private const int PreferredLogBodyDesignHeight = 360;
+        private const int MinimumVisibleLogBodyHeight = 180;
+        private static readonly Color ActionButtonTextColor =
+            Color.FromArgb(78, 149, 217);
+        private static readonly Color ActionButtonBorderColor =
+            Color.FromArgb(190, 211, 233);
+        private static readonly Color ActionButtonHoverBackColor =
+            Color.FromArgb(238, 245, 252);
+        private static readonly Color ActionButtonPressedBackColor =
+            Color.FromArgb(220, 233, 247);
+        private static readonly Color ActionButtonActiveBackColor =
+            Color.FromArgb(78, 149, 217);
+        private static readonly Color ActionButtonActiveTextColor =
+            Color.White;
+        private static readonly Color ActionButtonActiveBorderColor =
+            Color.FromArgb(63, 130, 197);
+        private static readonly Color ActionButtonActiveHoverBackColor =
+            Color.FromArgb(67, 139, 205);
 
         private System.Windows.Forms.Timer _monitorTimer;
         private System.Threading.Timer _midnightClearTimer;
@@ -189,9 +208,8 @@ namespace HZCYKJTHardWare.Proxy
 
         private void ApplyVersionDisplay()
         {
-            Text = "HZCYJKTHardWare - 后端服务 " + ProductVersionInfo.DisplayVersion;
-            lblPageTitle.Text = "HZCYJKTHardWare\r\n后台服务 " +
-                ProductVersionInfo.DisplayVersion;
+            Text = ProductVersionInfo.WindowTitle;
+            lblPageTitle.Text = ProductVersionInfo.DisplayName;
         }
 
         private int ScaleDesignPixels(int designPixels, int minimum)
@@ -202,12 +220,17 @@ namespace HZCYKJTHardWare.Proxy
 
         private void ApplyCompactVerticalLayout()
         {
-            panelHeader.Height = ScaleDesignPixels(180, 120);
+            var headerInfoAreaHeight = ScaleDesignPixels(180, 120);
             panelHeader.Padding = new Padding(
                 ScaleDesignPixels(48, 24),
                 ScaleDesignPixels(12, 8),
                 ScaleDesignPixels(48, 24),
                 ScaleDesignPixels(12, 8));
+
+            if (_hardwareHealthPanel == null)
+                panelHeader.Height = headerInfoAreaHeight;
+            else
+                EnsureHeaderHasHealthPanelSpace(headerInfoAreaHeight);
 
             var headerCaptionHeight = ScaleDesignPixels(44, 28);
             lblDllListenCaption.Height = headerCaptionHeight;
@@ -263,12 +286,10 @@ namespace HZCYKJTHardWare.Proxy
 
             var requiredHeaderHeight =
                 headerHeightBeforeHealthPanel + _hardwareHealthPanel.Height;
-            if (panelHeader.Height < requiredHeaderHeight)
-                panelHeader.Height = requiredHeaderHeight;
-
             panelHeader.MinimumSize = new Size(
                 panelHeader.MinimumSize.Width,
-                Math.Max(panelHeader.MinimumSize.Height, requiredHeaderHeight));
+                requiredHeaderHeight);
+            panelHeader.Height = requiredHeaderHeight;
             headerLayout.MinimumSize = new Size(
                 headerLayout.MinimumSize.Width,
                 Math.Max(0, headerHeightBeforeHealthPanel - panelHeader.Padding.Vertical));
@@ -306,6 +327,15 @@ namespace HZCYKJTHardWare.Proxy
             ResetGridStyles(tlpService, 3);
             ResetGridStyles(tlpOperation, 3);
             tlpPreviewControl.Padding = new Padding(8, 6, 8, 8);
+            cardService.BackColor = Color.White;
+            cardOperation.BackColor = Color.White;
+            cardPreviewControl.BackColor = Color.White;
+            tlpService.BackColor = Color.White;
+            tlpOperation.BackColor = Color.White;
+            tlpPreviewControl.BackColor = Color.White;
+            lblCardService.BackColor = Color.White;
+            lblCardOperation.BackColor = Color.White;
+            lblCardPreviewControl.BackColor = Color.White;
 
             // 3. 视频容器
             panelPreview.BackColor = Color.FromArgb(249, 250, 251);
@@ -397,15 +427,16 @@ namespace HZCYKJTHardWare.Proxy
                 Width = ScaleDesignPixels(132, 92),
                 Text = "折叠日志",
                 Font = new Font("Microsoft YaHei", 8.5F),
-                ForeColor = Color.FromArgb(13, 110, 253),
+                ForeColor = ActionButtonTextColor,
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Margin = Padding.Empty,
                 UseVisualStyleBackColor = false
             };
-            _btnToggleLog.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
+            _btnToggleLog.FlatAppearance.BorderColor = ActionButtonBorderColor;
             _btnToggleLog.FlatAppearance.BorderSize = 1;
-            _btnToggleLog.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
+            _btnToggleLog.FlatAppearance.MouseOverBackColor = ActionButtonHoverBackColor;
+            _btnToggleLog.FlatAppearance.MouseDownBackColor = ActionButtonPressedBackColor;
             _btnToggleLog.Click += btnToggleLog_Click;
 
             _previewToolbar.Controls.Add(previewTitle);
@@ -499,8 +530,71 @@ namespace HZCYKJTHardWare.Proxy
 
         private void MainForm_Shown(object sender, EventArgs e)
         {
-            SetLogPanelHeight((int)Math.Round(_mainContentSplit.ClientSize.Height * 0.22));
+            if (_finalStartupLayoutScheduled)
+                return;
+
+            _finalStartupLayoutScheduled = true;
+            try
+            {
+                // Shown 触发时 WinForms 仍可能有一轮 DPI/客户区布局尚未完成。
+                // 延迟到当前消息之后，再按最终句柄、DPI 和客户区执行一次完整布局。
+                BeginInvoke(new Action(ApplyFinalStartupLayout));
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口正在销毁时无需补做启动布局。
+            }
+        }
+
+        private void ApplyFinalStartupLayout()
+        {
+            if (IsDisposed || Disposing || !IsHandleCreated)
+                return;
+
+            // 构造函数阶段的 CreateGraphics 可能取得系统 DPI，而非窗口最终 DPI。
+            // 在句柄和显示器确定后重新应用一次固定区域尺寸。
+            ApplyCompactVerticalLayout();
+
+            RefreshResponsiveWindowLayout(true);
+        }
+
+        private void RefreshResponsiveWindowLayout(bool resetLogPanelHeight)
+        {
+            if (IsDisposed || Disposing || !IsHandleCreated || ClientSize.IsEmpty)
+                return;
+
+            SuspendLayout();
+            try
+            {
+                panelHeader?.PerformLayout();
+                headerLayout?.PerformLayout();
+                _hardwareHealthPanel?.PerformLayout();
+                panelTop?.PerformLayout();
+                _mainContentSplit?.PerformLayout();
+                panelPreview?.PerformLayout();
+                panelLog?.PerformLayout();
+                _previewGridHost?.PerformLayout();
+            }
+            finally
+            {
+                ResumeLayout(true);
+            }
+
+            if (resetLogPanelHeight && _mainContentSplit != null)
+                SetLogPanelHeight(CalculatePreferredStartupLogPanelHeight());
+
             LayoutResponsivePreviewGrid();
+        }
+
+        private int CalculatePreferredStartupLogPanelHeight()
+        {
+            var visibleLogBodyHeight = ScaleDesignPixels(
+                PreferredLogBodyDesignHeight,
+                MinimumVisibleLogBodyHeight);
+            var logChromeHeight = lblLogTitle.Height + panelLogToolbar.Height +
+                panelLog.Padding.Vertical;
+            return Math.Max(_mainContentSplit.Panel2MinSize,
+                logChromeHeight + visibleLogBodyHeight);
         }
 
         private void MainContentSplit_SplitterMoved(object sender, SplitterEventArgs e)
@@ -540,7 +634,7 @@ namespace HZCYKJTHardWare.Proxy
             if (maximumHeight < _mainContentSplit.Panel2MinSize)
                 return;
 
-            var defaultHeight = (int)Math.Round(totalHeight * 0.22);
+            var defaultHeight = CalculatePreferredStartupLogPanelHeight();
             var height = requestedHeight > 0 ? requestedHeight : defaultHeight;
             height = Math.Max(_mainContentSplit.Panel2MinSize,
                 Math.Min(maximumHeight, height));
@@ -606,6 +700,7 @@ namespace HZCYKJTHardWare.Proxy
                 tlpPreviewControl.ColumnCount = 2;
                 tlpPreviewControl.RowCount = 3;
                 tlpPreviewControl.Dock = DockStyle.Fill;
+                tlpPreviewControl.BackColor = Color.White;
                 tlpPreviewControl.Padding = new Padding(8, 6, 8, 8);
                 tlpPreviewControl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
                 tlpPreviewControl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
@@ -661,6 +756,7 @@ namespace HZCYKJTHardWare.Proxy
                     Dock = DockStyle.Fill,
                     Font = new Font("Microsoft YaHei", 8.5F),
                     ForeColor = Color.FromArgb(100, 116, 139),
+                    BackColor = Color.White,
                     Text = "选择设备后点击开始/停止，预览画面显示在下方对应窗口。",
                     TextAlign = ContentAlignment.MiddleLeft,
                     AutoEllipsis = true,
@@ -715,18 +811,23 @@ namespace HZCYKJTHardWare.Proxy
 
         private static void StylePreviewActionButton(Button button, string text)
         {
-            button.BackColor = Color.White;
-            button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
-            button.FlatAppearance.BorderSize = 1;
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
-            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(219, 229, 254);
+            ApplyActionButtonBaseStyle(button);
             button.Font = new Font("Microsoft YaHei", 9F);
-            button.ForeColor = Color.FromArgb(13, 110, 253);
             button.Text = text;
-            button.UseVisualStyleBackColor = false;
             button.Dock = DockStyle.Fill;
             button.Margin = new Padding(4);
+        }
+
+        private static void ApplyActionButtonBaseStyle(Button button)
+        {
+            button.BackColor = Color.White;
+            button.ForeColor = ActionButtonTextColor;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderColor = ActionButtonBorderColor;
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.MouseOverBackColor = ActionButtonHoverBackColor;
+            button.FlatAppearance.MouseDownBackColor = ActionButtonPressedBackColor;
+            button.UseVisualStyleBackColor = false;
         }
 
         private PreviewDeviceOption GetSelectedPreviewOption()
@@ -773,7 +874,7 @@ namespace HZCYKJTHardWare.Proxy
         private void MainForm_Load(object sender, EventArgs e)
         {
             UpdateHeaderStatus();
-            Logger.Info("应用程序启动中... 版本=" + ProductVersionInfo.DisplayVersion);
+            Logger.Info(ProductVersionInfo.DisplayName + "应用程序启动中...");
             Logger.Info("[运行环境] 进程架构=" +
                 (Environment.Is64BitProcess ? "x64" : "x86") +
                 ", 操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
@@ -800,7 +901,7 @@ namespace HZCYKJTHardWare.Proxy
                 if (action == CloseAction.MinimizeToTray)
                 {
                     e.Cancel = true;
-                    AppendLog("关闭窗口：最小化到托盘，后台服务继续运行");
+                    AppendLog("关闭窗口：最小化到托盘，程序继续运行");
                     HideToTray();
                     return;
                 }
@@ -826,7 +927,14 @@ namespace HZCYKJTHardWare.Proxy
         private void MainForm_Resize(object sender, EventArgs e)
         {
             if (WindowState == FormWindowState.Minimized)
+            {
                 HideToTray();
+                return;
+            }
+
+            // 不重置用户拖动后的日志区高度，只刷新依赖客户区的响应式布局。
+            if (_finalStartupLayoutScheduled)
+                RefreshResponsiveWindowLayout(false);
         }
 
         private void InitializeTrayIcon()
@@ -842,7 +950,7 @@ namespace HZCYKJTHardWare.Proxy
             _trayIcon = new NotifyIcon
             {
                 Icon = _appIcon ?? SystemIcons.Application,
-                Text = "HZCYJKTHardWare 后端服务",
+                Text = ProductVersionInfo.DisplayName,
                 ContextMenuStrip = _trayMenu,
                 Visible = true
             };
@@ -866,7 +974,7 @@ namespace HZCYKJTHardWare.Proxy
             using (var btnMinimize = new Button())
             using (var btnExit = new Button())
             {
-                dialog.Text = "关闭后端服务";
+                dialog.Text = "关闭" + ProductVersionInfo.DisplayName;
                 dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dialog.StartPosition = FormStartPosition.CenterParent;
                 dialog.ClientSize = new Size(620, 230);
@@ -878,7 +986,7 @@ namespace HZCYKJTHardWare.Proxy
                 message.AutoSize = false;
                 message.Location = new Point(24, 34);
                 message.Size = new Size(572, 64);
-                message.Text = "请选择关闭方式：\r\n最小化到托盘会保持后台服务继续运行。";
+                message.Text = "请选择关闭方式：\r\n最小化到托盘后程序会继续运行。";
                 message.TextAlign = ContentAlignment.MiddleCenter;
 
                 buttonsPanel.AutoSize = false;
@@ -947,16 +1055,9 @@ namespace HZCYKJTHardWare.Proxy
 
         private void AddToGrid(TableLayoutPanel tlp, int col, int row, Button btn, string text, EventHandler handler)
         {
-            btn.BackColor = Color.White;
-            btn.FlatStyle = FlatStyle.Flat;
-            btn.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
-            btn.FlatAppearance.BorderSize = 1;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 246, 255);
-            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(219, 229, 254);
+            ApplyActionButtonBaseStyle(btn);
             btn.Font = new Font("Microsoft YaHei", 9F);
-            btn.ForeColor = Color.FromArgb(13, 110, 253);
             btn.Text = text;
-            btn.UseVisualStyleBackColor = false;
             btn.Dock = DockStyle.Fill;
             btn.Margin = new Padding(4);
             btn.Click += handler;
@@ -1003,7 +1104,7 @@ namespace HZCYKJTHardWare.Proxy
             }
             catch
             {
-                // 托盘隐藏失败不能影响后台服务运行
+                // 托盘隐藏失败不能影响程序运行
             }
         }
 
@@ -1018,7 +1119,7 @@ namespace HZCYKJTHardWare.Proxy
             }
             catch
             {
-                // 托盘恢复失败不能影响后台服务运行
+                // 托盘恢复失败不能影响程序运行
             }
         }
 
@@ -1233,20 +1334,22 @@ namespace HZCYKJTHardWare.Proxy
 
         private void SetPersistentButtonStyle(Button button, bool active)
         {
-            button.FlatStyle = FlatStyle.Flat;
-            button.UseVisualStyleBackColor = false;
+            ApplyActionButtonBaseStyle(button);
             button.BackColor = active
-                ? Color.FromArgb(13, 110, 253)
+                ? ActionButtonActiveBackColor
                 : Color.White;
             button.ForeColor = active
-                ? Color.White
-                : Color.FromArgb(13, 110, 253);
+                ? ActionButtonActiveTextColor
+                : ActionButtonTextColor;
             button.FlatAppearance.BorderColor = active
-                ? Color.FromArgb(13, 110, 253)
-                : Color.FromArgb(191, 219, 254);
+                ? ActionButtonActiveBorderColor
+                : ActionButtonBorderColor;
             button.FlatAppearance.MouseOverBackColor = active
-                ? Color.FromArgb(11, 94, 215)
-                : Color.FromArgb(239, 246, 255);
+                ? ActionButtonActiveHoverBackColor
+                : ActionButtonHoverBackColor;
+            button.FlatAppearance.MouseDownBackColor = active
+                ? ActionButtonActiveBorderColor
+                : ActionButtonPressedBackColor;
         }
 
         private void SetPreviewButtonState(Button startButton, Button stopButton, bool isPreviewing)

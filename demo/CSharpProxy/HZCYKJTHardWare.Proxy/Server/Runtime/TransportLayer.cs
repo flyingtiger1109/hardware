@@ -139,10 +139,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             foreach (var b in _bindings)
             {
                 if (b == null || b.ActiveHandlers.IsEmpty) continue;
-                var handlers = new Task[b.ActiveHandlers.Count];
-                var index = 0;
-                foreach (var task in b.ActiveHandlers.Values)
-                    handlers[index++] = task;
+                // ConcurrentDictionary 在 Count 和枚举之间可能变化，直接使用
+                // Values 快照避免预分配数组中留下 null Task。
+                var handlers = b.ActiveHandlers.Values;
                 await WaitUntilAsync(Task.WhenAll(handlers), drainDeadline).ConfigureAwait(false);
 
                 if (!b.ActiveHandlers.IsEmpty)
@@ -185,7 +184,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                         }
                         catch (Exception ex)
                         {
-                            _log($"[传输层] {binding.Name} 处理异常: {ex.Message}");
+                            LogException($"[传输层] {binding.Name} 处理异常", ex);
                         }
                         finally
                         {
@@ -213,17 +212,66 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 }
                 catch (Exception ex)
                 {
-                    _log($"[传输层] {binding.Name} 接收连接异常: {ex.Message}");
+                    LogException($"[传输层] {binding.Name} 接收连接异常", ex);
                 }
             }
         }
 
         private static async Task WaitUntilAsync(Task task, DateTime deadline)
         {
-            if (task == null || task.IsCompleted) return;
+            if (task == null) return;
+            if (task.IsCompleted)
+            {
+                await task.ConfigureAwait(false);
+                return;
+            }
             var remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
             if (remaining <= 0) return;
-            await Task.WhenAny(task, Task.Delay(remaining)).ConfigureAwait(false);
+            var completed = await Task.WhenAny(task, Task.Delay(remaining)).ConfigureAwait(false);
+            if (completed == task)
+                await task.ConfigureAwait(false);
+        }
+
+        private void LogException(string context, Exception ex)
+        {
+            // UI 仍保留精简摘要；文件日志额外保留 ERROR 级别和完整堆栈。
+            Logger.Error(context, ex);
+            _log($"{context}: {ex.Message}");
+        }
+
+        private static async Task DisposeSlotsWhenIdleAsync(ListenerBinding binding)
+        {
+            try
+            {
+                if (binding.AcceptLoopTask != null)
+                    await binding.AcceptLoopTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // AcceptLoop 异常已在接收边界记录，仍需继续等待 Handler。
+            }
+
+            try
+            {
+                while (!binding.ActiveHandlers.IsEmpty)
+                {
+                    var handlers = binding.ActiveHandlers.Values;
+                    if (handlers.Count == 0)
+                    {
+                        await Task.Yield();
+                        continue;
+                    }
+                    await Task.WhenAll(handlers).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Handler 的业务异常已在处理边界记录。
+            }
+            finally
+            {
+                binding.Slots?.Dispose();
+            }
         }
 
         public void Dispose()
@@ -236,8 +284,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 if (b == null) continue;
                 try { b.Listener?.Stop(); } catch { }
                 b.CancellationRegistration.Dispose();
-                if (b.ActiveHandlers.IsEmpty)
-                    b.Slots?.Dispose();
+                _ = DisposeSlotsWhenIdleAsync(b);
             }
             _cts?.Dispose();
         }

@@ -84,25 +84,25 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             _log("[Runtime] 开始有序关闭...");
 
             try { _metricsReporter?.Stop(); }
-            catch (Exception ex) { _log($"[Runtime] 长稳指标停止异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] 长稳指标停止异常", ex); }
 
             // 1. 取消令牌，停止接收新连接
             try { _cts?.Cancel(); }
-            catch (Exception ex) { _log($"[Runtime] 取消Token异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] 取消Token异常", ex); }
 
             try { _previewManager?.BeginShutdown(); }
-            catch (Exception ex) { _log($"[Runtime] PreviewManager取消异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] PreviewManager取消异常", ex); }
 
             // 排空注册表和任务跟踪器前，取消正在传输的一次性回调
             try { _dllCallbackSender?.Stop(); }
-            catch (Exception ex) { _log($"[Runtime] callback sender stop failed: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] callback sender stop failed", ex); }
 
             // 传输层排空与业务清理并行执行，并共享同一全局截止时间
             Task transportStopTask;
             try { transportStopTask = _transport.StopAsync(5000); }
             catch (Exception ex)
             {
-                _log($"[Runtime] TransportLayer停止异常: {ex.Message}");
+                LogException("[Runtime] TransportLayer停止异常", ex);
                 transportStopTask = Task.CompletedTask;
             }
 
@@ -112,14 +112,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 _registry.CancelAll();
                 Logger.Debug($"[Runtime] Registry已取消, 活跃={_registry.ActiveCount}");
             }
-            catch (Exception ex) { _log($"[Runtime] Registry取消异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] Registry取消异常", ex); }
 
             try
             {
                 _processRegistry.ClearAll();
                 Logger.Debug("[Runtime] TerminalProcessRegistry已清空");
             }
-            catch (Exception ex) { _log($"[Runtime] 流程会话清理异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] 流程会话清理异常", ex); }
 
             // 3. 释放业务队列，工作线程共享 3 秒时限
             try
@@ -127,7 +127,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 _queueManager?.Dispose();
                 Logger.Debug($"[Runtime] QueueManager已释放");
             }
-            catch (Exception ex) { _log($"[Runtime] QueueManager释放异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] QueueManager释放异常", ex); }
 
             // 4. 取消恢复任务、停止定时器并停止全部活动预览
             try
@@ -136,7 +136,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                     .ConfigureAwait(false);
                 Logger.Debug($"[Runtime] PreviewManager已停止");
             }
-            catch (Exception ex) { _log($"[Runtime] PreviewManager停止异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] PreviewManager停止异常", ex); }
 
             // 5. 在剩余时限内排空有界后台任务
             try
@@ -144,17 +144,31 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 await _taskTracker.WaitAllAsync(RemainingMs(deadline)).ConfigureAwait(false);
                 Logger.Debug($"[Runtime] TaskTracker已排空: {_taskTracker.GetStats()}");
             }
-            catch (Exception ex) { _log($"[Runtime] TaskTracker排空异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] TaskTracker排空异常", ex); }
 
             // 6. 在同一截止时间内完成传输层排空
             try
             {
                 var remaining = RemainingMs(deadline);
-                if (!transportStopTask.IsCompleted && remaining > 0)
-                    await Task.WhenAny(transportStopTask, Task.Delay(remaining)).ConfigureAwait(false);
-                Logger.Debug($"[Runtime] TransportLayer已停止");
+                Task completed = transportStopTask.IsCompleted ? transportStopTask : null;
+                if (completed == null && remaining > 0)
+                    completed = await Task.WhenAny(transportStopTask, Task.Delay(remaining))
+                        .ConfigureAwait(false);
+
+                if (completed == transportStopTask)
+                {
+                    // 必须真正 await，否则 StopAsync 的异常只会成为未观察任务。
+                    await transportStopTask.ConfigureAwait(false);
+                    Logger.Debug("[Runtime] TransportLayer已停止");
+                }
+                else
+                {
+                    const string message = "[Runtime] TransportLayer在全局关闭时限内未完成";
+                    Logger.Warn(message);
+                    _log(message);
+                }
             }
-            catch (Exception ex) { _log($"[Runtime] TransportLayer停止异常: {ex.Message}"); }
+            catch (Exception ex) { LogException("[Runtime] TransportLayer停止异常", ex); }
 
             sw.Stop();
 
@@ -174,6 +188,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         private static int RemainingMs(DateTime deadline)
         {
             return Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
+        }
+
+        private void LogException(string context, Exception ex)
+        {
+            // ERROR 文件日志保留堆栈，UI 仅显示精简摘要。
+            Logger.Error(context, ex);
+            _log($"{context}: {ex.Message}");
         }
     }
 }
