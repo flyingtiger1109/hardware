@@ -175,7 +175,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
 
-                await _previewManager.StopAllAsync(preserveRestartInfo: true).ConfigureAwait(false);
+                await _previewManager.StopTerminalBoundPreviewsForSwitchAsync().ConfigureAwait(false);
                 Logger.Debug($"[性能] 终端切换停止 耗时={sw.ElapsedMilliseconds}ms");
 
                 var phase = sw.ElapsedMilliseconds;

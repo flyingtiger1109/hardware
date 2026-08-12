@@ -8,6 +8,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 {
     public sealed class VlcPreviewController : IPreviewController
     {
+        internal const int LayoutRefreshIntervalMs = 250;
+
         private readonly TaskCompletionSource<bool> _startTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _exitTcs =
@@ -160,9 +162,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (!ok || _abandoned)
                     return;
 
+                var nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
+                    if (DateTime.UtcNow >= nextLayoutRefreshUtc)
+                    {
+                        _player.ApplyCoverLayout();
+                        nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
+                    }
                     Thread.Sleep(20);
                 }
             }

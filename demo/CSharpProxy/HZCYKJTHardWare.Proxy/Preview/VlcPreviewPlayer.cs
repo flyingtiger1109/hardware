@@ -498,13 +498,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     displayH = srcW;
                 }
 
-                if (_directRenderTarget)
-                {
-                    if (_fnVideoSetScale != null)
-                        _fnVideoSetScale(_mediaPlayer, 0.0f);
-                    return;
-                }
-
                 if (hostW == _lastHostW && hostH == _lastHostH &&
                     displayW == _lastSrcW && displayH == _lastSrcH)
                     return;
@@ -518,14 +511,26 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (_fnVideoSetScale != null)
                     _fnVideoSetScale(_mediaPlayer, 0.0f);
 
-                // 2）设置宽高比，与 Delphi 一致
+                // 2）直接绑定第三方 HWND 时使用宿主客户区比例，确保画面拉伸铺满。
+                // 其他会话继续使用原视频源比例和 Cover 布局。
                 if (_fnVideoSetAspectRatio != null)
                 {
-                    var ratioStr = $"{displayW}:{displayH}";
+                    var ratioStr = GetAspectRatioForLayout(_directRenderTarget,
+                        hostW, hostH, displayW, displayH);
                     var ratioPtr = Marshal.StringToHGlobalAnsi(ratioStr);
-                    _fnVideoSetAspectRatio(_mediaPlayer, ratioPtr);
-                    Marshal.FreeHGlobal(ratioPtr);
+                    try
+                    {
+                        _fnVideoSetAspectRatio(_mediaPlayer, ratioPtr);
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(ratioPtr);
+                    }
                 }
+
+                // 直接渲染目标就是第三方窗口本身，只能调整 VLC 宽高比，不能移动该窗口。
+                if (_directRenderTarget)
+                    return;
 
                 // 3）使用与 Delphi 一致的 MulDiv 算法计算 Cover 布局位置和尺寸
                 int videoW, videoH, videoX, videoY;
@@ -553,6 +558,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
             }
+        }
+
+        internal static string GetAspectRatioForLayout(bool directRenderTarget,
+            int hostW, int hostH, int displayW, int displayH)
+        {
+            return directRenderTarget
+                ? $"{hostW}:{hostH}"
+                : $"{displayW}:{displayH}";
         }
 
         private void AddMediaOption(IntPtr media, string option)

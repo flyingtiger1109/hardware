@@ -1447,3 +1447,14 @@
 - [ ] 修改后使用 Delphi 7 Demo 验证重复 Init/Release、终端切换后立即 Release 和多日真实设备长稳。
 
 兼容性：DLL 导出、`__stdcall`/C ABI、参数、结构体、错误码、回调、HTTP/终端协议和配置均未改变；性能热路径未改变。详细风险、验证与回退见 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
+
+## v1.3.1 车牌预览修复（2026-08-12）
+
+- [x] 终端切换仅停止终端绑定预览，保持 CJ、RJ2、RJ3 会话和第三方 HWND。
+- [x] 车牌 VLC 直接渲染使用第三方 HWND 客户区比例并每 250ms 跟随尺寸变化。
+- [x] 增加终端绑定筛选、直接渲染比例和刷新周期测试。
+- [x] Native DLL `Release|Win32` 编译通过，0 warning、0 error。
+- [x] Proxy + Tests `Release|x86`、`Release|x64` 编译通过，0 warning、0 error；两套非 Integration 各 110/110 通过。
+- [ ] 使用真实车牌相机和 Delphi 7 验证连续终端切换、窗口缩放、多 DPI 和长稳。
+
+兼容性：未改变 DLL ABI、导出函数、调用约定、参数、错误码、回调、HTTP/终端协议、配置或第三方调用方式。回退时回退 `v1.3.1` 发布提交即可。

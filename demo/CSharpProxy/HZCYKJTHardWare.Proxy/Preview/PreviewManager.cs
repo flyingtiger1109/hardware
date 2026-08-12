@@ -909,6 +909,43 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        /// <summary>
+        /// 终端切换前只停止绑定当前终端的预览。
+        /// 车道级车牌相机不绑定终端 1/2，必须保持现有会话和 HWND 渲染不变。
+        /// </summary>
+        internal async Task StopTerminalBoundPreviewsForSwitchAsync()
+        {
+            await _operationLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var sessions = new List<KeyValuePair<string, PreviewSession>>(_sessions);
+                var stopTasks = new List<Task>();
+                foreach (var pair in sessions)
+                {
+                    if (!ShouldStopForTerminalSwitch(pair.Value))
+                        continue;
+
+                    if (_sessions.TryRemove(pair.Key, out var active) && active.Player != null)
+                        stopTasks.Add(ReleasePlayerAsync(pair.Key, active.Player,
+                            preserveMjpegWorker: true));
+                }
+
+                if (stopTasks.Count > 0)
+                    await Task.WhenAll(stopTasks).ConfigureAwait(false);
+
+                Logger.Debug($"终端切换已停止 {stopTasks.Count} 个终端绑定预览，车牌预览保持运行");
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
+        }
+
+        internal static bool ShouldStopForTerminalSwitch(PreviewSession session)
+        {
+            return session != null && session.TerminalBound;
+        }
+
         private async Task StopAllCore(bool preserveRestartInfo)
         {
             var sessions = new List<KeyValuePair<string, PreviewSession>>(_sessions);

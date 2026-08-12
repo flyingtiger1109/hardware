@@ -19,10 +19,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
         public void ProductVersion_IsEmbeddedAndVisibleInMainWindow()
         {
             var assembly = typeof(MainForm).Assembly;
-            Assert.AreEqual(new Version(1, 3, 0, 0), assembly.GetName().Version);
-            Assert.AreEqual("1.3.0.0",
+            Assert.AreEqual(new Version(1, 3, 1, 0), assembly.GetName().Version);
+            Assert.AreEqual("1.3.1.0",
                 assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version);
-            Assert.AreEqual("1.3.0",
+            Assert.AreEqual("1.3.1",
                 assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                     .InformationalVersion);
             Assert.AreEqual(ProductVersionInfo.DisplayName,

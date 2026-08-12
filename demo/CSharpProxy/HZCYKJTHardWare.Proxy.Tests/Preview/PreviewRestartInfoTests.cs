@@ -56,6 +56,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
             CollectionAssert.AreEqual(new string[0], retainedMembers);
         }
 
+        [TestMethod]
+        public void ShouldStopForTerminalSwitch_OnlyStopsTerminalBoundSessions()
+        {
+            var terminalPreview = new PreviewSession { TerminalBound = true };
+            var platePreview = new PreviewSession { TerminalBound = false };
+
+            Assert.IsTrue(PreviewManager.ShouldStopForTerminalSwitch(terminalPreview));
+            Assert.IsFalse(PreviewManager.ShouldStopForTerminalSwitch(platePreview));
+            Assert.IsFalse(PreviewManager.ShouldStopForTerminalSwitch(null));
+        }
+
         private sealed class FakePreviewController : IPreviewController
         {
             public bool IsRunning => true;
