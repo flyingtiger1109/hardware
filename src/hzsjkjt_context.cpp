@@ -18,6 +18,7 @@ HzsjkjtContext::~HzsjkjtContext() {
 
 void HzsjkjtContext::Reset() {
     initialized = false;
+    device_mode = 1;
     current_terminal_index = 0;
     current_terminal_base_url.clear();
     selected_lan_ip.clear();

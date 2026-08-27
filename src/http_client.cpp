@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "http_client.h"
+#include "json_helper.h"
 #include "logger.h"
 #include "path_helper.h"
 
@@ -29,11 +30,13 @@ bool HttpClient::PostJson(const std::string& url,
                           std::string& responseBody,
                           int& responseStatusCode) {
     const ULONGLONG startedAt = GetTickCount64();
+    const std::string requestId = JsonHelper::GetString(body, "request_id");
+    const char* requestIdForLog = requestId.empty() ? "<无>" : requestId.c_str();
     responseBody.clear();
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHTTP session 未初始化");
+        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHTTP会话未初始化，request_id=%s", requestIdForLog);
         return false;
     }
 
@@ -53,7 +56,8 @@ bool HttpClient::PostJson(const std::string& url,
     urlComp.dwExtraInfoLength = 256;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：URL解析失败，url=%s", url.c_str());
+        LOG_ERROR("HTTP请求", "HTTP请求失败：URL解析失败，地址=%s，request_id=%s",
+                  url.c_str(), requestIdForLog);
         return false;
     }
 
@@ -61,7 +65,8 @@ bool HttpClient::PostJson(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：连接终端失败，host=%s，port=%d", PathHelper::WideToUtf8(hostName).c_str(), port);
+        LOG_ERROR("HTTP请求", "HTTP请求失败：连接终端失败，主机=%s，端口=%d，request_id=%s",
+                  PathHelper::WideToUtf8(hostName).c_str(), port, requestIdForLog);
         return false;
     }
 
@@ -72,7 +77,7 @@ bool HttpClient::PostJson(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHttpOpenRequest 失败");
+        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHttpOpenRequest 失败，request_id=%s", requestIdForLog);
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -89,14 +94,15 @@ bool HttpClient::PostJson(const std::string& url,
                             (LPVOID)utf8Body.c_str(), (DWORD)utf8Body.size(),
                             (DWORD)utf8Body.size(), 0)) {
         DWORD err = GetLastError();
-        LOG_ERROR("HTTP请求", "HTTP请求失败：发送请求失败，错误码=%lu", err);
+        LOG_ERROR("HTTP请求", "HTTP请求失败：发送请求失败，错误码=%lu，request_id=%s", err, requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：接收响应失败，错误码=%lu", GetLastError());
+        LOG_ERROR("HTTP请求", "HTTP请求失败：接收响应失败，错误码=%lu，request_id=%s",
+                  GetLastError(), requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -128,8 +134,8 @@ bool HttpClient::PostJson(const std::string& url,
     WinHttpCloseHandle(hConnect);
 
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
-    LOG_INFO("HTTP请求", "HTTP POST完成：url=%s，status=%d，request_size=%zu，response_size=%zu，elapsed_ms=%llu",
-             url.c_str(), responseStatusCode, body.size(), responseBody.size(),
+    LOG_DEBUG("HTTP请求", "HTTP POST完成：地址=%s，状态=%d，request_id=%s，请求长度=%zu，响应长度=%zu，耗时=%llums",
+             url.c_str(), responseStatusCode, requestIdForLog, body.size(), responseBody.size(),
              static_cast<unsigned long long>(elapsedMs));
 
     return true;
@@ -226,17 +232,9 @@ bool HttpClient::Get(const std::string& url,
     WinHttpCloseHandle(hConnect);
 
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
-    const bool isPingRequest = url.size() >= 5 &&
-        url.compare(url.size() - 5, 5, "/ping") == 0;
-    if (isPingRequest) {
-        LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
-                  url.c_str(), responseStatusCode, responseBody.size(),
-                  static_cast<unsigned long long>(elapsedMs));
-    } else {
-        LOG_INFO("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
-                 url.c_str(), responseStatusCode, responseBody.size(),
-                 static_cast<unsigned long long>(elapsedMs));
-    }
+    LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
+              url.c_str(), responseStatusCode, responseBody.size(),
+              static_cast<unsigned long long>(elapsedMs));
 
     return true;
 }

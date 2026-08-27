@@ -1,5 +1,60 @@
 # 项目进度记录
 
+# 日志分级与可追踪性优化（2026-08-26）
+
+## 当前阶段
+
+- [x] 成功的 HTTP 收发明细、底层回调准备/发送明细和普通请求接收明细改为 `[调试]` 级别。
+- [x] HTTP 失败、超时、非成功状态、慢请求、回调失败和预览失败继续保留 `[警告]` 或 `[错误]` 级别。
+- [x] 文件日志与 Proxy 界面使用同一套级别过滤规则，默认 `info` 时不会再由调试明细淹没界面。
+- [x] 对缺少外部 `request_id` 的 EXE 请求增加仅用于日志的内部追踪 ID；未修改外部请求体、响应格式或 DLL 接口。
+
+## 本次修改内容
+
+1. C# `Logger` 增加线程安全的级别判断接口，`MainForm` 在写入界面前复用同一判断，避免文件已过滤但界面仍持续刷屏。
+2. C# Proxy 将 HTTP 请求接收/完成、预览回调准备/成功发送、底层回调资源明细等降为 `[调试]`；失败分支显式使用对应模块的 `[警告]`/`[错误]`。
+3. C++ DLL 将成功的通用 HTTP 收发和底层回调接收降为 `Debug`；业务成功、业务拒绝和业务异常日志保持原级别。
+4. 预览、预览请求、预览管理、终端回调、授权回调、终端切换等日志继续按具体功能模块命名，没有引入抽象的统一模块名。
+
+## 涉及文件
+
+- `Infrastructure/Logger.cs`、`MainForm.cs`：统一过滤文件和界面输出。
+- `Server/ProxyServer.cs`、`Server/DllCallbackSender.cs`：HTTP/回调分级和内部日志追踪 ID。
+- `Server/DllCommandHandler.cs`、`Server/TerminalCallbackHandler.cs`、`Server/Coordinator/SwitchCoordinator.cs`：预览、回调和切换模块分级。
+- `src/http_client.cpp`、`src/callback_server.cpp`：Native 底层 HTTP/回调明细分级。
+- `HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`：日志过滤回归测试。
+
+## 兼容性说明
+
+- DLL 导出函数名、参数、调用约定、结构体、错误码、回调签名及 HTTP 请求/响应格式：未修改。
+- 默认 `log.level=info` 的现有部署行为保持不变；需要排查底层收发时，将配置改为 `debug` 并重启对应进程即可恢复调试明细。
+- 未新增独立日志线程、日志文件或长期持有的句柄；本次改动不改变预览、回调和终端切换资源生命周期。
+
+## 风险与注意事项
+
+1. `info` 模式下成功的底层收发明细会被隐藏，现场排查协议细节时必须临时开启 `debug`；失败、超时和预览异常不受此影响。
+2. 无外部 `request_id` 的请求只在日志中追加内部追踪 ID，不会回写给第三方；第三方协议兼容性不受影响。
+3. 本次只调整日志可见性，没有改变 `/ping` 调度周期或预览恢复业务逻辑；这些行为仍需按对应专项验证。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x64`：0 个警告、0 个错误。
+- [x] C# Tests 项目 `Release|x64`：0 个编译错误；有 1 个 `NU1900`，原因为 NuGet 漏洞源不可访问。
+- [x] 新增日志过滤测试：1/1 通过。
+- [x] DLL `Release|Win32`：0 个警告、0 个错误；通过规范化构建子进程环境解决本机重复 `PATH/Path` 问题。
+- [ ] C# 全量测试：139 项中 126 项通过、13 项失败；失败包括现有版本号断言、当前环境不支持 `HttpListener` 的集成测试，以及与本次日志改动无关的既有切换/回调断言，不能标记为全量通过。
+- [ ] 第三方现场日志、预览异常恢复和 24～72 小时长稳验证：待执行。
+
+## 下一步计划
+
+- [ ] 在现场分别用 `info` 和 `debug` 验证日志量、模块名称和请求追踪效果。
+- [ ] 注入第三方预览断流后切换终端，确认预览恢复链路的成功、失败和资源释放日志完整。
+- [ ] 结合 Private Bytes、句柄、线程、TCP 和预览恢复指标执行长稳验证。
+
+## 回退方式
+
+- 仅回退本节列出的日志分级和追踪 ID 变更，保留此前已存在的预览恢复、生命周期和切换修复；不要对当前工作区执行整体 `reset` 或整体回退。
+
 # release/1.2.6 P0 架构与长稳修复（2026-07-10）
 
 ## 当前阶段
@@ -3858,36 +3913,594 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 
 回退本次发布提交及 `v1.3.0` 标签即可恢复发布前版本；DLL ABI、协议、配置和数据结构未迁移，无需执行额外兼容性回退。
 
-# v1.3.1 车牌预览修复（2026-08-12）
+# C# Proxy Warn 日志汉化（2026-08-10）
 
 ## 当前阶段
 
-- [x] 车牌预览在终端切换时保持运行。
-- [x] 车牌画面铺满第三方 HWND 并跟随客户区尺寸变化。
-- [x] 已完成发布前编译与自动化回归。
-- [ ] 真实车牌相机、Delphi 7 和多 DPI 长稳验证待执行。
+- [x] 已完成 Proxy 中英文及中英混合 `Warn` 固定描述的汉化。
+- [x] 已保留协议字段、模块缩写、方法名、路径、状态码及第三方异常原文，便于现场检索和问题定位。
+- [x] 已完成 x86/x64 隔离编译与自动化回归。
+- [ ] Windows 10/11 真实设备告警触发与现场日志观感待验证。
 
 ## 本次修改内容
 
-1. 终端切换仅停止 `TerminalBound=true` 的预览，CJ、RJ2、RJ3 会话不再被误停。
-2. VLC 直接渲染第三方 HWND 时采用宿主客户区宽高比，画面拉伸铺满且不移动调用方窗口。
-3. VLC 播放线程每 250ms 跟随第三方 HWND 尺寸变化。
-4. 增加终端绑定会话筛选、直接渲染宽高比和布局刷新周期测试。
+1. 汉化配置缺失、局域网 IP 检测、终端非预期状态码、请求重复登记与容量不足等警告。
+2. 汉化 VLC 资源回退及架构不兼容目录警告。
+3. 汉化 MJPEG 工作线程启动、暂停、停止、窗口销毁、帧渲染和填充布局等警告。
+4. 汉化预览 URL 校验、外部预览 HWND 校验与失效会话停止等警告。
+5. 将 `[Registry]`、`[TaskTracker]`、`[Coordinator]` 等警告模块标签调整为中文。
+6. 同步日志渲染测试中的中文警告样例。
+
+## 涉及文件
+
+- `MainForm.cs`：顶部运行信息区配置警告。
+- `Infrastructure/AppConfig.cs`：配置文件缺失警告。
+- `Core/RequestRegistry.cs`、`Core/WorkerQueue.cs`：请求登记及工作线程警告。
+- `Preview/VlcResourceExtractor.cs`、`Preview/VlcPreviewPlayer.cs`：VLC 资源与架构警告。
+- `Preview/PreviewManager.cs`、`Preview/MjpegPreviewController.cs`：预览校验、恢复及 MJPEG 生命周期警告。
+- `Terminal/NetworkDetector.cs`、`Terminal/TerminalClient.cs`：网络检测及终端请求警告。
+- `Server/Runtime/ActiveTasksTracker.cs`、`Server/Coordinator/SwitchCoordinator.cs`：后台任务及切换协调警告。
+- `HZCYKJTHardWare.Proxy.Tests/UI/MainFormLogRenderingTests.cs`：中文警告渲染样例。
+- `PROGRESS.md`：本次修改、兼容性、验证与回退记录。
 
 ## 兼容性说明
 
-- DLL 导出函数、`__stdcall`、C ABI、参数、结构体、回调、错误码和 x86 要求均未改变。
-- HTTP/终端协议、配置和第三方调用方式均未改变。
-- 车牌画面改为无黑边铺满；源比例与 HWND 比例不同时会发生预期的比例拉伸。
+- 未改变 DLL 导出函数、调用约定、C ABI、参数、结构体布局、回调签名或错误码。
+- 未改变 HTTP/终端协议、请求响应格式、配置项、设备调用、预览控制或第三方 HWND 行为。
+- `HTTP`、`VLC`、`MJPEG`、`HWND`、`request_id`、`resource`、`status` 等诊断标识保持原样。
+- `ex.Message`、终端响应正文及设备返回内容保持原样，现场仍可能看到操作系统、SDK 或第三方服务返回的英文原文。
+
+## 风险与注意事项
+
+1. 本次仅修改日志文本，不改变告警触发条件和运行逻辑。
+2. 若外部日志分析脚本直接匹配旧英文完整句子，需要同步更新匹配规则；保留的技术字段仍可继续用于检索。
+3. 自动化测试未覆盖所有真实设备异常分支，建议现场重点触发配置缺失、网卡不匹配及预览恢复告警。
 
 ## 验证状态
 
-- [x] Native DLL `Release|Win32`：0 warning、0 error。
-- [x] Proxy + Tests `Release|x86`：0 warning、0 error；非 Integration 110/110 通过。
-- [x] Proxy + Tests `Release|x64`：0 warning、0 error；非 Integration 110/110 通过。
-- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 提示。
-- [ ] 真实车牌相机、Delphi 7、100%/150%/200% DPI 及 2 小时以上长稳：待验证。
+- [x] Proxy `Release|x86` 隔离编译：0 warning、0 error。
+- [x] Proxy `Release|x64` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x86` 隔离编译：0 warning、0 error。
+- [x] Tests `Release|x64` 隔离编译：0 warning、0 error。
+- [x] `MainFormLogRenderingTests` x86：11/11 通过。
+- [x] `MainFormLogRenderingTests` x64：11/11 通过。
+- [x] x64 非 Integration 回归：106/106 通过。
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 转换提示。
+- [ ] Windows 10/11 真实设备告警与现场日志：待验证。
+
+## 下一步计划
+
+- [ ] 在现场环境触发配置缺失、无匹配子网 IP、预览 URL 校验失败及 MJPEG 恢复警告，确认中文显示完整。
+- [ ] 如现场存在按完整英文句子匹配的日志采集规则，同步更新为中文描述或改用保留的技术字段匹配。
 
 ## 回退方式
 
-回退 `v1.3.1` 发布提交即可；无需迁移配置或修改第三方程序。
+恢复本节涉及的 `Logger.Warn(...)` 字符串和日志渲染测试样例，并删除本节进度记录即可；无需回退 DLL、协议、配置、数据库或部署文件。
+
+# 车牌预览终端切换保持与第三方 HWND 铺满（方案 A，2026-08-11）
+
+## 当前阶段
+
+- [x] 已修复第三方切换终端后车牌预览丢失问题。
+- [x] 已修复车牌 VLC 直接渲染未铺满第三方 HWND 客户区问题。
+- [x] 已完成 x64/x86 编译及非 Integration 自动化回归。
+- [ ] 真实车牌相机、第三方程序和多 DPI 现场验证待执行。
+
+## 本次修改内容
+
+1. `PreviewManager` 新增终端切换专用停止入口，只移除并释放 `TerminalBound=true` 的活动会话。
+2. `SwitchCoordinator` 不再使用“停止全部预览”入口，车道级 CJ、RJ2、RJ3 会话在终端 1/2 切换期间持续运行。
+3. `VlcPreviewPlayer` 在 `directRenderTarget=true` 时将 VLC 宽高比设置为第三方 HWND 当前客户区比例，画面拉伸铺满但不调用 `SetWindowPos` 移动第三方窗口。
+4. `VlcPreviewController` 每 250ms 在 VLC 专用线程重新应用布局，使第三方 HWND 尺寸变化后自动同步。
+5. 自动化测试覆盖终端绑定会话筛选、直接渲染宽高比、子窗口原 Cover 比例和布局刷新周期。
+
+## 涉及文件
+
+- `Preview/PreviewManager.cs`：终端切换预览筛选与停止入口。
+- `Server/Coordinator/SwitchCoordinator.cs`：调用终端切换专用停止入口。
+- `Preview/VlcPreviewPlayer.cs`：第三方 HWND 宽高比拉伸。
+- `Preview/VlcPreviewController.cs`：250ms 尺寸跟随。
+- `HZCYKJTHardWare.Proxy.Tests/Preview/PreviewRestartInfoTests.cs`：终端绑定筛选测试。
+- `HZCYKJTHardWare.Proxy.Tests/Preview/VlcPreviewLayoutTests.cs`：宽高比及刷新周期测试。
+- `todo.md`、`PROGRESS.md`：进度、兼容性、验证和回退记录。
+
+## 兼容性说明
+
+- DLL 导出函数、`__stdcall`、C ABI、参数、结构体、回调和错误码：未修改。
+- HTTP/终端协议、请求响应 JSON、配置文件和部署结构：未修改。
+- 第三方仍传入原有稳定子控件 HWND，不需要修改调用代码。
+- 摄像头、指纹、虹膜及本地预览继续沿用原 Cover 行为；仅直接绑定第三方 HWND 的车牌画面改为拉伸铺满。
+
+## 风险与注意事项
+
+1. 源视频比例与第三方 HWND 比例不一致时会产生比例变形，这是无黑边铺满的预期行为。
+2. 每 250ms 仅查询客户区并在尺寸变化时更新 VLC 宽高比；预期性能影响很小，但仍需真实设备长稳确认。
+3. 车牌预览在终端切换期间保持 RTSP 连接，符合其“不绑定终端 1/2”的既有功能定义。
+4. 自动化测试不能替代真实 RTSP、跨进程 HWND、窗口销毁时序和高 DPI 验证。
+
+## 验证状态
+
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 转换提示。
+- [x] Proxy + Tests `Release|x64`：编译成功，0 error；1 条 NuGet 漏洞源不可达的 `NU1900` 环境警告。
+- [x] x64 非 Integration 回归：110/110 通过。
+- [x] Proxy + Tests `Release|x86`：编译成功，0 error；1 条 NuGet 漏洞源不可达的 `NU1900` 环境警告。
+- [x] x86 非 Integration 回归：110/110 通过。
+- [ ] 真实终端 1/2 切换期间三路车牌画面连续性：待验证。
+- [ ] 第三方 HWND 初始显示、缩放、最小化/恢复和销毁：待验证。
+- [ ] 100%/150%/200% DPI 及 2 小时/24 小时稳定性：待验证。
+
+## 下一步计划
+
+- [ ] 分别启动 CJ、RJ2、RJ3 后连续切换终端 20 次，确认车牌画面不黑屏、不重连、不丢失。
+- [ ] 动态调整第三方预览控件尺寸，确认最迟约 250ms 内重新铺满。
+- [ ] 记录 Proxy 的线程数、句柄数、CPU、内存和 VLC 日志，完成长稳验收。
+
+## 回退方式
+
+恢复本节涉及的 `PreviewManager.cs`、`SwitchCoordinator.cs`、`VlcPreviewPlayer.cs`、`VlcPreviewController.cs` 和两处预览测试差异，并删除本节进度记录即可。无需回退 DLL、协议、配置或第三方调用代码。
+
+# DeviceMode 设备能力模式（2026-08-12）
+
+## 当前阶段
+
+- [x] 方案 B（`DeviceMode + DeviceCapabilityManager`）已完成代码实施和自动化验证。
+- [ ] 真实设备、Delphi7 第三方程序及 Mode 2 网络流量现场验收待执行。
+
+## 配置与能力划分
+
+- `HZCYKJTHardWare.json` 顶层新增 `"device_mode": 1`。
+- Mode 1：全部现有能力，行为与 v1.3.1 一致。
+- Mode 2：仅 `PlateRJ2`、`PlateRJ3`；配置缺失、非法或损坏统一回退 Mode 1 并记录日志。
+- UI、HTTP 路由、直接业务入口、健康检测、监听器和 WorkerQueue 使用同一能力集合。
+
+## 涉及文件
+
+- `Infrastructure/DeviceCapabilityManager.cs`、`AppConfig.cs`：模式解析、能力映射、统一失败 JSON 与 60 秒 WARN 限频。
+- `MainForm.cs`：Mode 2 隐藏终端、流程、业务和健康区域，预览区重排为 RJ2/RJ3 两路。
+- `Server/DllCommandHandler.cs`、`ProxyServer.cs`：HTTP 与直接业务快速失败；Mode 2 不启动终端回调监听、健康检测或 LAN 探测。
+- `Core/QueueManager.cs`、`WorkerQueue.cs`：Mode 2 创建兼容占位队列但不启动非镜头 Worker、不接收任务。
+- `src/config_manager.*`、`hzsjkjt_context.*`、`exports.cpp`、`delphi_proxy.*`：Native 配置、集中能力检查、异步失败事件和 `not_supported -> -18` 映射。
+- `Infrastructure/DeviceCapabilityManagerTests.cs`：Mode 1/2、异常配置、路由映射、失败 JSON 和无 Worker 启动测试。
+
+## DLL 兼容性
+
+- `.def`、`include/HZCYKJTHardWare.h`、公开类型/错误码、导出函数、参数、返回类型、`__stdcall`、回调签名及结构体布局均未修改。
+- x86 导出表仍为 24 项，名称及 stdcall 参数字节数与 v1.3.1 一致。
+- 不支持的同步调用对第三方返回既有失败值 `0`；内部保留 `-18` 语义。
+- OCR/NFC/虹膜/授权不支持时立即发出现有失败事件，`status=-18`、`error_code=not_supported`，不登记会话、不访问终端、不重试。
+
+## 验证状态
+
+- [x] Native DLL `Release|Win32`：0 warning、0 error，`MACHINE:X86`。
+- [x] Proxy + Tests `Release|x86`：0 error；非 Integration 116/116 通过。
+- [x] Proxy + Tests `Release|x64`：0 error；非 Integration 116/116 通过。
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 提示。
+- [x] 导出表检查：24 项与 v1.3.1 `.def` 一致，公开 ABI 文件无差异。
+- [ ] Mode 1 真实全硬件、Mode 2 真实 RJ2/RJ3 预览与高频误调用：待现场验证。
+
+## 风险、待办与回退
+
+1. 当前仓库没有闸机、灯光、灯带实现，能力枚举已预留但没有可接入的业务入口。
+2. RJ2/RJ3 只有既有预览 API，没有抓拍 API；本轮不新增导出，后续单独设计。
+3. 配置损坏回退 Mode 1 是兼容性优先策略，现场应同时修复损坏文件，避免无意开放完整能力。
+4. 回退本节列出的代码和配置即可；无数据库、ABI、协议或部署迁移，Delphi7 无需适配。
+
+# 主窗口版本号展示调整（2026-08-12）
+
+## 本次修改
+
+- 窗口边框标题由“产品名 + 版本号”调整为仅显示产品名。
+- 主标题区域使用两行垂直布局：产品名保持 14pt Bold，版本号使用 8.5pt 常规灰色字体置于其下。
+- 两行内容共用原主标题列，不改变顶部信息区列宽或其他运行状态区域。
+- UI 测试增加版本标签内容、字体层级、父容器及无边框版本号断言。
+
+## 验证与兼容性
+
+- [x] Proxy + Tests `Release|x86`：编译成功，0 error；仅有 NuGet 漏洞审计源不可达 `NU1900` 环境警告。
+- [x] 标题、健康区和启动布局定向测试：3/3 通过。
+- [ ] Windows 10/11 与多 DPI 实机视觉检查：待验证。
+- DLL ABI、程序集版本值、HTTP/终端协议、配置和第三方调用均未改变。
+- 回退 `Properties/AssemblyInfo.cs`、`MainForm.cs`、`MainFormLogRenderingTests.cs` 中本节差异即可。
+
+# 统一 JSON 配置有效性清理（2026-08-12）
+
+## 当前阶段
+
+- [x] 完成统一 JSON 字段解析与实际业务引用审计。
+- [x] 清理不生效的发布配置项并将可维护的界面/终端字段接入配置。
+- [x] x86/x64 编译和自动化回归已完成。
+- [ ] 现场启动验证待完成。
+
+## 本次修改
+
+1. 删除当前运行链路不生效的 7 个 JSON 项：`terminal.mode`、`terminal.check_on_init`、`terminal.fixed_terminals`、`callback_server.auto_bind_lan_ip`、`preview.renderer`、`preview.auto_reconnect`、`preview.stop_preview_on_end_process`。
+2. Native 仍保留旧键解析，旧配置文件继续兼容；本次只精简随程序发布的统一配置模板。
+3. 增加 `device_mode_names.{1,2}`，Mode 2 顶部“设备模式”名称按当前 `device_mode` 自动选择，避免代码写死及模式名称失配。
+4. C# Proxy 开始使用 `terminal.default_index` 作为默认终端，并使用 `auto_subnet_devices[].name` 显示通道名称。
+5. 确认 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/HZCYKJTHardWare.Proxy.json` 不被项目复制、不被 `AppConfig` 加载，仅为历史样例。
+
+## 未配置化的代码常量
+
+- 保留协议路径、HTTP 状态码、错误码、DLL ABI、结构体布局和回调地址后缀为代码常量，防止配置破坏协议兼容性。
+- 保留线程池、并发名额、队列容量、关闭排空时间、日志应急目录和分层内部超时为程序安全参数；如需开放，应单独设计约束和联动校验。
+
+## 涉及文件
+
+- `HZCYKJTHardWare.json`：清理无效字段，增加模式名称映射。
+- `Infrastructure/AppConfig.cs`：读取模式名称、默认终端和终端显示名。
+- `Terminal/TerminalManager.cs`：应用默认终端和配置名称。
+- `MainForm.cs`：模式名称与终端名称从配置获取。
+- `Infrastructure/DeviceCapabilityManagerTests.cs`：增加名称映射与默认终端校验测试。
+- `todo.md`、`PROGRESS.md`：记录审计结论、兼容性、验证和回退。
+
+## 兼容性、风险与回退
+
+- DLL 导出、调用约定、参数、回调、错误码、x86 要求和第三方调用方式均未改变。
+- `device_mode_names` 缺失时自动使用内置中文默认名，不影响旧配置启动。
+- 非法 `terminal.default_index` 回退到终端 1 并记录警告。
+- 回退上述 5 个代码/配置文件及本节文档即可，无 ABI、协议或部署迁移。
+
+## 验证状态
+
+- [x] 根目录 JSON 语法检查：通过。
+- [x] Proxy + Tests `Release|x86`：0 error；仅 NuGet 漏洞审计源不可达 `NU1900` 环境警告。
+- [x] Proxy + Tests `Release|x64`：0 error；仅 NuGet 漏洞审计源不可达 `NU1900` 环境警告。
+- [x] 配置定向测试：x86、x64 各 8/8 通过。
+- [x] 非 Integration 自动化回归：x86、x64 各 118/118 通过。
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 转换提示。
+- [ ] Mode 1/2 真实启动及配置名称显示：待验证。
+
+# C# 第三方 Demo 接口覆盖同步（2026-08-12）
+
+## 本次修改
+
+1. 对照 Native `.def` 完成接口覆盖审计，C# P/Invoke 声明和 `MainForm` 调用入口均覆盖 24/24 个导出。
+2. 将预览操作统一为设备下拉选择，补齐虹膜、CJ、RJ2、RJ3 启停；预览区与 Proxy 一致显示六路资源。
+3. Demo 读取运行目录的统一 `device_mode` 和 `device_mode_names`。Mode 2 仅保留初始化、释放、RJ2、RJ3，避免界面暴露 Proxy 已裁剪能力。
+4. 配置异常回退 Mode 1 并写入 Demo 日志；回调摘要补充事件名称、请求 ID、错误码和 `-18` 不支持说明。
+
+## 涉及文件
+
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`
+- `demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.Designer.cs`
+- `demo/CSharpThirdPartyDemo/README.md`
+- `todo.md`、本进度文件
+
+## 兼容性与风险
+
+- Native DLL ABI、导出、`__stdcall`、参数、返回值和回调均未修改。
+- 没有新增车牌抓拍接口；Demo 只覆盖现有三路车牌预览。
+- Demo 的模式裁剪用于避免误操作，能力兜底仍由 DLL/Proxy 执行。
+- 真实 VLC/设备画面、窗口缩放和模式切换需现场验证。
+
+## 验证状态
+
+- [x] C# Demo `Release|x86`：0 warning、0 error。
+- [x] 静态接口核对：`.def` 24 项，P/Invoke 声明 24/24，界面业务调用 24/24。
+- [ ] Mode 1/2 真实硬件与异常配置启动：待现场验证。
+
+## 回退方式
+
+恢复上述 C# Demo 代码和文档差异即可；不需要回退 Native DLL、Proxy、配置格式或第三方部署。
+
+# C# Demo Mode 2 高 DPI 顶部布局修复（2026-08-12）
+
+## 原因与修改
+
+- 原 Mode 2 在启用 `AutoScaleMode.Dpi` 后，运行时仍用固定像素设置顶部高度和控件坐标，导致高 DPI 下已缩放控件互相覆盖并被裁剪。
+- 改为 `FlowLayoutPanel` 自动排列初始化、释放、预览选择、启停和模式名称；保持单行，宽度不足时允许横向滚动。
+- 不再设置 Mode 2 固定高度和固定 `Location`，Mode 1 设计器布局不变。
+
+## 验证与兼容性
+
+- [x] C# Demo `Release|x86`：0 warning、0 error。
+- [x] 静态检查：Mode 2 动态布局中无固定 `Location`、无 `panelTop.Height=42`。
+- [ ] Windows 100%/150%/200% DPI 实机视觉验证：待执行。
+- DLL ABI、Proxy、JSON 配置结构和业务调用行为均未改变。
+
+# C# Proxy 与 Demo 日志中文化（2026-08-12）
+
+## 本次修改
+
+1. 将 Proxy 中纯英文或中英文混杂的运行日志改为中文，包括配置回退、能力裁剪、请求登记、工作队列、预览播放、终端切换协调、运行时关闭和后台任务异常。
+2. 将 C# Demo 的模式提示、回调结果、保存路径等日志统一为中文表达和中文标点。
+3. 专有名词与机器可检索字段保持原样：`DeviceMode`、`Capabilities`、`request_id`、`resource_type`、`status`、`error`、错误码、URL、HTTP/MJPEG/VLC/SDK/DLL/HWND。
+4. 异常类型及 `Exception.Message` 原文继续保留，避免损失第三方 SDK 和系统异常诊断信息。
+
+## 验证状态
+
+- [x] 纯英文运行日志扫描：0 行。
+- [x] Proxy `Release|x86`：0 warning、0 error。
+- [x] C# Demo `Release|x86`：0 warning、0 error。
+- [x] Tests `Release|x86`：0 error，仅 NuGet 漏洞源不可达 `NU1900`。
+- [x] Proxy + Tests `Release|x64`：0 error，仅 NuGet 漏洞源不可达 `NU1900`。
+- [x] x86、x64 非 Integration 回归：各 118/118 通过。
+- [x] `git diff --check`：通过，仅有仓库既有 LF/CRLF 转换提示。
+- [ ] 现场查看 INFO/WARN/ERROR 日志的可读性和检索效果：待验证。
+
+## 兼容性与回退
+
+- DLL 导出、调用约定、回调 JSON、HTTP 请求/响应、错误码和设备业务行为均未修改。
+- 回退本节涉及文件中的日志字符串即可，无需回退 Native DLL、配置或部署方式。
+
+补充：日志分类名称由 `[能力检查]` 调整为 `[硬件检测]`，由 `[切换协调]` 调整为 `[终端切换]`；仅改变展示文案。
+
+# 单方向终端切换保护与诊断日志（2026-08-20）
+
+## 当前阶段
+
+- [x] 已完成单方向终端配置识别和未配置方向切换保护。
+- [x] 已补充第三方错误响应、Proxy 内部入口保护及维护日志。
+- [x] 编译和自动化测试已完成；真实单终端环境验证待现场完成。
+
+## 本次修改内容
+
+1. `devices` / `auto_subnet_devices` 配置列表存在时，记录终端 1/2 是否实际出现在列表中；未提供列表时保持旧版默认双终端行为。
+2. 第三方调用 `/terminal/switch` 切换到未配置方向时，在停止预览、递增切换代次和提交队列前直接拒绝。
+3. Proxy 内部 `SwitchTerminal` 和切换协调器增加同样的保护，避免其他入口绕过配置判断。
+4. 返回新增错误码 `terminal_not_configured`，同时提供 `terminal_index`、`terminal_name` 和中文 `message`。
+5. 启动时记录终端配置摘要；拒绝切换属于正常业务限制，统一按 `INFO` 记录原因并保留界面日志，便于按 `terminal_not_configured` 检索。
+6. 终端 IP 最后一段为空、缺失、0 或超出 1-254 时，统一视为该方向未配置，不再生成伪终端地址。
+7. 兼容现场将 `"host_suffix":` 留空的非标准 JSON 写法，解析前归一化为 `null`，避免因配置解析失败回退到默认终端 IP。
+
+## 涉及文件
+
+- `Infrastructure/AppConfig.cs`：终端配置存在性解析和启动摘要日志。
+- `Terminal/TerminalManager.cs`：提供终端配置状态及名称查询。
+- `Server/DllCommandHandler.cs`：第三方切换拒绝响应和诊断日志。
+- `Server/Coordinator/BizOperationHandler.cs`：Proxy 内部切换入口保护和诊断日志。
+- `Server/Coordinator/SwitchCoordinator.cs`：切换协调器兜底保护。
+- `HZCYKJTHardWare.Proxy.Tests/Infrastructure/DeviceCapabilityManagerTests.cs`：单方向及旧配置兼容测试。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、C ABI、参数、结构体、回调签名均未修改。
+- HTTP 请求字段未修改；HTTP 状态码仍由现有协议统一返回，第三方应读取 JSON 的 `error` 和 `code`。
+- Native DLL 本次未增加业务判断；其对 Proxy 业务错误仍按现有通用失败路径记录，功能不受影响。
+- 仅当配置文件明确提供且只包含一个方向的设备列表时，切换到另一方向会新增拒绝行为。
+- 未提供设备列表的旧配置继续按默认双终端处理。
+
+## 风险与注意事项
+
+1. 如果现场配置了 `default_index` 指向未配置方向，程序仍会按现有配置启动，但任何切换到该方向的请求都会返回 `terminal_not_configured`；应同步修正默认方向。
+2. `terminal_name` 来自配置文件，第三方应优先使用稳定的 `code` 和 `terminal_index` 判断错误。
+3. 日志中保留当前终端、目标终端、方向名称和错误码，现场排查时可按 `terminal_not_configured` 检索。
+
+## 验证状态
+
+- [x] `git diff --check`：通过；仅有仓库既有 LF/CRLF 转换提示。
+- [x] Proxy + Tests `Release|x86`：编译成功，0 错误；NuGet 漏洞审计源不可达 `NU1900` 环境警告。
+- [x] Proxy + Tests `Release|x64`：编译成功，0 错误；NuGet 漏洞审计源不可达 `NU1900` 环境警告。
+- [x] x86 定向终端配置/切换测试：12/12 通过。
+- [x] x64 定向终端配置/切换测试：12/12 通过。
+- [x] x86 非 Integration 回归：122/122 通过。
+- [x] x64 非 Integration 回归：122/122 通过。
+- [x] 单方向拒绝切换日志已改为单条 `INFO` 路径，去除 C# `WARN` 重复记录。
+- [x] 空 IP 配置解析测试：x86/x64 定向测试均通过。
+- [x] 非标准空 `host_suffix` 配置归一化测试：x86/x64 定向测试均通过。
+- [ ] 真实单终端配置下第三方切换拒绝和日志验证：待现场验证。
+- [ ] 真实空 IP 配置下启动摘要、界面地址和第三方切换拒绝验证：待现场验证。
+
+## 回退方式
+
+恢复本节涉及的 C# 文件和本节进度记录即可；不需要回退 DLL ABI、导出函数、配置字段或第三方调用代码。
+
+# 外部三路 MJPEG 直绘与 VLC 回退关闭（2026-08-24）
+
+## 当前阶段
+
+- [x] 外部摄像头、指纹、虹膜预览改为直接使用第三方 `HWND` 的 `GetDC` 绘制 MJPEG 帧。
+- [x] 这三路不再创建第三方父窗口下的子窗口，不执行 `SetParent`、`SetWindowPos`、`DestroyWindow` 作用于第三方目标窗口。
+- [x] 这三路的 MJPEG 启动、URL 重试、流故障恢复和终端切换恢复均禁止 VLC fallback。
+- [x] 车牌 RTSP/VLC 预览路径保持原方案不变。
+
+## 涉及文件
+
+- `Preview/MjpegPreviewController.cs`：增加直绘模式；直绘时只使用目标 `HWND` 的客户区 `HDC`，保留原有帧拉伸铺满逻辑。
+- `Preview/PreviewManager.cs`：按外部摄像头/指纹/虹膜资源识别 MJPEG-only 策略，并贯穿首次启动、重试、恢复和终端切换恢复。
+- `Server/DllCommandHandler.cs`：三路外部预览启动显式启用直绘目标。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、参数、结构体、回调签名和第三方 HTTP 协议均未修改。
+- 车牌显式 RTSP 地址仍由 VLC 播放，并继续使用 VLC 的 direct render target 路径。
+- MJPEG 仍按目标窗口客户区宽高进行整帧拉伸绘制；不改变当前 33ms 渲染节拍和最新帧覆盖策略。
+- 直绘模式不控制第三方窗口的显示、位置和生命周期；第三方窗口重绘可能覆盖已绘制画面，这是该模式的外部窗口约束。
+
+## 风险与注意事项
+
+1. 第三方窗口必须在预览期间保持有效且拥有可绘制客户区；窗口销毁或重建后由现有 HWND 校验和恢复流程重新处理。
+2. 三路协议必须继续保证返回 HTTP MJPEG；若返回非 HTTP 地址或 MJPEG 流失败，Proxy 会报告失败，不再改用 VLC。
+3. 直绘使用 GDI `GetDC`，高分辨率或高帧率下 CPU 占用需在现场设备上观察。
+
+## 验证状态
+
+- [x] Proxy `Release|x64`：编译成功，0 警告、0 错误。
+- [x] Proxy `Release|x86`：编译成功，0 错误；还原阶段仅有 NuGet 漏洞源不可达的 `NU1900` 警告。
+- [x] x64 非 Integration 回归：122/122 通过。
+- [x] MJPEG 工作线程复用测试：通过。
+- [x] x86 MJPEG 工作线程复用测试：通过。
+- [x] `git diff --check`：通过；仅有仓库既有 LF/CRLF 转换提示。
+- [ ] x86 非 Integration 全量回归：119/122；剩余 3 个为版本号断言和终端切换异步断言，与本次预览改动无直接关联。
+- [ ] 三路外部 HWND 直绘、第三方窗口重绘和终端切换：待现场验证。
+- [ ] 三路 MJPEG 失败时确认日志无 `VLC启动步骤`：待现场验证。
+
+## 回退方式
+
+恢复本节涉及的三个 C# 文件和本节进度记录即可；不需要回退 Native DLL ABI、导出函数、车牌 RTSP/VLC 配置或第三方调用代码。
+
+# 预览 request_id 全链路追踪（2026-08-24）
+
+## 当前阶段
+
+- [x] DLL 生成的预览 `request_id` 已贯穿到 C# Proxy 的 HTTP 接收、预览任务、终端取流、MJPEG/VLC 播放和回调发送日志。
+- [x] 日志统一补充资源类型、第三方/渲染 `HWND`、阶段、结果和耗时字段；停止预览和预览地址查询也记录请求 ID。
+- [x] DLL 回调接收、事件分发和最终 `request_id` 校验日志已补齐。
+
+## 本次修改内容
+
+1. `PreviewManager` 保存预览会话的 `request_id`，终端取流请求复用外部预览请求 ID，恢复/重试仍保持同一追踪链。
+2. C# Proxy 记录 DLL 请求接收/完成、外部预览启动/停止、终端回调接收/受理及回调投递结果。
+3. MJPEG 和 VLC 播放器日志携带同一 `request_id`；不记录 RTSP 密码等敏感信息。
+4. Native DLL 的 `DelphiProxy`、`HttpClient`、回调服务、事件分发和四类预览入口均补充 `request_id`、HWND 和阶段日志。
+
+## 涉及文件
+
+- C#：`Preview/PreviewManager.cs`、`Preview/VlcPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`、`Server/DllCallbackSender.cs`、`Terminal/TerminalClient.cs`。
+- Native：`src/delphi_proxy.cpp`、`src/http_client.cpp`、`src/callback_server.cpp`、`src/event_dispatcher.cpp`、`src/exports.cpp`。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、参数、结构体、回调签名和第三方 HTTP 字段均未修改。
+- 仅统一日志追踪，并将已有请求 ID复用于 Proxy 到终端的预览地址请求；未改变预览选择、MJPEG 直绘、车牌 RTSP/VLC 或回调业务行为。
+- 日志中使用 `request_id=<none>` 表示请求体没有请求 ID；DLL/EXE 日志中的 HWND 统一使用 `0x...` 十六进制，便于现场检索和比对，HTTP 协议数值字段保持原有十进制格式。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86`：编译成功，0 警告、0 错误。
+- [x] Native DLL `Release|Win32`：编译成功，0 警告、0 错误。
+- [x] C# Proxy `Release|x64`：编译成功，0 警告、0 错误。
+- [x] Native DLL `Release|x64`：编译成功，0 警告、0 错误。
+- [x] 相关定向测试：`DllCallbackSenderTests` 7/7、`PreviewRestartInfoTests` 3/3、`PreviewRecoveryPolicyTests` 2/2、`MjpegWorkerReuseTests` 1/1 通过。
+- [x] Tests 项目编译成功；还原/编译阶段有环境无法访问 NuGet 漏洞审计源的 `NU1900` 警告。
+- [ ] Tests 全量：132 个中 119 个通过、13 个失败；失败包含 net46 `HttpListener` 平台不支持、版本号断言及既有异步断言，需单独处理，不能视为本次追踪改动全部通过。
+- [ ] 真实 DLL + 新版 EXE + 第三方程序联调：待现场按同一 `request_id` 检查完整日志链。
+
+## 回退方式
+
+恢复本节涉及的 C# / Native 文件和本节进度记录即可；不需要回退 DLL ABI、导出函数或第三方调用代码。
+
+# DLL 版本与 HWND 日志格式统一（2026-08-24）
+
+## 当前阶段
+
+- [x] DLL 文件版本和产品版本统一为 `1.0.0.1`。
+- [x] 第三方/渲染 HWND 的日志表示统一为 `0x...` 十六进制，Native `%p` 与 C# 日志格式一致。
+- [x] HTTP JSON 中的 `hwnd`、`render_hwnd` 数值字段保持原协议格式，未改变第三方兼容性。
+
+## 涉及文件
+
+- `HZCYKJTHardWare.rc`：更新 `FILEVERSION`、`PRODUCTVERSION` 及对应字符串版本。
+- `Preview/PreviewManager.cs`、`Preview/MjpegPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCallbackSender.cs`：统一 C# HWND 日志格式。
+
+## 兼容性说明
+
+- DLL 导出函数、调用约定、参数、结构体、回调签名和第三方 HTTP 协议均未修改。
+- 仅改变文件版本资源和日志显示格式；不会改变 HWND 的传递值、窗口绘制行为或预览流程。
+- `hwnd`/`render_hwnd` 仍按原数值类型发送，不能将日志显示格式误认为协议字段变更。
+
+## 验证状态
+
+- [x] Native DLL `Release|Win32`：编译成功，0 警告、0 错误。
+- [x] Native DLL `Release|x64`：编译成功，0 警告、0 错误。
+- [x] C# Proxy `Release|x86`：编译成功，0 警告、0 错误。
+- [x] C# Proxy `Release|x64`：编译成功，0 警告、0 错误。
+- [x] 两个 DLL 文件属性核验：`FileVersion=1.0.0.1`、`ProductVersion=1.0.0.1`。
+- [x] `git diff --check`：通过；仅有仓库既有 LF/CRLF 转换提示。
+- [ ] 现场核验 DLL/EXE 日志中的第三方 HWND 与渲染 HWND：待联调。
+
+## 回退方式
+
+恢复 `HZCYKJTHardWare.rc` 和本节涉及的 C# 文件即可；不需要回退 DLL ABI、导出函数、协议字段或第三方调用代码。
+
+# 新增及追踪日志中文化（2026-08-25）
+
+## 本次修改内容
+
+1. 预览恢复、VLC 生命周期、MJPEG 播放、文件保存重试、终端回调和流程控制日志中的普通字段标签统一为中文。
+2. 保留 `request_id`、HWND 字段、HTTP 方法、API 路径、协议字段、错误码、`RTSP`、`MJPEG`、`VLC`、`OCR`、`NFC`、`DLL` 等技术名称，确保现场检索和第三方协议兼容。
+3. 未修改 HTTP JSON、回调载荷、DLL 导出接口、调用约定或业务行为。
+
+## 涉及文件
+
+- C#：`Preview/PreviewManager.cs`、`Preview/VlcPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Server/DllCommandHandler.cs`、`Server/Coordinator/BizOperationHandler.cs`、`Server/Coordinator/ProcessEndCoordinator.cs`、`Server/TerminalCallbackHandler.cs`、`Server/Scheduler/WorkerExecutionEngine.cs`、`Storage/FileSaver.cs`。
+- Native：本次未改变 Native 日志协议字段；已有 Native 追踪日志继续保留技术检索字段。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86`：编译成功，0 警告、0 错误。
+- [x] C# Proxy `Release|x64`：编译成功，0 警告、0 错误；构建前补充了 `win-x64` 资产还原。
+- [x] Native DLL `Release|Win32/x64`：编译成功，0 警告、0 错误。
+- [x] `git diff --check`：通过；仅有仓库既有 LF/CRLF 转换提示。
+- [ ] 现场查看新增日志的中文显示和检索效果：待验证。
+
+## 回退方式
+
+恢复本节涉及的日志文本改动和本节进度记录即可；不需要回退 DLL ABI、导出函数、协议字段或第三方调用代码。
+
+# 预览失败清理、终端切换恢复与功能日志（2026-08-25）
+
+## 当前阶段
+
+- [x] 已完成预览失败后的 C# 会话、MJPEG Worker 和 Native DLL 预览租约清理保护。
+- [x] 已完成终端切换期间的旧预览停止、异步 Worker 延迟释放和新终端预览重建保护。
+- [x] 已完成 `/ping` 正常请求按约一分钟汇总，失败、异常、原因变化和恢复立即记录。
+- [x] 已完成 C# 与 Native 日志模块统一为具体功能模块，并将预览窗口、预览租约合并为 `[预览]`。
+
+## 本次修改内容
+
+1. 预览启动失败或异常时，按 `request_id` 清理对应 C# 预览会话及 MJPEG Worker；旧请求不能清理新请求的会话。
+2. Native `face_image`、`fingerprint_image`、`iris_image` 和 `plate_image` 预览失败回调均清理匹配的 DLL 预览租约，避免默认终端失败状态污染后续终端切换。
+3. MJPEG 运行时连续恢复失败后，C# 通过现有 `/preview-ready` 错误回调按原 `request_id` 通知 Native；Native 再次按资源类型和请求 ID 清理租约，允许后续终端重新申请预览。
+4. MJPEG 解码、绘制、帧缓冲和线程停止增加边界保护；停止超时不提前释放仍被线程使用的 `AutoResetEvent`、`CancellationTokenSource` 或窗口资源，改为线程退出后延迟释放。
+5. `/ping` 健康请求不再逐条打印正常收发日志；正常请求按分钟输出统计，异常立即输出，持续同原因故障采用受控重复提示，避免日志和界面队列无界增长。
+6. DLL 请求按实际功能输出 `[健康检查]`、`[授权]`、`[人脸抓拍]`、`[指纹抓拍]`、`[虹膜抓拍]`、`[证件识别]`、`[NFC读卡]`、`[预览]`、`[终端切换]`、`[流程控制]` 等模块；其余未识别路径标记为 `[未识别接口]`。
+7. 日志格式统一为 `[时间] [模块][级别] 内容`，级别使用 `调试/信息/警告/错误`；`request_id`、HTTP 路径、错误码、`MJPEG`、`VLC`、`OCR`、`NFC`、`DLL` 等技术名称保持原样。
+
+## 涉及文件
+
+- C#：`Infrastructure/Logger.cs`、`Infrastructure/PingLogAggregator.cs`、`MainForm.cs`、`Preview/MjpegPreviewController.cs`、`Preview/PreviewManager.cs`、`Server/DllCommandHandler.cs`、`Server/ProxyServer.cs`。
+- C# 测试：`Infrastructure/LoggerTests.cs`、`Infrastructure/PingLogAggregatorTests.cs`。
+- Native：`src/event_dispatcher.cpp`、`src/logger.cpp`。
+
+## 兼容性说明
+
+- DLL 导出函数名、调用约定、参数、结构体、错误码、回调签名、HTTP 请求/响应字段均未修改。
+- 预览只调整失败清理、生命周期和日志归类；第三方 HWND 传递、既有回调路径和成功载荷保持不变，运行时失败沿用既有错误回调字段。
+- 没有引入新的运行时依赖；C# 继续使用现有 `net46` 和 C++ 现有 Win32/x64 配置。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x64`：编译成功，0 警告、0 错误。
+- [x] Tests 项目 `Release|x64`：编译成功；有 NuGet 漏洞审计源不可访问的 `NU1900` 警告。
+- [x] Native DLL `Release|Win32`：编译、链接成功，0 警告、0 错误。
+- [x] Native DLL `Release|x64`：编译、链接成功，0 警告、0 错误。
+- [x] 定向测试：日志、`/ping` 聚合、MJPEG Worker 复用共 7/7 通过。
+- [ ] 全量测试：136 个中 123 个通过、13 个失败；失败包含 net46 `HttpListener` 平台不支持、既有版本号断言和既有异步断言，不能视为本次改动全部失败。
+- [ ] 真实设备长稳：默认终端预览失败后切换正常终端、重复切换、句柄/私有字节数和 2 小时以上运行仍需现场验证。
+
+## 下一步计划
+
+- [ ] 在现场复现“默认终端预览失败 → 切换正常终端”，确认旧 `request_id` 的租约已清理且新终端能够显示预览。
+- [ ] 观察任务管理器和 Process Explorer 中 `Private Bytes`、`Handles`、`USER Objects`、`GDI Objects`，确认停止/切换后回落并长期稳定。
+- [ ] 检查 Native 与 C# 日志是否都显示为 `[预览][信息/警告/错误]` 等具体模块。
+
+## 回退方式
+
+恢复本节涉及的 C# / Native 文件和本节进度记录即可；不需要回退 DLL ABI、导出函数、协议字段或第三方调用代码。
+
+# 车牌预览显式地址恢复优化（2026-08-26）
+
+## 本次修改内容
+
+1. 车牌外部预览发生 MJPEG 流故障时，恢复逻辑优先使用会话保存的 `ExplicitPreviewUrl`，不再错误地向空的终端地址申请车牌预览 URL。
+2. 外部会话恢复优先使用原始 `TargetHwnd`，继续以直绘方式将恢复后的视频绑定到同一个第三方窗口句柄；本地预览仍使用原 `HostHwnd`。
+3. 无显式预览地址的终端绑定预览继续沿用原有的强制刷新 URL 流程，兼容摄像头、指纹和虹膜预览。
+4. 增加显式地址优先和缺失时回退到请求地址的单元测试。
+
+## 兼容性说明
+
+- 未修改 DLL 导出函数、调用约定、结构体、回调签名和第三方 HTTP 请求/响应格式。
+- 车牌预览仍使用原 `request_id`、原第三方 HWND 和现有 `/preview-ready` 回调机制。
+- 本次只调整 C# Proxy 的恢复 URL 选择和恢复目标句柄选择，Native DLL 无需重新修改接口。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x64`：编译成功，0 警告、0 错误。
+- [x] Tests 项目 `Release|x64`：编译成功；有 NuGet 漏洞审计源不可访问的 `NU1900` 警告。
+- [x] 预览恢复策略、日志、`/ping` 聚合、MJPEG Worker 定向测试：11/11 通过。
+- [ ] 真实设备：车牌视频断流后保持同一第三方 HWND 自动恢复，待现场验证。
+
+## 回退方式
+
+恢复 `Preview/PreviewManager.cs`、`PreviewRecoveryPolicyTests.cs` 和本节进度记录即可；不涉及 DLL ABI 或第三方调用代码。

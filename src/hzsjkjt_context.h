@@ -22,6 +22,7 @@ public:
 
     // 初始化状态
     bool initialized = false;
+    int device_mode = 1;
 
     // 终端上下文
     int current_terminal_index = 0;

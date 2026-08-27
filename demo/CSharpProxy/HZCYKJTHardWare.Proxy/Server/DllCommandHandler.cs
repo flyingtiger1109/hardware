@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -32,9 +33,34 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly SwitchCoordinator _switchCoordinator;
         private readonly ProcessEndCoordinator _processEndCoordinator;
         private readonly Action<bool> _onProcessStateChanged;
+        private readonly DeviceCapabilityManager _capabilities;
         private readonly string _proxyInstanceId = CreateProxyInstanceId();
         private const string TerminalSwitchingResult =
             "{\"error\":true,\"code\":\"terminal_switching\"}";
+
+        private static string FormatRequestId(string requestId)
+        {
+            return PreviewManager.FormatRequestId(requestId);
+        }
+
+        private static string FormatHwnd(long hwndValue)
+        {
+            return PreviewManager.FormatHwnd(new IntPtr(hwndValue));
+        }
+
+        private static string FormatPreviewResource(PreviewResourceType resourceType)
+        {
+            switch (resourceType)
+            {
+                case PreviewResourceType.Camera: return "摄像头";
+                case PreviewResourceType.Fingerprint: return "指纹";
+                case PreviewResourceType.Iris: return "虹膜";
+                case PreviewResourceType.PlateCJ: return "车牌CJ";
+                case PreviewResourceType.PlateRJ2: return "车牌RJ2";
+                case PreviewResourceType.PlateRJ3: return "车牌RJ3";
+                default: return "未知";
+            }
+        }
 
         internal DllCommandHandler(
             TerminalManager terminalManager,
@@ -50,7 +76,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             ActiveTasksTracker taskTracker,
             SwitchCoordinator switchCoordinator,
             ProcessEndCoordinator processEndCoordinator,
-            Action<bool> onProcessStateChanged = null)
+            Action<bool> onProcessStateChanged = null,
+            DeviceCapabilityManager capabilities = null)
         {
             _terminalManager = terminalManager;
             _terminalClient = terminalClient;
@@ -66,6 +93,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             _switchCoordinator = switchCoordinator;
             _processEndCoordinator = processEndCoordinator;
             _onProcessStateChanged = onProcessStateChanged;
+            _capabilities = capabilities ?? DeviceCapabilityManager.Instance;
         }
 
         public async Task<string> HandleAsync(string method, string path, string bodyUtf8)
@@ -74,23 +102,30 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (path == "/ping")
                 return BuildPingResponse(_proxyInstanceId);
 
+            if (_capabilities.TryGetRequiredCapability(path, out var required) &&
+                !_capabilities.IsSupported(required))
+                return _capabilities.BuildNotSupportedResult(path, required);
+
             // 扁平化车牌相机路由：Proxy 不解析 Direction。每条路由持有一个相机或会话，
             // 由第三方调用方选择 CJ 或 RJ2+RJ3。
             if (path == "/preview/plate/cj/start")
                 return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
                     PreviewResourceType.PlateCJ, "cj");
             if (path == "/preview/plate/cj/stop")
-                return HandlePreviewStop(PreviewResourceType.PlateCJ);
+                return HandlePreviewStop(PreviewResourceType.PlateCJ,
+                    ParsedJsonBody.Parse(bodyUtf8).GetString("request_id"));
             if (path == "/preview/plate/rj2/start")
                 return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
                     PreviewResourceType.PlateRJ2, "rj2");
             if (path == "/preview/plate/rj2/stop")
-                return HandlePreviewStop(PreviewResourceType.PlateRJ2);
+                return HandlePreviewStop(PreviewResourceType.PlateRJ2,
+                    ParsedJsonBody.Parse(bodyUtf8).GetString("request_id"));
             if (path == "/preview/plate/rj3/start")
                 return HandlePlatePreviewStart(ParsedJsonBody.Parse(bodyUtf8),
                     PreviewResourceType.PlateRJ3, "rj3");
             if (path == "/preview/plate/rj3/stop")
-                return HandlePreviewStop(PreviewResourceType.PlateRJ3);
+                return HandlePreviewStop(PreviewResourceType.PlateRJ3,
+                    ParsedJsonBody.Parse(bodyUtf8).GetString("request_id"));
 
             // 终端切换期间快速拒绝请求
             if (_queueManager.SwitchingTerminal)
@@ -149,19 +184,19 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return await HandlePreviewStart(request, PreviewResourceType.Iris, routeEpoch);
 
                 case "/preview/camera/stop":
-                    return HandlePreviewStop(PreviewResourceType.Camera);
+                    return HandlePreviewStop(PreviewResourceType.Camera, requestId);
                 case "/preview/fingerprint/stop":
-                    return HandlePreviewStop(PreviewResourceType.Fingerprint);
+                    return HandlePreviewStop(PreviewResourceType.Fingerprint, requestId);
                 case "/preview/iris/stop":
-                    return HandlePreviewStop(PreviewResourceType.Iris);
+                    return HandlePreviewStop(PreviewResourceType.Iris, requestId);
 
                 // === 预览 URL 查询（同步执行，不进入队列）===
                 case "/preview/camera/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Camera, routeEpoch);
+                    return await HandlePreviewUrl(PreviewResourceType.Camera, routeEpoch, requestId);
                 case "/preview/fingerprint/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Fingerprint, routeEpoch);
+                    return await HandlePreviewUrl(PreviewResourceType.Fingerprint, routeEpoch, requestId);
                 case "/preview/iris/url":
-                    return await HandlePreviewUrl(PreviewResourceType.Iris, routeEpoch);
+                    return await HandlePreviewUrl(PreviewResourceType.Iris, routeEpoch, requestId);
 
                 // === 流程控制与授权 ===
                 case "/process/start":
@@ -427,6 +462,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (terminalIndex < 1 || terminalIndex > 2)
                 return "{\"error\":true,\"code\":\"invalid_terminal_index\"}";
 
+            if (!_terminalManager.IsTerminalConfigured(terminalIndex))
+                return BuildTerminalNotConfiguredResult(terminalIndex);
+
             if (_terminalManager.IsSameTerminal(terminalIndex))
                 return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + ",\"same_terminal\":true}";
 
@@ -438,6 +476,27 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return "{\"error\":true,\"code\":\"terminal_switching\"}";
 
             return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + "}";
+        }
+
+        private string BuildTerminalNotConfiguredResult(int terminalIndex)
+        {
+            var terminalName = _terminalManager.GetTerminalName(terminalIndex);
+            if (string.IsNullOrWhiteSpace(terminalName))
+                terminalName = "终端" + terminalIndex;
+
+            var message = "未配备" + terminalName + "终端，无法切换";
+            var logMessage = "[终端切换] 拒绝第三方切换：当前终端=" +
+                _terminalManager.CurrentIndex + "(" + _terminalManager.CurrentName + ")，" +
+                "目标终端=" + terminalIndex + "(" + terminalName + ")未配置，" +
+                "code=terminal_not_configured";
+            if (_log != null)
+                _log(logMessage);
+            else
+                Logger.Warn(logMessage);
+
+            return "{\"error\":true,\"code\":\"terminal_not_configured\",\"terminal_index\":" +
+                terminalIndex + ",\"terminal_name\":\"" + JsonHelper.EscapeString(terminalName) +
+                "\",\"message\":\"" + JsonHelper.EscapeString(message) + "\"}";
         }
 
         // ====== 流程控制 ======
@@ -478,8 +537,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 var committed = false;
                 try
                 {
-                    _log("[流程] 开始流程: terminal=" + route.TerminalIndex +
-                        ", url=" + route.BaseUrl + "/process/start, save_dir=" +
+                    _log("[流程] 开始流程：终端=" + route.TerminalIndex +
+                        "，地址=" + route.BaseUrl + "/process/start，保存目录=" +
                         resolvedSaveDir);
 
                     var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
@@ -493,8 +552,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     _terminalManager.ProcessSaveDir = resolvedSaveDir;
                     _terminalManager.ProcessActive = true;
                     _onProcessStateChanged?.Invoke(true);
-                    _log("[流程] 流程已开始, terminal=" + route.TerminalIndex +
-                        ", request_id=" + requestId + ", save_dir=" + resolvedSaveDir);
+                    _log("[流程] 流程已开始：终端=" + route.TerminalIndex +
+                        "，request_id=" + requestId + "，保存目录=" + resolvedSaveDir);
                     return "{\"status\":\"ok\"}";
                 }
                 finally
@@ -541,10 +600,15 @@ namespace HZCYKJTHardWare.Proxy.Server
             var hwnd = new IntPtr(hwndValue);
             var callbackUrl = request.GetString("callback_url");
             var requestId = request.GetString("request_id");
+            var requestTrace = FormatRequestId(requestId);
+
+            _log($"[预览请求][调试] EXE收到外部预览请求：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                 $"HWND={FormatHwnd(hwndValue)}，回调地址={callbackUrl}");
 
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             {
-                _log("[预览管理] 目标窗口句柄无效, hwnd=" + hwndValue);
+                _log($"[预览管理][错误] 目标窗口句柄无效：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                     $"HWND={FormatHwnd(hwndValue)}");
                 return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
             }
 
@@ -560,6 +624,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
 
             // 异步执行预览启动，不阻塞 HTTP 响应
+            var previewSw = Stopwatch.StartNew();
             var taskAccepted = _taskTracker.TryRun(async () =>
             {
                 try
@@ -571,17 +636,21 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     if (!shouldContinue())
                     {
-                        _log($"[预览管理] 外部预览已跳过: {resType}, 原因=终端正在切换或请求已过期, hwnd={hwnd}");
+                        _log($"[预览管理] 外部预览已跳过：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                             $"原因=终端正在切换或请求已过期，HWND={FormatHwnd(hwndValue)}");
                         return;
                     }
 
-                    var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl, shouldContinue: shouldContinue);
+                    var ok = await _previewManager.StartPreview(resType, PreviewSessionType.External, hwnd, terminalBaseUrl,
+                        shouldContinue: shouldContinue, directRenderTarget: true, requestId: requestId);
                     if (ok)
                     {
                         if (!shouldContinue())
                         {
-                            _previewManager.StopPreview(resType, PreviewSessionType.External);
-                            _log($"[预览管理] 外部预览启动后发现终端已切换，等待切换流程接管: {resType}, hwnd={hwnd}");
+                            await TryCleanupFailedPreviewAsync(
+                                resType, requestId).ConfigureAwait(false);
+                        _log($"[预览管理][调试] 外部预览启动后发现终端已切换，等待切换流程接管：资源={FormatPreviewResource(resType)}，" +
+                                 $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                             return;
                         }
 
@@ -589,20 +658,26 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                         if (!shouldContinue())
                         {
-                            _previewManager.StopPreview(resType, PreviewSessionType.External);
-                            _log($"[预览管理] 外部预览最小化窗口后发现终端已切换，等待切换流程接管: {resType}, hwnd={hwnd}");
+                            await TryCleanupFailedPreviewAsync(
+                                resType, requestId).ConfigureAwait(false);
+                            _log($"[预览管理][调试] 外部预览最小化窗口后发现终端已切换，等待切换流程接管：资源={FormatPreviewResource(resType)}，" +
+                                 $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                             return;
                         }
 
                         if (!string.IsNullOrEmpty(callbackUrl))
                             await _dllCallback.SendPreviewReady(requestId, resourceName, hwnd, IntPtr.Zero).ConfigureAwait(false);
-                        _log($"[预览管理] 外部预览已启动: {resType}, hwnd={hwnd}");
+                        _log($"[预览管理] 外部预览已启动：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                             $"HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                     }
                     else
                     {
+                        await TryCleanupFailedPreviewAsync(
+                            resType, requestId).ConfigureAwait(false);
                         if (!shouldContinue())
                         {
-                            _log($"[预览管理] 外部预览启动已过期，跳过失败回调: {resType}, hwnd={hwnd}");
+                            _log($"[预览管理][调试] 外部预览启动已过期，跳过失败回调：资源={FormatPreviewResource(resType)}，" +
+                                 $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                             return;
                         }
 
@@ -611,24 +686,48 @@ namespace HZCYKJTHardWare.Proxy.Server
                             var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" + hwndValue + ",\"error\":true,\"code\":\"preview_failed\"}";
                             await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
                         }
-                        _log($"[预览管理] 外部预览启动失败: {resType}, hwnd={hwnd}");
+                        _log($"[预览管理][错误] 外部预览启动失败：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                             $"HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _log($"[预览管理] 外部预览启动异常: {ex.Message}");
+                    await TryCleanupFailedPreviewAsync(
+                        resType, requestId).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(callbackUrl))
+                    {
+                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                            "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" +
+                            hwndValue + ",\"error\":true,\"code\":\"preview_exception\"}";
+                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload)
+                            .ConfigureAwait(false);
+                    }
+                    _log($"[预览管理][错误] 外部预览启动异常：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                         $"HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms，错误={ex.Message}");
                 }
             }, "preview_start_external");
 
             if (!taskAccepted)
+            {
+                _log($"[预览管理][警告] 外部预览任务未受理：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                     $"HWND={FormatHwnd(hwndValue)}");
                 return "{\"error\":true,\"code\":\"service_busy\"}";
+            }
+
+            _log($"[预览请求] EXE已受理外部预览请求：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                 $"HWND={FormatHwnd(hwndValue)}");
 
             return "{\"accepted\":true}";
         }
 
-        private string HandlePreviewStop(PreviewResourceType resType)
+        private string HandlePreviewStop(PreviewResourceType resType, string requestId = null)
         {
-            _previewManager.StopPreview(resType, PreviewSessionType.External);
+            var requestTrace = FormatRequestId(requestId);
+            var stopSw = Stopwatch.StartNew();
+            _log($"[预览请求][调试] EXE收到外部停止预览请求：资源={FormatPreviewResource(resType)}，request_id={requestTrace}");
+            var stopped = _previewManager.StopPreview(resType, PreviewSessionType.External);
+            _log($"[预览管理] 外部预览停止完成：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                 $"结果={(stopped ? "成功" : "未找到")}，耗时={stopSw.ElapsedMilliseconds}ms");
             return "{\"status\":\"ok\"}";
         }
 
@@ -639,13 +738,26 @@ namespace HZCYKJTHardWare.Proxy.Server
             var hwnd = new IntPtr(hwndValue);
             var callbackUrl = request.GetString("callback_url");
             var requestId = request.GetString("request_id");
+            var requestTrace = FormatRequestId(requestId);
             var previewUrl = AppConfig.Instance.GetPlatePreviewUrl(plateCode);
 
-            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
-                return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
-            if (string.IsNullOrWhiteSpace(previewUrl))
-                return "{\"error\":true,\"code\":\"plate_preview_not_configured\"}";
+            _log($"[预览请求][调试] EXE收到外部车牌预览请求：资源={FormatPreviewResource(resourceType)}，车牌={plateCode.ToUpperInvariant()}，" +
+                 $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，回调地址={callbackUrl}");
 
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+            {
+                _log($"[预览管理][错误] 车牌预览目标窗口句柄无效：车牌={plateCode.ToUpperInvariant()}，" +
+                     $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}");
+                return "{\"error\":true,\"code\":\"invalid_target_hwnd\"}";
+            }
+            if (string.IsNullOrWhiteSpace(previewUrl))
+            {
+                _log($"[预览管理][警告] 车牌预览地址未配置：车牌={plateCode.ToUpperInvariant()}，" +
+                     $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}");
+                return "{\"error\":true,\"code\":\"plate_preview_not_configured\"}";
+            }
+
+            var previewSw = Stopwatch.StartNew();
             var taskAccepted = _taskTracker.TryRun(async () =>
             {
                 try
@@ -654,19 +766,20 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var ok = await _previewManager.StartPreview(resourceType,
                         PreviewSessionType.External, hwnd, "", shouldContinue: shouldContinue,
                         explicitPreviewUrl: previewUrl, terminalBound: false,
-                        directRenderTarget: true).ConfigureAwait(false);
+                        directRenderTarget: true, requestId: requestId).ConfigureAwait(false);
 
                     if (ok && shouldContinue())
                     {
                         if (!string.IsNullOrEmpty(callbackUrl))
                             await _dllCallback.SendPreviewReady(requestId, "plate_image", hwnd,
                                 IntPtr.Zero).ConfigureAwait(false);
-                        _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览已直接绑定目标HWND: hwnd={hwnd}");
+                        _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览已直接绑定目标HWND：" +
+                             $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                         return;
                     }
 
-                    if (ok)
-                        _previewManager.StopPreview(resourceType, PreviewSessionType.External);
+                    await TryCleanupFailedPreviewAsync(
+                        resourceType, requestId).ConfigureAwait(false);
 
                     if (!string.IsNullOrEmpty(callbackUrl))
                     {
@@ -675,11 +788,15 @@ namespace HZCYKJTHardWare.Proxy.Server
                             ",\"error\":true,\"code\":\"preview_failed\"}";
                         await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
                     }
-                    _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览启动失败: hwnd={hwnd}");
+                    _log($"[预览管理][错误] 外部车牌{plateCode.ToUpperInvariant()}预览启动失败：" +
+                         $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
                 }
                 catch (Exception ex)
                 {
-                    _log($"[预览管理] 外部车牌{plateCode.ToUpperInvariant()}预览启动异常: {ex.Message}");
+                    await TryCleanupFailedPreviewAsync(
+                        resourceType, requestId).ConfigureAwait(false);
+                    _log($"[预览管理][错误] 外部车牌{plateCode.ToUpperInvariant()}预览启动异常：" +
+                         $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms，错误={ex.Message}");
                     if (!string.IsNullOrEmpty(callbackUrl))
                     {
                         var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
@@ -690,22 +807,52 @@ namespace HZCYKJTHardWare.Proxy.Server
                 }
             }, "preview_start_plate_" + plateCode + "_external");
 
-            return taskAccepted
-                ? "{\"accepted\":true}"
-                : "{\"error\":true,\"code\":\"service_busy\"}";
+            if (!taskAccepted)
+            {
+                _log($"[预览管理][警告] 外部车牌{plateCode.ToUpperInvariant()}预览任务未受理：" +
+                     $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}");
+                return "{\"error\":true,\"code\":\"service_busy\"}";
+            }
+
+            _log($"[预览请求] EXE已受理外部车牌预览请求：车牌={plateCode.ToUpperInvariant()}，" +
+                 $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}");
+            return "{\"accepted\":true}";
+        }
+
+        private async Task TryCleanupFailedPreviewAsync(PreviewResourceType resourceType,
+            string requestId)
+        {
+            try
+            {
+                await _previewManager.CleanupFailedPreviewAsync(
+                    resourceType, PreviewSessionType.External, requestId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
+                    "预览失败清理异常：资源=" + FormatPreviewResource(resourceType) +
+                    "，request_id=" + FormatRequestId(requestId)), ex);
+            }
         }
 
         private async Task<string> HandlePreviewUrl(PreviewResourceType resType,
-            TerminalRouteEpochSnapshot routeEpoch)
+            TerminalRouteEpochSnapshot routeEpoch, string requestId)
         {
             if (routeEpoch.IsCancellationRequested)
                 return TerminalSwitchingResult;
             var terminalBaseUrl = routeEpoch.Route.BaseUrl;
-            var previewUrl = await _previewManager.RequestPreviewUrl(resType, terminalBaseUrl);
+            var requestTrace = FormatRequestId(requestId);
+            _log($"[预览请求][调试] EXE收到预览地址请求：资源={FormatPreviewResource(resType)}，request_id={requestTrace}");
+            var previewUrl = await _previewManager.RequestPreviewUrl(resType, terminalBaseUrl,
+                requestId: requestId);
             if (routeEpoch.IsCancellationRequested)
                 return TerminalSwitchingResult;
             if (!string.IsNullOrEmpty(previewUrl))
+            {
+                _log($"[预览管理][调试] 预览地址请求完成：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，结果=成功");
                 return "{\"status\":\"ok\",\"preview_url\":\"" + JsonHelper.EscapeString(previewUrl) + "\"}";
+            }
+            _log($"[预览管理][警告] 预览地址请求失败：资源={FormatPreviewResource(resType)}，request_id={requestTrace}");
             return "{\"error\":true,\"code\":\"preview_url_failed\"}";
         }
 

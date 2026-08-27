@@ -269,14 +269,14 @@ namespace HZCYKJTHardWare.Proxy.Core
                 if (_active.ContainsKey(key) || _completed.ContainsKey(key))
                 {
                     var rejected = Interlocked.Increment(ref _duplicateRejectedCount);
-                    Logger.Warn($"[Registry] duplicate registration rejected: request_id={requestId}, resource={normalized}, total={rejected}");
+                    Logger.Warn($"[请求登记] 拒绝重复登记：request_id={requestId}，资源={normalized}，拒绝总数={rejected}");
                     return null;
                 }
 
                 if (!_capacity.Wait(0))
                 {
                     var rejected = Interlocked.Increment(ref _registerRejectedCount);
-                    Logger.Warn($"[Registry] capacity reached ({_maxActiveEntries}), request_id={requestId}, resource={normalized}, total={rejected}");
+                    Logger.Warn($"[请求登记] 容量已满（{_maxActiveEntries}）：request_id={requestId}，资源={normalized}，拒绝总数={rejected}");
                     return null;
                 }
 
@@ -369,11 +369,11 @@ namespace HZCYKJTHardWare.Proxy.Core
                 _lastPruneCompletedRemoved = result.completedRemoved;
 
                 if (result.activeRemoved > 0 || result.completedRemoved > 0)
-                    Logger.Debug($"[Registry] Timer清理: 活跃移除={result.activeRemoved}, 已完成移除={result.completedRemoved}, 当前活跃={_active.Count}");
+                    Logger.Debug($"[请求登记] 定时清理：活跃移除={result.activeRemoved}，已完成移除={result.completedRemoved}，当前活跃={_active.Count}");
             }
             catch (Exception ex)
             {
-                Logger.Error("[Registry] Timer清理异常", ex);
+                Logger.Error("[请求登记] 定时清理异常", ex);
             }
             finally
             {
@@ -464,7 +464,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 }
                 catch (Exception ex)
                 {
-                    Logger.Error("[Registry] timer dispose failed", ex);
+                    Logger.Error("[请求登记] 释放定时器失败", ex);
                 }
             }
 

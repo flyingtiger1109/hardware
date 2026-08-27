@@ -8,6 +8,32 @@ using System.Threading;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
+    public static class LogModules
+    {
+        public const string HealthCheck = "健康检查";
+        public const string Authorization = "授权";
+        public const string FaceCapture = "人脸抓拍";
+        public const string FingerprintCapture = "指纹抓拍";
+        public const string IrisCapture = "虹膜抓拍";
+        public const string DocumentRecognition = "证件识别";
+        public const string NfcRead = "NFC读卡";
+        public const string Preview = "预览";
+        public const string TerminalSwitch = "终端切换";
+        public const string ProcessControl = "流程控制";
+        public const string TerminalCommunication = "终端通信";
+        public const string TerminalCallback = "终端回调";
+        public const string DllCallback = "DLL回调";
+        public const string SdkLifecycle = "SDK生命周期";
+        public const string ServiceListener = "服务监听";
+        public const string RuntimeMetrics = "运行指标";
+        public const string TaskQueue = "任务队列";
+        public const string LogManagement = "日志管理";
+        public const string DeviceCapability = "设备能力";
+        public const string ConfigManagement = "配置管理";
+        public const string Application = "应用程序";
+        public const string UnrecognizedInterface = "未识别接口";
+    }
+
     public static class Logger
     {
         private const int MaxQueueLength = 10000;
@@ -41,13 +67,16 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         public static void SetMinLevel(string level)
         {
+            var minLevel = -1;
             switch (level?.ToLower())
             {
-                case "debug": _minLevel = 0; break;
-                case "info":  _minLevel = 1; break;
-                case "warn":  _minLevel = 2; break;
-                case "error": _minLevel = 3; break;
+                case "debug": minLevel = 0; break;
+                case "info":  minLevel = 1; break;
+                case "warn":  minLevel = 2; break;
+                case "error": minLevel = 3; break;
             }
+            if (minLevel >= 0)
+                Volatile.Write(ref _minLevel, minLevel);
         }
 
         public static string LogDirectory => _logDir;
@@ -103,12 +132,51 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static void Error(string message, Exception ex) => Write("错误", $"{message}: {ex}", 3);
 
         /// <summary>
+        /// 判断指定级别是否会写入当前日志。UI 和其他日志入口也必须复用该判断，
+        /// 避免文件日志已过滤而实时日志窗口仍显示大量调试明细。
+        /// </summary>
+        public static bool IsLevelEnabled(string level)
+        {
+            return IsLevelEnabled(LevelToNumber(NormalizeLevelName(level)));
+        }
+
+        /// <summary>
+        /// 判断一条带有 [模块][级别] 前缀的消息是否允许显示或写入。
+        /// </summary>
+        public static bool IsMessageEnabled(string message, string defaultLevel = "信息")
+        {
+            var parsed = ParseMessage(message, defaultLevel);
+            return IsLevelEnabled(parsed.LevelNumber);
+        }
+
+        public static void WriteMessage(string message, string defaultLevel = "信息")
+        {
+            var parsed = ParseMessage(message, defaultLevel);
+            Write(parsed.Level, message, parsed.LevelNumber);
+        }
+
+        public static string FormatModuleMessage(string module, string level, string message)
+        {
+            var normalizedModule = NormalizeModuleName(module);
+            var normalizedLevel = NormalizeLevelName(level);
+            return $"[{normalizedModule}][{normalizedLevel}] {message ?? string.Empty}";
+        }
+
+        public static string NormalizeForDisplay(string message, string defaultLevel = "信息")
+        {
+            var parsed = ParseMessage(message, defaultLevel);
+            if (string.IsNullOrEmpty(parsed.Module))
+                return $"[{parsed.Level}] {parsed.Body}";
+            return $"[{parsed.Module}][{parsed.Level}] {parsed.Body}";
+        }
+
+        /// <summary>
         /// 非阻塞日志写入器，支持跨日自动切换日志文件。
-        /// 日志格式与 Delphi 保持一致：[yyyy-MM-dd HH:mm:ss.fff] [级别] message
+        /// 日志格式与 Native DLL 保持一致：[yyyy-MM-dd HH:mm:ss.fff] [模块][级别] message
         /// </summary>
         public static void Write(string level, string message, int levelNum)
         {
-            if (levelNum < _minLevel) return;
+            if (!IsLevelEnabled(levelNum)) return;
             if (Volatile.Read(ref _shutdownState) != 0)
             {
                 RecordDroppedEntry();
@@ -118,7 +186,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 var now = DateTime.Now;
                 var date = now.ToString("yyyyMMdd");
-                var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}";
+                var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] {NormalizeForDisplay(message, level)}";
 
                 if (!_queue.TryAdd(new LogEntry
                     { Date = date, Line = line, LevelNum = levelNum }, 0))
@@ -264,7 +332,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var dropped = Interlocked.Exchange(ref _droppedCount, 0);
                 if (dropped > 0)
                 {
-                    _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [警告] 日志队列已满，已丢弃 {dropped} 条日志");
+                    _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                        NormalizeForDisplay("日志队列已满，已丢弃 " + dropped + " 条日志", "警告"));
                     _pendingLines++;
                 }
 
@@ -317,6 +386,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             return Math.Max(0L, (DateTime.UtcNow.Ticks - ticks) / TimeSpan.TicksPerMillisecond);
         }
 
+        private static bool IsLevelEnabled(int levelNum)
+        {
+            return levelNum >= Volatile.Read(ref _minLevel);
+        }
+
         private static void RecordWriterFailure(Exception ex)
         {
             Interlocked.Increment(ref _writeFailureCount);
@@ -339,8 +413,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     FileShare.ReadWrite, 4096, FileOptions.WriteThrough))
                 using (var writer = new StreamWriter(stream, Encoding.UTF8))
                 {
-                    writer.WriteLine("[{0:yyyy-MM-dd HH:mm:ss.fff}] [ERROR] primary logger write failed: {1}",
-                        DateTime.Now, error.Replace(Environment.NewLine, " | "));
+                    writer.WriteLine("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}",
+                        DateTime.Now,
+                        NormalizeForDisplay("日志主写入器失败：" + error.Replace(Environment.NewLine, " | "), "错误"));
                     writer.Flush();
                     stream.Flush(true);
                 }
@@ -406,9 +481,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 if (!drive.IsReady || drive.AvailableFreeSpace >= _diskWarningFreeBytes)
                     return;
 
-                var warning = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [警告] " +
-                    $"日志盘剩余空间不足: available_mb={drive.AvailableFreeSpace / 1024 / 1024}, " +
-                    $"threshold_mb={_diskWarningFreeBytes / 1024 / 1024}";
+                var warning = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                    NormalizeForDisplay(
+                    $"日志盘剩余空间不足：可用空间={drive.AvailableFreeSpace / 1024 / 1024}MB，" +
+                    $"预警阈值={_diskWarningFreeBytes / 1024 / 1024}MB", "警告");
                 if (_writer != null)
                 {
                     _writer.WriteLine(warning);
@@ -429,6 +505,231 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             public string Line;
             public int LevelNum;
             public ManualResetEventSlim FlushSignal;
+        }
+
+        private sealed class ParsedLogMessage
+        {
+            public string Module;
+            public string Level;
+            public int LevelNumber;
+            public string Body;
+        }
+
+        private static ParsedLogMessage ParseMessage(string message, string defaultLevel)
+        {
+            var body = (message ?? string.Empty).Trim();
+            var module = (string)null;
+            var level = NormalizeLevelName(defaultLevel);
+
+            for (var i = 0; i < 2; i++)
+            {
+                if (!TryTakeTag(ref body, out var tag))
+                    break;
+
+                if (IsLevelName(tag))
+                    level = NormalizeLevelName(tag);
+                else if (module == null)
+                    module = NormalizeModuleName(tag);
+                else
+                {
+                    body = "[" + tag + "] " + body;
+                    break;
+                }
+            }
+
+            var inferredModule = InferModule(body);
+            if (module == null)
+                module = inferredModule ?? LogModules.Application;
+            else if ((string.Equals(module, LogModules.UnrecognizedInterface,
+                         StringComparison.Ordinal) ||
+                      string.Equals(module, LogModules.TerminalCommunication,
+                         StringComparison.Ordinal) ||
+                      string.Equals(module, LogModules.TerminalCallback,
+                         StringComparison.Ordinal)) &&
+                     !string.IsNullOrEmpty(inferredModule))
+                module = inferredModule;
+
+            return new ParsedLogMessage
+            {
+                Module = module,
+                Level = level,
+                LevelNumber = LevelToNumber(level),
+                Body = body.TrimStart(' ', '\t', ':', '：')
+            };
+        }
+
+        private static bool TryTakeTag(ref string text, out string tag)
+        {
+            tag = null;
+            if (string.IsNullOrEmpty(text) || text[0] != '[')
+                return false;
+
+            var end = text.IndexOf(']');
+            if (end <= 1 || end > 64)
+                return false;
+
+            tag = text.Substring(1, end - 1);
+            text = text.Substring(end + 1).TrimStart();
+            return true;
+        }
+
+        private static bool IsLevelName(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "debug":
+                case "info":
+                case "warn":
+                case "error":
+                case "调试":
+                case "信息":
+                case "警告":
+                case "错误":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static string NormalizeLevelName(string level)
+        {
+            switch ((level ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "debug":
+                case "调试": return "调试";
+                case "warn":
+                case "warning":
+                case "警告": return "警告";
+                case "error":
+                case "错误": return "错误";
+                default: return "信息";
+            }
+        }
+
+        private static int LevelToNumber(string level)
+        {
+            switch (NormalizeLevelName(level))
+            {
+                case "调试": return 0;
+                case "警告": return 2;
+                case "错误": return 3;
+                default: return 1;
+            }
+        }
+
+        private static string NormalizeModuleName(string module)
+        {
+            var value = (module ?? string.Empty).Trim();
+            switch (value)
+            {
+                case "预览请求":
+                case "预览管理":
+                case "预览窗口":
+                case "预览租约":
+                case "PreviewMgr":
+                    return LogModules.Preview;
+                case "健康检测":
+                    return LogModules.HealthCheck;
+                case "硬件检测":
+                    return LogModules.DeviceCapability;
+                case "服务":
+                    return LogModules.ServiceListener;
+                case "流程":
+                    return LogModules.ProcessControl;
+                case "队列":
+                    return LogModules.TaskQueue;
+                case "事件分发":
+                    return LogModules.TerminalCallback;
+                case "TerminalMgr":
+                    return LogModules.TerminalCommunication;
+                case "接口":
+                case "DLL请求":
+                    return LogModules.UnrecognizedInterface;
+                case "HTTP请求":
+                case "代理服务":
+                    return LogModules.TerminalCommunication;
+                case "回调服务":
+                    return LogModules.ServiceListener;
+                case "NFC":
+                    return LogModules.NfcRead;
+                case "SDK":
+                    return LogModules.SdkLifecycle;
+                case "能力检查":
+                    return LogModules.DeviceCapability;
+                case "配置管理":
+                    return LogModules.ConfigManagement;
+                case "日志":
+                    return LogModules.LogManagement;
+                default:
+                    return value;
+            }
+        }
+
+        private static string InferModule(string body)
+        {
+            if (string.IsNullOrEmpty(body))
+                return null;
+            if (body.StartsWith("HTTP MJPEG", StringComparison.OrdinalIgnoreCase) ||
+                body.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                body.IndexOf("预览", StringComparison.Ordinal) >= 0)
+                return LogModules.Preview;
+            if (body.IndexOf("/ping", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                body.IndexOf("健康检查", StringComparison.Ordinal) >= 0)
+                return LogModules.HealthCheck;
+            if (body.StartsWith("终端切换", StringComparison.Ordinal))
+                return LogModules.TerminalSwitch;
+            if (body.StartsWith("授权", StringComparison.Ordinal))
+                return LogModules.Authorization;
+            if (body.StartsWith("人脸抓拍", StringComparison.Ordinal))
+                return LogModules.FaceCapture;
+            if (body.StartsWith("指纹抓拍", StringComparison.Ordinal))
+                return LogModules.FingerprintCapture;
+            if (body.StartsWith("虹膜抓拍", StringComparison.Ordinal))
+                return LogModules.IrisCapture;
+            if (body.StartsWith("OCR", StringComparison.OrdinalIgnoreCase))
+                return LogModules.DocumentRecognition;
+            if (body.StartsWith("NFC", StringComparison.OrdinalIgnoreCase) ||
+                body.StartsWith("IC卡", StringComparison.Ordinal) ||
+                body.StartsWith("IC 卡", StringComparison.Ordinal))
+                return LogModules.NfcRead;
+            if (body.IndexOf("/capture/face", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.FaceCapture;
+            if (body.IndexOf("/capture/fingerprint", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.FingerprintCapture;
+            if (body.IndexOf("/capture/iris", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.IrisCapture;
+            if (body.IndexOf("/ocr", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.DocumentRecognition;
+            if (body.IndexOf("/nfc", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.NfcRead;
+            if (body.IndexOf("/authorize", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.Authorization;
+            if (body.IndexOf("/terminal/switch", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.TerminalSwitch;
+            if (body.IndexOf("/process", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LogModules.ProcessControl;
+            if (body.IndexOf("HTTP MJPEG", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                body.IndexOf("预览", StringComparison.Ordinal) >= 0)
+                return LogModules.Preview;
+            if (body.IndexOf("人脸", StringComparison.Ordinal) >= 0 ||
+                body.IndexOf("摄像头", StringComparison.Ordinal) >= 0)
+                return LogModules.FaceCapture;
+            if (body.IndexOf("指纹", StringComparison.Ordinal) >= 0)
+                return LogModules.FingerprintCapture;
+            if (body.IndexOf("虹膜", StringComparison.Ordinal) >= 0)
+                return LogModules.IrisCapture;
+            if (body.IndexOf("流程", StringComparison.Ordinal) >= 0)
+                return LogModules.ProcessControl;
+            if (body.IndexOf("切换", StringComparison.Ordinal) >= 0)
+                return LogModules.TerminalSwitch;
+            if (body.IndexOf("服务", StringComparison.Ordinal) >= 0 ||
+                body.IndexOf("关闭窗口", StringComparison.Ordinal) >= 0)
+                return LogModules.ServiceListener;
+            if (body.IndexOf("队列", StringComparison.Ordinal) >= 0)
+                return LogModules.TaskQueue;
+            if (body.IndexOf("日志", StringComparison.Ordinal) >= 0)
+                return LogModules.LogManagement;
+            return null;
         }
     }
 }

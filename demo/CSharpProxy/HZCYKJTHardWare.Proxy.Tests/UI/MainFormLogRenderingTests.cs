@@ -39,11 +39,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
 
                     var titleLabel = (Label)GetField(
                         typeof(MainForm), "lblPageTitle").GetValue(form);
+                    var versionLabel = (Label)GetField(
+                        typeof(MainForm), "_lblVersion").GetValue(form);
                     var trayIcon = (NotifyIcon)GetField(
                         typeof(MainForm), "_trayIcon").GetValue(form);
                     Assert.AreEqual(ProductVersionInfo.WindowTitle, form.Text);
                     Assert.AreEqual(ProductVersionInfo.DisplayName, titleLabel.Text);
                     Assert.IsFalse(titleLabel.Text.Contains(ProductVersionInfo.DisplayVersion));
+                    Assert.AreEqual(ProductVersionInfo.DisplayVersion, versionLabel.Text);
+                    Assert.AreEqual(ProductVersionInfo.DisplayName, form.Text);
+                    Assert.AreSame(titleLabel.Parent, versionLabel.Parent);
+                    Assert.IsTrue(versionLabel.Font.Size < titleLabel.Font.Size);
                     Assert.AreEqual(ProductVersionInfo.DisplayName, trayIcon.Text);
                 }
             });
@@ -569,7 +575,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.UI
                     {
                         "[2026-07-03 15:52:42.792] [信息] 配置文件已加载",
                         "[2026-07-03 15:52:42.792] [信息] 应用程序启动中...",
-                        "[2026-07-03 15:52:42.822] [警告] No IP found matching subnet prefix: 192.168.20"
+                        "[2026-07-03 15:52:42.822] [警告] 未找到匹配子网前缀的IP地址: 192.168.20"
                     };
                     prependHistoryLines.Invoke(form, new object[] { historyLines });
 

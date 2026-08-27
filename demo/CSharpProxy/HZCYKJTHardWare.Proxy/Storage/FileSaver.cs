@@ -467,8 +467,8 @@ namespace HZCYKJTHardWare.Proxy.Storage
                 }
 
                 var delayMs = CommitRetryDelaysMs[attempt];
-                Logger.Debug($"[文件保存] 原子替换暂时失败，{delayMs}ms 后重试: " +
-                    $"error={errorCode}, attempt={attempt + 1}, path={filePath}");
+                Logger.Debug($"[文件保存] 原子替换暂时失败，{delayMs}ms 后重试：" +
+                    $"错误码={errorCode}，尝试次数={attempt + 1}，路径={filePath}");
                 Thread.Sleep(delayMs);
             }
         }

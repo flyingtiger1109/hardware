@@ -44,6 +44,7 @@ public:
 
     // 访问器
     TerminalMode GetTerminalMode() const;
+    int GetDeviceMode() const;
     const std::string& GetScheme() const;
     int GetPort() const;
     bool GetCheckOnInit() const;
@@ -110,6 +111,7 @@ private:
     void ApplyDefaults();
 
     TerminalMode m_mode = TerminalMode::AutoSubnet;
+    int m_deviceMode = 1;
     std::string m_scheme = "http";
     int m_port = 8080;
     bool m_checkOnInit = false;

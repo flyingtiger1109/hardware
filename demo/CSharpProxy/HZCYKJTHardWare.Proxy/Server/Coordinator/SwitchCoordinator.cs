@@ -89,9 +89,12 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         /// </summary>
         public async Task<bool> SwitchToAsync(int terminalIndex)
         {
+            if (!EnsureTargetTerminalConfigured(terminalIndex))
+                return false;
+
             if (!TryBeginSwitch(terminalIndex, out var generation))
             {
-                _log("[Coordinator] 终端切换被拒绝：已有切换正在执行");
+                _log("[终端切换][警告] 终端切换被拒绝：已有切换正在执行");
                 return false;
             }
             return await SwitchToCoreAsync(terminalIndex, generation).ConfigureAwait(false);
@@ -103,6 +106,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         /// </summary>
         public bool RequestSwitch(int terminalIndex)
         {
+            if (!EnsureTargetTerminalConfigured(terminalIndex))
+                return false;
+
             if (!TryBeginSwitch(terminalIndex, out var generation))
                 return false;
 
@@ -116,7 +122,24 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 return true;
 
             FinishSwitch();
-            _log("[Coordinator] 终端切换队列已停止或已满");
+            _log("[终端切换][警告] 终端切换队列已停止或已满");
+            return false;
+        }
+
+        private bool EnsureTargetTerminalConfigured(int terminalIndex)
+        {
+            if (_terminalManager.IsTerminalConfigured(terminalIndex))
+                return true;
+
+            var terminalName = _terminalManager.GetTerminalName(terminalIndex);
+            if (string.IsNullOrWhiteSpace(terminalName))
+                terminalName = "终端" + terminalIndex;
+            var message = "[终端切换][警告] 拒绝切换：目标终端=" + terminalIndex +
+                "(" + terminalName + ")未配置，code=terminal_not_configured";
+            if (_log != null)
+                _log(message);
+            else
+                Logger.Warn(message);
             return false;
         }
 
@@ -158,7 +181,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 CancelEpoch(previousEpoch);
                 _requestRegistry.CancelOlderThan(generation);
-                Logger.Info($"[Coordinator] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
+                Logger.Info($"[终端切换] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
                 return true;
             }
             catch
@@ -181,7 +204,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 var phase = sw.ElapsedMilliseconds;
                 _terminalManager.SwitchTo(terminalIndex);
                 Logger.Debug($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
-                _log("[Coordinator] 当前终端=" + _terminalManager.CurrentName);
+                _log("[终端切换] 当前终端=" + _terminalManager.CurrentName);
                 NotifyTerminalChanged(_terminalManager.CurrentIndex);
 
                 var restartBaseUrl = _terminalManager.CurrentBaseUrl;
@@ -189,14 +212,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 FinishSwitch();
                 switchFinished = true;
 
-                Logger.Info($"[Coordinator] 终端切换完成，已清除切换中标志，批次={generation}，目标终端={_terminalManager.CurrentName}，耗时={switchElapsedMs}ms，预览进入后台恢复");
+                Logger.Info($"[终端切换] 终端切换完成，已清除切换中标志，批次={generation}，目标终端={_terminalManager.CurrentName}，耗时={switchElapsedMs}ms，预览进入后台恢复");
                 Logger.Debug($"[性能] 终端切换总耗时={switchElapsedMs}ms");
                 StartPreviewRestartInBackground(restartBaseUrl, generation, switchElapsedMs);
                 return true;
             }
             catch (Exception ex)
             {
-                _log("[Coordinator] 切换失败: " + ex.Message);
+                _log("[终端切换][错误] 切换失败：" + ex.Message);
                 return false;
             }
             finally
@@ -211,17 +234,17 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             Func<Task> restartWork = async () =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                Logger.Info($"[Coordinator] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
+                Logger.Info($"[终端切换] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
                 try
                 {
                     await _previewManager.RestartPreviewsOnTerminalSwitch(
                         terminalBaseUrl,
                         () => _queueManager.IsGenerationValid(generation)).ConfigureAwait(false);
-                    Logger.Info($"[Coordinator] 预览后台恢复完成，批次={generation}，耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Info($"[终端切换] 预览后台恢复完成，批次={generation}，耗时={sw.ElapsedMilliseconds}ms");
                 }
                 catch (Exception ex)
                 {
-                    Logger.Error($"[Coordinator] 预览后台恢复异常，批次={generation}，耗时={sw.ElapsedMilliseconds}ms", ex);
+                    Logger.Error($"[终端切换] 预览后台恢复异常，批次={generation}，耗时={sw.ElapsedMilliseconds}ms", ex);
                 }
             };
 
@@ -229,7 +252,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 if (!_taskTracker.TryRun(restartWork,
                     "preview_switch_recovery_" + generation))
-                    Logger.Warn($"[Coordinator] 预览后台恢复未启动，任务容量已满，批次={generation}");
+                    Logger.Warn($"[终端切换] 预览后台恢复未启动，任务容量已满，批次={generation}");
                 return;
             }
 
@@ -258,7 +281,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
             catch (AggregateException ex)
             {
-                Logger.Error("[Coordinator] 取消旧终端批次时发生回调异常", ex);
+                Logger.Error("[终端切换] 取消旧终端批次时发生回调异常", ex);
             }
         }
 
@@ -270,7 +293,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
             catch (Exception ex)
             {
-                Logger.Error("[Coordinator] 通知当前终端变化失败", ex);
+                Logger.Error("[终端切换] 通知当前终端变化失败", ex);
             }
         }
     }

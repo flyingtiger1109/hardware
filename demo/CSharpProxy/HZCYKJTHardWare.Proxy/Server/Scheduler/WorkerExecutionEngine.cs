@@ -178,7 +178,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         tcs?.TrySetResult("{\"error\":true,\"code\":\"request_expired\"}");
                         return;
                     }
-                    _log($"{operation} 已转发至终端: request_id={data.RequestId}");
+                    _log($"{operation} 已转发至终端：request_id={data.RequestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" +
                         JsonHelper.EscapeString(data.RequestId) + "\"}");
                 }
@@ -256,7 +256,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         tcs?.TrySetResult("{\"error\":true,\"code\":\"request_expired\"}");
                         return;
                     }
-                    _log($"虹膜抓拍已转发至终端: request_id={requestId}");
+                    _log($"虹膜抓拍已转发至终端：request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" +
                         JsonHelper.EscapeString(requestId) + "\"}");
                     return;
@@ -273,7 +273,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         : "terminal_request_failed";
                 }
 
-                Logger.Error($"[虹膜抓拍] 终端拒绝或受理响应无效: request_id={requestId}, code={errorCode}, status={status}");
+                Logger.Error($"[虹膜抓拍] 终端拒绝或受理响应无效：request_id={requestId}，错误码={errorCode}，状态={status}");
                 tcs?.TrySetResult("{\"error\":true,\"code\":\"" +
                     JsonHelper.EscapeString(errorCode) + "\",\"message\":\"" +
                     JsonHelper.EscapeString(message) + "\"}");

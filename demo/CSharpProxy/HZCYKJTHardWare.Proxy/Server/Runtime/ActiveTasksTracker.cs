@@ -64,7 +64,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             if (!_slots.Wait(0))
             {
                 Interlocked.Increment(ref _totalRejected);
-                Logger.Warn($"[TaskTracker] 容量已满({_maxConcurrent})，拒绝启动: {label} (累计拒绝={TotalRejected})");
+                Logger.Warn($"[任务跟踪] 容量已满（{_maxConcurrent}），拒绝启动：{label}（累计拒绝={TotalRejected}）");
                 return false;
             }
 
@@ -107,7 +107,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             task.ContinueWith(t =>
             {
                 if (t.IsFaulted && t.Exception != null)
-                    Logger.Error($"[TaskTracker] background task failed: {label}",
+                    Logger.Error($"[任务跟踪] 后台任务失败：{label}",
                         t.Exception.Flatten());
                 if (_tasks.TryRemove(id, out _))
                     Interlocked.Increment(ref _totalCompleted);
@@ -164,7 +164,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                     }
                 }
                 if (stillActive > 0)
-                    Logger.Warn($"[TaskTracker] WaitAllAsync超时({timeoutMs}ms): {stillActive}个Task仍活跃");
+            Logger.Warn($"[任务跟踪] WaitAllAsync 超时（{timeoutMs}ms）：仍有 {stillActive} 个任务在运行");
             }
         }
 

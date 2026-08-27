@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -44,11 +45,14 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly TerminalCallbackHandler _callbackHandler;
         private readonly TerminalHealthChecker _healthChecker;
         private readonly RuntimeMetricsReporter _metricsReporter;
+        private readonly DeviceCapabilityManager _capabilities;
 
         private readonly ProxyRuntime _runtime;
         private readonly Action<string> _log;
+        private readonly PingLogAggregator _pingLogAggregator;
         private readonly Action<bool> _onProcessStateChanged;
         private readonly Action<int> _onTerminalChanged;
+        private static long _nextHttpTraceSequence;
         private string _lanIp;
         private int _started;
         private int _stopped;
@@ -90,8 +94,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             Action<HealthStatus> onHealthChanged = null)
         {
             _log = log;
+            _pingLogAggregator = new PingLogAggregator(log);
             _onProcessStateChanged = onProcessStateChanged;
             _onTerminalChanged = onTerminalChanged;
+            _capabilities = DeviceCapabilityManager.Instance;
 
             // 基础设施组件
             _transport = new Runtime.TransportLayer(log);
@@ -102,7 +108,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             _terminalClient = new TerminalClient();
             _dllCallback = new DllCallbackSender();
             _previewManager = new PreviewManager(_terminalClient, _taskTracker);
-            _queueManager = new QueueManager();
+            _previewManager.SetExternalPreviewFailureHandler(NotifyExternalPreviewFailure);
+            _queueManager = new QueueManager(_capabilities);
             _requestRegistry = new RequestRegistry();
             _processRegistry = new TerminalProcessRegistry();
             _controlGate = new ControlOperationGate();
@@ -164,7 +171,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _terminalManager, _terminalClient, _dllCallback, _previewManager,
                 _requestRegistry, _processRegistry, _controlGate, log,
                 GetTerminalCallbackBaseUrl, _queueManager, _taskTracker,
-                _coordinator, _processEndCoordinator, onProcessStateChanged);
+                _coordinator, _processEndCoordinator, onProcessStateChanged,
+                _capabilities);
 
             _callbackHandler = new TerminalCallbackHandler(
                 _terminalClient, _terminalManager, _dllCallback,
@@ -188,20 +196,27 @@ namespace HZCYKJTHardWare.Proxy.Server
             var cfg = AppConfig.Instance;
             var cts = _runtime.BeginSession();
 
-            _lanIp = NetworkDetector.DetectLanIp(cfg.SubnetPrefix);
+            _lanIp = _capabilities.IsSupported(DeviceCapability.TerminalControl)
+                ? NetworkDetector.DetectLanIp(cfg.SubnetPrefix)
+                : "127.0.0.1";
 
             _transport.AddListener("DLL服务", cfg.DllServerHost, cfg.DllServerPort,
                 HandleDllRequest, maxConcurrent: 64, backlog: 200);
-            _transport.AddListener("终端回调", cfg.CallbackListenHost, cfg.CallbackListenPort,
-                HandleCallbackRequest, maxConcurrent: 8, backlog: 50);
+            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                _transport.AddListener("终端回调", cfg.CallbackListenHost, cfg.CallbackListenPort,
+                    HandleCallbackRequest, maxConcurrent: 8, backlog: 50);
 
-            _log($"DLL 服务监听: {cfg.DllServerHost}:{cfg.DllServerPort}");
-            _log($"回调服务监听: {cfg.CallbackListenHost}:{cfg.CallbackListenPort}");
+            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
+                $"DLL服务监听：{cfg.DllServerHost}:{cfg.DllServerPort}"));
+            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
+                    $"终端回调服务监听：{cfg.CallbackListenHost}:{cfg.CallbackListenPort}"));
 
             _transport.StartAll(cts.Token);
 
             // 终端硬件健康检查
-            _healthChecker.Start();
+            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                _healthChecker.Start();
             _metricsReporter.Start();
 
             // VLC 预热
@@ -214,8 +229,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             }, "vlc_warmup"))
                 _log("[VLC预热] 后台任务容量已满，跳过本次预热");
 
-            _log($"服务已启动。本机IP: {_lanIp}, 当前终端: {_terminalManager.CurrentName} ({_terminalManager.CurrentBaseUrl})");
-            NotifyTerminalChanged(_terminalManager.CurrentIndex);
+            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
+                $"服务已启动：本机IP={_lanIp}，当前终端={_terminalManager.CurrentName}（{_terminalManager.CurrentBaseUrl}）"));
+            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                NotifyTerminalChanged(_terminalManager.CurrentIndex);
         }
 
         private void NotifyTerminalChanged(int terminalIndex)
@@ -238,9 +255,63 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        private static string GetPreviewCallbackResourceName(PreviewResourceType resourceType)
+        {
+            switch (resourceType)
+            {
+                case PreviewResourceType.Camera:
+                    return "face_image";
+                case PreviewResourceType.Fingerprint:
+                    return "fingerprint_image";
+                case PreviewResourceType.Iris:
+                    return "iris_image";
+                default:
+                    return "plate_image";
+            }
+        }
+
+        private void NotifyExternalPreviewFailure(
+            PreviewResourceType resourceType, string requestId, string reason)
+        {
+            _ = NotifyExternalPreviewFailureAsync(resourceType, requestId, reason);
+        }
+
+        private async Task NotifyExternalPreviewFailureAsync(
+            PreviewResourceType resourceType, string requestId, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(requestId))
+                return;
+
+            try
+            {
+                var resourceName = GetPreviewCallbackResourceName(resourceType);
+                var message = string.IsNullOrWhiteSpace(reason)
+                    ? "MJPEG预览恢复失败"
+                    : reason;
+                var payload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                    "\",\"resource_type\":\"" + resourceName +
+                    "\",\"render_hwnd\":0,\"error\":true," +
+                    "\"code\":\"preview_runtime_failed\",\"message\":\"" +
+                    JsonHelper.EscapeString(message) + "\"}";
+
+                _log(Logger.FormatModuleMessage(LogModules.Preview, "错误",
+                    "预览运行时失败，已通知DLL清理租约：资源=" + resourceName +
+                    "，request_id=" + PreviewManager.FormatRequestId(requestId)));
+                await _dllCallback.PostCallbackRaw("/preview-ready", payload)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
+                    "预览运行时失败通知DLL异常：request_id=" +
+                    PreviewManager.FormatRequestId(requestId)), ex);
+            }
+        }
+
         public void RequestHealthCheck()
         {
-            _healthChecker?.RequestCheck(resetRetryAttempt: false);
+            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                _healthChecker?.RequestCheck(resetRetryAttempt: false);
         }
 
         public void Stop()
@@ -255,7 +326,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             try { _runtime.StopAsync().GetAwaiter().GetResult(); }
             catch (Exception ex) { Logger.Error("[服务] 关闭异常", ex); }
 
-            _log("服务已停止");
+            _pingLogAggregator.Flush();
+            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息", "服务已停止"));
         }
 
         public void Dispose()
@@ -272,6 +344,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             SafeDispose(_healthChecker, nameof(TerminalHealthChecker));
             SafeDispose(_terminalClient, nameof(TerminalClient));
             SafeDispose(_dllCallback, nameof(DllCallbackSender));
+            SafeDispose(_pingLogAggregator, nameof(PingLogAggregator));
         }
 
         private static void SafeDispose(IDisposable component, string name)
@@ -285,6 +358,12 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         private async Task HandleDllRequest(TcpClient client)
         {
+            var requestPath = "<未知>";
+            var requestTrace = CreateHttpTraceId();
+            var requestLogId = "<未知>";
+            var requestSw = Stopwatch.StartNew();
+            var isPing = false;
+            var pingRecorded = false;
             try
             {
                 using (client)
@@ -294,16 +373,90 @@ namespace HZCYKJTHardWare.Proxy.Server
                     stream.WriteTimeout = 2000;
                     var (method, path, body) = await ReadHttpRequestWithDeadlineAsync(
                         client, stream, 2000).ConfigureAwait(false);
+                    requestPath = path ?? "<未知>";
+                    var rawRequestId = JsonHelper.ExtractString(body, "request_id");
+                    if (!string.IsNullOrWhiteSpace(rawRequestId))
+                        requestTrace = rawRequestId;
+                    requestLogId = FormatRequestIdForLog(rawRequestId, requestTrace);
+                    isPing = string.Equals((requestPath ?? string.Empty).Split('?')[0],
+                        "/ping", StringComparison.OrdinalIgnoreCase);
+                    var requestModule = GetDllRequestLogModule(requestPath);
+                    if (!isPing)
+                    {
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
+                            $"来源=DLL，EXE收到HTTP请求：方法={method}，路径={requestPath}，" +
+                            $"request_id={requestLogId}，正文长度={(body ?? "").Length}"));
+                    }
+
                     var result = await _commandHandler.HandleAsync(method, path, body);
                     await WriteHttpResponseWithDeadlineAsync(client, stream, 200,
                         result, 2000).ConfigureAwait(false);
+
+                    if (isPing)
+                    {
+                        pingRecorded = true;
+                        if (IsSuccessfulPingResponse(result))
+                            _pingLogAggregator.RecordSuccess(requestSw.ElapsedMilliseconds);
+                        else
+                            _pingLogAggregator.RecordFailure("响应内容异常", false,
+                                requestSw.ElapsedMilliseconds);
+                    }
+                    else
+                    {
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
+                            $"来源=DLL，EXE完成HTTP请求：路径={requestPath}，request_id={requestLogId}，" +
+                            $"状态=200，耗时={requestSw.ElapsedMilliseconds}毫秒，响应长度={(result ?? "").Length}"));
+                    }
                 }
             }
-            catch (Exception ex) { LogException("[DLL请求] 处理异常", ex); }
+            catch (Exception ex)
+            {
+                if (isPing && !pingRecorded)
+                {
+                    _pingLogAggregator.RecordFailure(ex.GetType().Name + "：" + ex.Message,
+                        true, requestSw.ElapsedMilliseconds);
+                }
+                else
+                {
+                    var requestModule = GetDllRequestLogModule(requestPath);
+                    LogException(Logger.FormatModuleMessage(requestModule, "错误",
+                        $"来源=DLL，HTTP处理异常：路径={requestPath}，request_id={requestLogId}，" +
+                        $"耗时={requestSw.ElapsedMilliseconds}毫秒"), ex);
+                }
+            }
+        }
+
+        private static bool IsSuccessfulPingResponse(string result)
+        {
+            return string.Equals(JsonHelper.ExtractString(result, "status"),
+                "ok", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetDllRequestLogModule(string path)
+        {
+            var normalizedPath = (path ?? string.Empty).Split('?')[0];
+            if (normalizedPath == "/ping") return LogModules.HealthCheck;
+            if (normalizedPath == "/authorize") return LogModules.Authorization;
+            if (normalizedPath == "/capture/face") return LogModules.FaceCapture;
+            if (normalizedPath == "/capture/fingerprint") return LogModules.FingerprintCapture;
+            if (normalizedPath == "/capture/iris") return LogModules.IrisCapture;
+            if (normalizedPath == "/ocr") return LogModules.DocumentRecognition;
+            if (normalizedPath == "/nfc") return LogModules.NfcRead;
+            if (normalizedPath == "/terminal/switch") return LogModules.TerminalSwitch;
+            if (normalizedPath == "/process/start" || normalizedPath == "/process/end")
+                return LogModules.ProcessControl;
+            if (normalizedPath.StartsWith("/preview/", StringComparison.OrdinalIgnoreCase))
+                return LogModules.Preview;
+            return LogModules.UnrecognizedInterface;
         }
 
         private async Task HandleCallbackRequest(TcpClient client)
         {
+            var callbackPath = "<未知>";
+            var callbackTrace = CreateHttpTraceId();
+            var callbackLogId = "<未知>";
+            var resourceType = "<未知>";
+            var callbackSw = Stopwatch.StartNew();
             try
             {
                 var remoteAddress =
@@ -315,15 +468,25 @@ namespace HZCYKJTHardWare.Proxy.Server
                     stream.WriteTimeout = 30000;
                     var (_, path, body) = await ReadHttpRequestWithDeadlineAsync(
                         client, stream, 30000).ConfigureAwait(false);
-                    var requestId = JsonHelper.ExtractString(body, "request_id");
-                    var resourceType = JsonHelper.ExtractString(body, "resource_type");
-                    var callbackPath = (path ?? "").Split('?')[0];
+                    var rawRequestId = JsonHelper.ExtractString(body, "request_id");
+                    if (!string.IsNullOrWhiteSpace(rawRequestId))
+                        callbackTrace = rawRequestId;
+                    callbackLogId = FormatRequestIdForLog(rawRequestId, callbackTrace);
+                    resourceType = JsonHelper.ExtractString(body, "resource_type");
+                    callbackPath = (path ?? "").Split('?')[0];
+
+                    _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "调试",
+                        $"EXE收到HTTP回调：路径={callbackPath}，request_id={callbackLogId}，" +
+                        $"资源={resourceType}，正文长度={(body ?? "").Length}"));
 
                     if (string.Equals(callbackPath, "/iris-image", StringComparison.OrdinalIgnoreCase) &&
-                        (string.IsNullOrEmpty(requestId) || resourceType != "iris_image"))
+                        (string.IsNullOrEmpty(rawRequestId) || resourceType != "iris_image"))
                     {
+                        _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
+                            $"EXE拒绝回调：路径={callbackPath}，request_id={callbackLogId}，" +
+                            $"资源={resourceType}，原因=invalid_iris_callback"));
                         await WriteHttpResponseWithDeadlineAsync(client, stream, 400,
-                            "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                            "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                             "\",\"status\":\"rejected\",\"message\":\"invalid iris callback\"," +
                             "\"error_code\":\"invalid_callback\"}", 30000).ConfigureAwait(false);
                         return;
@@ -341,25 +504,55 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     if (!accepted)
                     {
+                        _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
+                            $"EXE未受理回调：路径={callbackPath}，request_id={callbackLogId}，" +
+                            $"资源={resourceType}，耗时={callbackSw.ElapsedMilliseconds}ms，原因=service_busy"));
                         await WriteHttpResponseWithDeadlineAsync(client, stream, 503,
-                            "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                            "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                             "\",\"status\":\"rejected\",\"message\":\"service busy\"," +
                             "\"error_code\":\"service_busy\"}", 30000).ConfigureAwait(false);
                         return;
                     }
 
+                    _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "信息",
+                        $"EXE已受理回调：路径={callbackPath}，request_id={callbackLogId}，" +
+                        $"资源={resourceType}，耗时={callbackSw.ElapsedMilliseconds}ms"));
                     await WriteHttpResponseWithDeadlineAsync(client, stream, 202,
-                        "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
+                        "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                         "\",\"status\":\"accepted\"}", 30000).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex) { LogException("[终端回调] HTTP处理异常", ex); }
+            catch (Exception ex)
+            {
+                LogException(Logger.FormatModuleMessage(LogModules.TerminalCallback, "错误",
+                    $"HTTP处理异常：路径={callbackPath}，request_id={callbackLogId}，" +
+                    $"资源={resourceType}，耗时={callbackSw.ElapsedMilliseconds}ms"), ex);
+            }
+        }
+
+        private static string FormatRequestId(string requestId)
+        {
+            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : requestId;
+        }
+
+        private static string CreateHttpTraceId()
+        {
+            var sequence = Interlocked.Increment(ref _nextHttpTraceSequence);
+            return "EXE_HTTP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff") +
+                "_" + sequence.ToString("D4");
+        }
+
+        private static string FormatRequestIdForLog(string requestId, string traceId)
+        {
+            if (!string.IsNullOrWhiteSpace(requestId))
+                return requestId;
+            return "<无>，日志追踪ID=" + traceId;
         }
 
         private void LogException(string context, Exception ex)
         {
             Logger.Error(context, ex);
-            _log($"{context}: {ex.Message}");
+            _log($"{context}：{ex.Message}");
         }
 
         private static async Task<(string method, string path, string body)>
@@ -395,41 +588,73 @@ namespace HZCYKJTHardWare.Proxy.Server
         // MainForm 从不含 UI 同步上下文的 Task.Run 工作任务中调用这些方法。
 
         public string StartProcess(string saveDir)
-            => _bizOps.StartProcessAsync(saveDir).GetAwaiter().GetResult();
+            => Require(DeviceCapability.ProcessControl, nameof(StartProcess))
+                ?? _bizOps.StartProcessAsync(saveDir).GetAwaiter().GetResult();
 
         public string EndProcess()
-            => _bizOps.EndProcessAsync().GetAwaiter().GetResult();
+            => Require(DeviceCapability.ProcessControl, nameof(EndProcess))
+                ?? _bizOps.EndProcessAsync().GetAwaiter().GetResult();
 
         public string SwitchTerminal(int index)
-            => _bizOps.SwitchTerminalAsync(index).GetAwaiter().GetResult();
+            => Require(DeviceCapability.TerminalControl, nameof(SwitchTerminal))
+                ?? _bizOps.SwitchTerminalAsync(index).GetAwaiter().GetResult();
 
         public (bool ok, string path) CaptureFace(string saveDir)
-            => _bizOps.CaptureFaceAsync(saveDir).GetAwaiter().GetResult();
+        {
+            if (Require(DeviceCapability.Face, nameof(CaptureFace)) != null)
+                return (false, "not_supported");
+            return _bizOps.CaptureFaceAsync(saveDir).GetAwaiter().GetResult();
+        }
 
         public (bool ok, string path) CaptureFingerprint(string saveDir)
-            => _bizOps.CaptureFingerprintAsync(saveDir).GetAwaiter().GetResult();
+        {
+            if (Require(DeviceCapability.Fingerprint, nameof(CaptureFingerprint)) != null)
+                return (false, "not_supported");
+            return _bizOps.CaptureFingerprintAsync(saveDir).GetAwaiter().GetResult();
+        }
 
         public string RequestOCR(string saveDir)
-            => _bizOps.RequestOCRAsync(saveDir).GetAwaiter().GetResult();
+            => Require(DeviceCapability.OCR, nameof(RequestOCR))
+                ?? _bizOps.RequestOCRAsync(saveDir).GetAwaiter().GetResult();
 
         public string RequestNfc(string saveDir)
-            => _bizOps.RequestNfcAsync(saveDir).GetAwaiter().GetResult();
+            => Require(DeviceCapability.NfcCard, nameof(RequestNfc))
+                ?? _bizOps.RequestNfcAsync(saveDir).GetAwaiter().GetResult();
 
         public string CaptureIris(string saveDir)
-            => _bizOps.CaptureIrisAsync(saveDir).GetAwaiter().GetResult();
+            => Require(DeviceCapability.Iris, nameof(CaptureIris))
+                ?? _bizOps.CaptureIrisAsync(saveDir).GetAwaiter().GetResult();
 
         public AuthorizeRequestResult RequestAuthorize(string idNo, string docType,
             string nationality, string name, string sex, string birthday)
         {
+            if (Require(DeviceCapability.Authorize, nameof(RequestAuthorize)) != null)
+                return new AuthorizeRequestResult { Ok = false, Message = "not_supported" };
             var r = _bizOps.RequestAuthorizeAsync(idNo, docType, nationality, name, sex, birthday)
                 .GetAwaiter().GetResult();
             return new AuthorizeRequestResult { Ok = r.Ok, RequestId = r.RequestId, Message = r.Message };
         }
 
         public Task<bool> StartLocalPreviewAsync(string resourceType, System.Windows.Forms.Control panel)
-            => _bizOps.StartLocalPreviewAsync(resourceType, panel);
+        {
+            if (_capabilities.TryGetPreviewCapability(resourceType, out var capability) &&
+                Require(capability, nameof(StartLocalPreviewAsync) + ":" + resourceType) != null)
+                return Task.FromResult(false);
+            return _bizOps.StartLocalPreviewAsync(resourceType, panel);
+        }
 
         public void StopLocalPreview(string resourceType)
-            => _bizOps.StopLocalPreview(resourceType);
+        {
+            if (_capabilities.TryGetPreviewCapability(resourceType, out var capability) &&
+                Require(capability, nameof(StopLocalPreview) + ":" + resourceType) != null)
+                return;
+            _bizOps.StopLocalPreview(resourceType);
+        }
+
+        private string Require(DeviceCapability capability, string interfaceName)
+        {
+            return _capabilities.IsSupported(capability) ? null :
+                _capabilities.BuildNotSupportedResult(interfaceName, capability);
+        }
     }
 }

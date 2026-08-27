@@ -1448,13 +1448,154 @@
 
 兼容性：DLL 导出、`__stdcall`/C ABI、参数、结构体、错误码、回调、HTTP/终端协议和配置均未改变；性能热路径未改变。详细风险、验证与回退见 `demo/CSharpProxy/HZCYKJTHardWare.Proxy/PROGRESS.md`。
 
-## v1.3.1 车牌预览修复（2026-08-12）
+## 第三方操作指南编写记录（2026-08-07）
 
-- [x] 终端切换仅停止终端绑定预览，保持 CJ、RJ2、RJ3 会话和第三方 HWND。
-- [x] 车牌 VLC 直接渲染使用第三方 HWND 客户区比例并每 250ms 跟随尺寸变化。
-- [x] 增加终端绑定筛选、直接渲染比例和刷新周期测试。
-- [x] Native DLL `Release|Win32` 编译通过，0 warning、0 error。
-- [x] Proxy + Tests `Release|x86`、`Release|x64` 编译通过，0 warning、0 error；两套非 Integration 各 110/110 通过。
-- [ ] 使用真实车牌相机和 Delphi 7 验证连续终端切换、窗口缩放、多 DPI 和长稳。
+### 当前阶段
 
-兼容性：未改变 DLL ABI、导出函数、调用约定、参数、错误码、回调、HTTP/终端协议、配置或第三方调用方式。回退时回退 `v1.3.1` 发布提交即可。
+文档初稿已完成，待项目负责人确认交付对象、现场配置、权限边界并补充真实截图和硬件验证。
+
+### 已完成内容
+
+- [x] 核对 C# Proxy 主窗口、服务与通道、业务操作、预览、健康检测和日志区域。
+- [x] 核对 Proxy 启动、单实例、自动启动服务、托盘和正常退出逻辑。
+- [x] 核对终端切换、流程开始/结束、抓拍、OCR、IC 卡、虹膜和授权测试流程。
+- [x] 核对默认 Proxy 配置、保存目录、日志目录和主要监听端口。
+- [x] 核对 Proxy 与终端、DLL、第三方程序之间的职责边界。
+- [x] 生成 `docs/第三方操作指南.md`。
+- [x] 生成 `docs/第三方操作指南_待确认项.md`。
+- [x] 生成 `docs/功能按钮清单.md`。
+- [x] 生成 `docs/功能边界清单.md`。
+- [x] 现有业务代码和程序逻辑未修改。
+
+### 待补充截图
+
+- [ ] 图 1：程序主界面，标注顶部状态、服务与通道、业务操作、预览、健康检测和日志。
+- [ ] 图 2：终端选择区域，标注左通道、右通道和当前终端。
+- [ ] 图 3：预览操作区域，标注设备下拉框、开始/停止预览和六类预览窗口。
+- [ ] 图 4：抓拍或识别结果区域，使用脱敏测试数据。
+- [ ] 图 5：硬件健康检测和日志区域，遮盖敏感信息。
+
+当前工作环境未取得可直接作为交付证据的可靠真实运行截图；文档使用明确占位符，未使用虚构界面图片。
+
+### 待确认信息
+
+- [ ] 正式交付的操作程序是 C# Proxy、C# ThirdParty Demo、Delphi Demo 还是其他程序。
+- [ ] 正式发布版本、Proxy/DLL 位数组合和最低 Windows 版本。
+- [ ] 正式监听端口、终端 IP、终端左右通道对应关系和防火墙规则。
+- [ ] 是否需要管理员权限及正式启动/关闭顺序。
+- [ ] 开始流程是否是所有业务操作的强制前置条件。
+- [ ] `授权测试` 是否仅限测试环境，是否允许连接生产终端。
+- [ ] 三路车牌预览的正式配置和现场验收结果。
+- [ ] 识别数据、日志和图片的保留、备份、删除及访问权限。
+- [ ] 操作人员、技术维护人员和管理员的职责边界。
+- [ ] Windows 10/11、x86/x64、高 DPI 和真实设备长稳测试结果。
+
+### 高风险事项
+
+1. `授权测试` 使用程序内置测试参数，容易被误解为正式授权入口。
+2. 终端切换会改变后续业务目标，切换期间旧请求或旧回调可能被保护逻辑丢弃。
+3. 界面显示车牌预览资源，但默认配置未配置三路车牌地址，可能出现按钮可见而功能不可用。
+4. 日志和结果文件可能包含敏感身份信息，导出和反馈前必须脱敏。
+
+### 下一步计划
+
+- [ ] 由项目负责人确认待确认项并修正文档中的现场参数。
+- [ ] 使用正式发布包在真实终端环境完成截图和基本操作回归。
+- [ ] 验证正常退出、异常关闭、终端断开/重连、预览黑屏、请求超时和重复点击场景。
+- [ ] 确认文档版本与交付包版本一致后再对外发布。
+
+### 回退方式
+
+本次仅新增文档并追加本节记录，不涉及业务代码、DLL ABI、HTTP/终端协议或配置结构。若不采用本次文档，删除本节及 `docs/` 下本次生成的四个文件即可，不影响程序运行。
+
+## 车牌预览终端切换保持与第三方 HWND 铺满（方案 A，2026-08-11）
+
+- [x] 终端切换前仅停止 `TerminalBound=true` 的摄像头、指纹和虹膜预览。
+- [x] CJ、RJ2、RJ3 车牌会话不再被终端切换误停，保持原 RTSP、会话和第三方 HWND。
+- [x] 车牌 VLC 直接绑定第三方 HWND 时使用宿主客户区宽高比，画面拉伸铺满且不移动调用方窗口。
+- [x] VLC 播放线程每 250ms 跟随宿主客户区尺寸，兼容第三方窗口缩放和布局变化。
+- [x] 增加终端绑定会话筛选、直接渲染宽高比及刷新周期定向测试。
+- [x] Proxy + Tests `Release|x64` 编译通过，0 error、1 条 NuGet 漏洞源不可达的 `NU1900` 环境警告；x64 非 Integration 回归 110/110 通过。
+- [x] Proxy + Tests `Release|x86` 编译通过，0 error、1 条 NuGet 漏洞源不可达的 `NU1900` 环境警告；x86 非 Integration 回归 110/110 通过。
+- [ ] 使用真实车牌相机和第三方 HWND 验证终端 1/2 连续切换、窗口缩放及 100%/150%/200% DPI。
+- [ ] 连续预览至少 2 小时，观察 VLC 线程、句柄、CPU 和内存是否稳定。
+
+兼容性：未改变 DLL ABI、`__stdcall`、参数、错误码、回调、HTTP/终端协议、配置或第三方调用方式。车牌画面改为无黑边拉伸铺满，源比例与 HWND 比例不一致时会产生比例变形。回退时恢复本节对应的 `PreviewManager`、`SwitchCoordinator`、`VlcPreviewPlayer`、`VlcPreviewController` 及预览测试差异。
+
+## DeviceMode 设备能力模式（2026-08-12）
+
+- [x] 共用 `HZCYKJTHardWare.json` 顶层增加 `device_mode`，默认值为 `1`。
+- [x] 配置缺失、非法或损坏时记录日志并回退 Mode 1，程序继续启动。
+- [x] 增加统一 `DeviceCapabilityManager`；Mode 1 开放全部能力，Mode 2 仅开放 `PlateRJ2`、`PlateRJ3`。
+- [x] Proxy UI、HTTP 命令分发、直接业务入口、健康检测、回调监听和工作队列共用能力模型。
+- [x] Mode 2 UI 仅保留服务/配置/日志/资源监控与 RJ2/RJ3 两路预览，不启动非镜头工作线程、终端健康轮询和终端回调监听。
+- [x] 不支持请求快速返回 `code=not_supported`，DLL 对外仍返回公共失败值 `0`；内部映射到 `HZCYKJTHardWare_RET_UNSUPPORTED (-18)`。
+- [x] OCR、NFC、虹膜、授权误调用通过现有事件回调发送 `status=-18`、`error_code=not_supported`，不创建业务会话、不入队、不重试。
+- [x] 不支持调用 WARN 按 `(Interface, Capability)` 60 秒限频，并在下一条日志记录抑制次数。
+- [x] Native DLL `Release|Win32`：0 warning、0 error；导出 24 项与 v1.3.1 `.def` 完全一致。
+- [x] Proxy + Tests `Release|x86`、`Release|x64`：0 error（仅 NuGet 漏洞源不可达 `NU1900` 环境警告）。
+- [x] x86、x64 非 Integration 回归各 116/116 通过；`git diff --check` 通过。
+- [ ] 真实 RJ2/RJ3 相机独立启停、第三方 Delphi7 误调用回调及无终端流量现场验证。
+- [ ] RJ2/RJ3 抓拍接口当前不存在，按既定范围不新增，后续单独设计并验收。
+
+回退：恢复本节涉及的配置、Capability、Proxy 分发/UI/队列与 Native 内部判断代码即可；未修改 `.def`、公开头文件、DLL ABI、部署位数或第三方调用方式，不需要 Delphi7 版本适配。
+
+## 主窗口版本号展示调整（2026-08-12）
+
+- [x] Windows 边框标题仅保留“五合一车道硬件平台”，不再附带版本号。
+- [x] 主界面左上产品名称下方增加小号灰色 `v1.3.1`，与主标题垂直居中组合，不增加顶部横向占用。
+- [x] 增加窗口标题、主标题、版本标签、字体层级和父容器关系自动化断言。
+- [x] Proxy + Tests `Release|x86` 编译通过，0 error；定向 UI 测试 3/3 通过。
+- [ ] Windows 10/11、100%/150%/200% DPI 实机视觉检查待执行。
+
+兼容性：仅调整 WinForms 标题展示，不修改程序集版本、DLL ABI、配置、协议或业务行为。回退 `AssemblyInfo.cs`、`MainForm.cs` 和对应 UI 测试差异即可。
+
+## 统一 JSON 配置有效性清理（2026-08-12）
+
+- [x] 审计根目录统一 `HZCYKJTHardWare.json` 在 Native DLL 与 C# Proxy 中的解析和实际使用点。
+- [x] 从统一 JSON 删除仅被解析、未参与当前业务的历史字段：`terminal.mode`、`terminal.check_on_init`、`terminal.fixed_terminals`、`callback_server.auto_bind_lan_ip`、`preview.renderer`、`preview.auto_reconnect`、`preview.stop_preview_on_end_process`。
+- [x] 保留旧字段解析代码，兼容既有部署配置，不因多余字段导致启动失败。
+- [x] 新增 `device_mode_names`，Mode 2 顶部名称不再由 UI 代码写死。
+- [x] `terminal.default_index` 和 `auto_subnet_devices[].name` 已接入 Proxy 默认终端、日志及顶部终端名称。
+- [x] 确认工程目录 `HZCYKJTHardWare.Proxy.json` 为历史样例，不参与当前构建和运行加载。
+- [x] Proxy + Tests `Release|x86`、`Release|x64` 编译成功，0 error；两套非 Integration 回归各 118/118 通过。
+
+兼容性：未修改 DLL 导出、`__stdcall`、参数、结构体、错误码、回调或 HTTP/终端协议。回退时恢复统一 JSON、`AppConfig.cs`、`TerminalManager.cs`、`MainForm.cs` 和配置测试的本节差异即可。
+
+## C# 第三方 Demo 接口覆盖同步（2026-08-12）
+
+- [x] 对照 `.def` 审计 C# Demo：24/24 导出均已 P/Invoke 声明并具备界面调用路径。
+- [x] 新增虹膜、CJ、RJ2、RJ3 预览启停入口，六路预览改为统一下拉选择。
+- [x] Demo 读取共用 `device_mode` 与 `device_mode_names`；Mode 2 仅显示 SDK 服务和 RJ2/RJ3 预览。
+- [x] 配置缺失、非法或损坏时记录警告并回退 Mode 1。
+- [x] 回调日志补充事件名称、`request_id`、`error_code/code`，明确显示 `status=-18` 不支持结果。
+- [x] C# Demo `Release|x86` 编译通过，0 warning、0 error；静态导出覆盖 24/24。
+- [ ] Mode 1 六路真实预览、Mode 2 RJ2/RJ3 独立启停和配置异常界面待现场验证。
+
+兼容性：未修改 Native DLL、`.def`、公开头文件、回调签名或 Proxy 协议。回退 C# Demo 的 `MainForm.cs`、`MainForm.Designer.cs` 和 README 本节差异即可。
+
+## C# Demo Mode 2 高 DPI 顶部布局修复（2026-08-12）
+
+- [x] 确认重叠原因为 Mode 2 在 `AutoScaleMode.Dpi` 下使用运行时固定坐标和固定高度。
+- [x] 使用单行、自适应、可横向滚动的 `FlowLayoutPanel` 承载 Mode 2 工具栏。
+- [x] 删除 Mode 2 的 `panelTop.Height=42` 以及各控件固定 `Location`。
+- [x] Mode 1 原布局和全部 DLL 调用逻辑保持不变。
+- [x] C# Demo `Release|x86` 编译通过，0 warning、0 error。
+- [ ] Windows 100%/150%/200% DPI 视觉验证待执行。
+
+回退：恢复 `MainForm.cs` 中 `ConfigureMode2Toolbar` 相关差异即可；不涉及 DLL、Proxy、JSON 格式或第三方接口。
+
+## C# Proxy 与 Demo 日志中文化（2026-08-12）
+
+- [x] 汉化 Proxy 配置、能力检查、请求登记、队列、预览、切换协调、运行时、任务跟踪和网络检测中的英文叙述日志。
+- [x] 汉化 C# Demo 的设备模式、回调摘要、保存结果和界面日志标点。
+- [x] 保留 `DeviceMode`、`Capabilities`、`request_id`、`resource_type`、错误码、URL、HTTP/MJPEG/VLC/SDK/DLL/HWND 等专有名词与协议字段。
+- [x] 纯英文运行日志静态扫描：0 行。
+- [x] Proxy、Tests、Demo `Release|x86` 编译通过；Proxy 和 Demo 0 warning/0 error，Tests 仅有 NuGet 源不可达 `NU1900`。
+- [x] Proxy + Tests `Release|x64` 编译通过，0 error，仅有 `NU1900`。
+- [x] x86、x64 非 Integration 回归各 118/118 通过。
+- [ ] 现场运行日志可读性和异常日志信息完整性待人工复核。
+
+兼容性：仅修改日志文案，不修改 DLL ABI、JSON/HTTP 协议字段、错误码、回调内容或设备行为。回退本节涉及的 C# 日志字符串与文档差异即可。
+
+- [x] 日志分类名称按现场习惯调整：`[能力检查]` 改为 `[硬件检测]`，`[切换协调]` 改为 `[终端切换]`。

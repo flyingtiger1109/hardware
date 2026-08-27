@@ -24,6 +24,90 @@ const char* ShortFunctionName(const char* function) {
     return last;
 }
 
+bool ContainsText(const std::string& text, const char* value) {
+    return value && text.find(value) != std::string::npos;
+}
+
+std::string ModuleFromMessage(const std::string& message) {
+    if (ContainsText(message, "预览") || ContainsText(message, "preview") ||
+        ContainsText(message, "MJPEG")) {
+        return "预览";
+    }
+    if (ContainsText(message, "人脸抓拍") || ContainsText(message, "摄像头抓拍") ||
+        ContainsText(message, "/capture/face") || ContainsText(message, "face_capture")) {
+        return "人脸抓拍";
+    }
+    if (ContainsText(message, "指纹抓拍") || ContainsText(message, "/capture/fingerprint") ||
+        ContainsText(message, "fingerprint_capture")) return "指纹抓拍";
+    if (ContainsText(message, "虹膜抓拍") || ContainsText(message, "/capture/iris") ||
+        ContainsText(message, "iris_capture")) return "虹膜抓拍";
+    if (ContainsText(message, "OCR") || ContainsText(message, "/ocr") ||
+        ContainsText(message, "证件")) {
+        return "证件识别";
+    }
+    if (ContainsText(message, "NFC") || ContainsText(message, "/nfc") ||
+        ContainsText(message, "IC卡")) {
+        return "NFC读卡";
+    }
+    if (ContainsText(message, "授权") || ContainsText(message, "/authorize")) return "授权";
+    if (ContainsText(message, "/ping") || ContainsText(message, "ping") ||
+        ContainsText(message, "连通性检查")) {
+        return "健康检查";
+    }
+    if (ContainsText(message, "终端切换") || ContainsText(message, "切换终端") ||
+        ContainsText(message, "/terminal/switch")) {
+        return "终端切换";
+    }
+    if (ContainsText(message, "流程") || ContainsText(message, "/process")) return "流程控制";
+    if (ContainsText(message, "初始化DLL") || ContainsText(message, "释放SDK")) {
+        return "SDK生命周期";
+    }
+    if (ContainsText(message, "回调")) return "终端回调";
+    if (ContainsText(message, "自动启动") || ContainsText(message, "重启硬件") ||
+        ContainsText(message, "进程")) {
+        return "流程控制";
+    }
+    if (ContainsText(message, "硬件控制程序") || ContainsText(message, "通信服务")) {
+        return "终端通信";
+    }
+    return "未识别接口";
+}
+
+std::string NormalizeModule(const char* module, const char* message) {
+    const std::string name = module ? module : "";
+    const std::string text = message ? message : "";
+
+    if (name == "预览" || name == "预览请求" || name == "预览管理" ||
+        name == "预览窗口" || name == "预览租约" || name == "PreviewMgr") {
+        return "预览";
+    }
+    if (name == "授权") return "授权";
+    if (name == "NFC" || name == "NFC读卡") return "NFC读卡";
+    if (name == "配置管理") return "配置管理";
+    if (name == "日志管理" || name == "日志") return "日志管理";
+    if (name == "回调服务" || name == "服务监听" || name == "服务") {
+        return "服务监听";
+    }
+    if (name == "TerminalMgr") {
+        return ContainsText(text, "切换") ? "终端切换" : "终端通信";
+    }
+    if (name == "事件分发" || name == "终端回调") {
+        const std::string operation = ModuleFromMessage(text);
+        return operation == "未识别接口" ? "终端回调" : operation;
+    }
+    if (name == "HTTP请求" || name == "代理服务") {
+        const std::string operation = ModuleFromMessage(text);
+        if (operation != "未识别接口") return operation;
+        return "终端通信";
+    }
+    if (name == "接口" || name.empty()) {
+        return ModuleFromMessage(text);
+    }
+    if (name == "能力检查") return "设备能力";
+    if (name == "SDK" || name == "SDK生命周期") return "SDK生命周期";
+    return name;
+}
+
 void WriteUtf8BomIfEmpty(FILE* file) {
     if (!file) return;
 
@@ -43,13 +127,10 @@ Logger::~Logger() {
     DeleteCriticalSection(&m_cs);
 }
 
-namespace { Logger* g_pLogger = nullptr; }
-
 Logger& Logger::Instance() {
-    // 审查建议：裸指针惰性初始化不具备并发首次访问保障，且实例未显式释放。
-    // 如需支持并发首次调用或 DLL 反复装卸，建议使用 std::call_once，并明确进程级生命周期策略。
-    if (!g_pLogger) g_pLogger = new Logger();
-    return *g_pLogger;
+    // 函数内静态对象保证并发首次访问安全，并在模块卸载时释放临界区。
+    static Logger instance;
+    return instance;
 }
 
 const char* Logger::LevelToString(LogLevel level) {
@@ -229,7 +310,7 @@ void Logger::CheckDiskSpaceLocked() {
     if (!ec && info.available < m_diskWarningFreeBytes) {
         char warning[256];
         snprintf(warning, sizeof(warning),
-                 "[日志磁盘预警] 日志盘剩余空间不足：available_mb=%llu, threshold_mb=%llu\n",
+                 "[日志管理][警告] 日志盘剩余空间不足：可用空间=%lluMB，预警阈值=%lluMB\n",
                  static_cast<unsigned long long>(info.available / 1024ULL / 1024ULL),
                  static_cast<unsigned long long>(m_diskWarningFreeBytes / 1024ULL / 1024ULL));
         if (m_file) {
@@ -265,8 +346,9 @@ void Logger::Log(LogLevel level, const char* module, const char* function, const
              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 
     char lineBuf[4608];
-    snprintf(lineBuf, sizeof(lineBuf), "[%s] [%s] [%s] %s\n",
-             timeBuf, LevelToString(level), module ? module : "", msgBuf);
+    const std::string normalizedModule = NormalizeModule(module, msgBuf);
+    snprintf(lineBuf, sizeof(lineBuf), "[%s] [%s][%s] %s\n",
+             timeBuf, normalizedModule.c_str(), LevelToString(level), msgBuf);
 
     EnterCriticalSection(&m_cs);
     std::string desiredLogPath = GetLogFilePath();

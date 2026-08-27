@@ -15,7 +15,7 @@
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
     <!-- 构建环境可能无法访问漏洞审计源，关闭还原阶段审计以避免 NU1900。 -->
     <NuGetAudit>false</NuGetAudit>
-    <ApplicationIcon>国移局icon_256x256.ico</ApplicationIcon>
+    <ApplicationIcon>HZCYKJTHardWare_icon.ico</ApplicationIcon>
     <DefaultItemExcludes>$(DefaultItemExcludes);_codex_build\**\*</DefaultItemExcludes>
   </PropertyGroup>
 
@@ -49,7 +49,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="国移局icon_256x256.ico" />
+    <Content Include="HZCYKJTHardWare_icon.ico" />
     <Content Include="..\..\..\HZCYKJTHardWare.json" Link="HZCYKJTHardWare.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

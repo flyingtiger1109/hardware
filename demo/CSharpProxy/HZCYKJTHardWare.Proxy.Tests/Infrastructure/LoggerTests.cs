@@ -58,5 +58,47 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
                 StringAssert.Contains(reader.ReadToEnd(), marker);
             }
         }
+
+        [TestMethod]
+        public void NormalizeForDisplay_UsesConcreteChineseModuleAndLevel()
+        {
+            Assert.AreEqual(
+                "[预览][信息] 外部预览已启动",
+                Logger.NormalizeForDisplay("[预览管理] 外部预览已启动"));
+            Assert.AreEqual(
+                "[预览][错误] HTTP MJPEG帧渲染失败",
+                Logger.NormalizeForDisplay("[预览租约][error] HTTP MJPEG帧渲染失败"));
+            Assert.AreEqual(
+                "[人脸抓拍][信息] 人脸抓拍已受理",
+                Logger.NormalizeForDisplay("人脸抓拍已受理"));
+            Assert.AreEqual(
+                "[预览][信息] 预览请求已受理",
+                Logger.FormatModuleMessage("预览请求", "info", "预览请求已受理"));
+            Assert.AreEqual(
+                "[人脸抓拍][信息] 人脸抓拍已受理",
+                Logger.NormalizeForDisplay("[DLL请求] 人脸抓拍已受理"));
+            Assert.AreEqual(
+                "[健康检查][信息] HTTP GET /ping完成",
+                Logger.NormalizeForDisplay("[HTTP请求] HTTP GET /ping完成"));
+        }
+
+        [TestMethod]
+        public void MessageLevelFilter_IsSharedByFileAndUiDecision()
+        {
+            try
+            {
+                Logger.SetMinLevel("info");
+                Assert.IsFalse(Logger.IsMessageEnabled("[预览][调试] HTTP收发明细"));
+                Assert.IsTrue(Logger.IsMessageEnabled("[预览][信息] 预览已启动"));
+                Assert.IsTrue(Logger.IsMessageEnabled("[预览][错误] 预览启动失败"));
+
+                Logger.SetMinLevel("debug");
+                Assert.IsTrue(Logger.IsMessageEnabled("[预览][调试] HTTP收发明细"));
+            }
+            finally
+            {
+                Logger.SetMinLevel("info");
+            }
+        }
     }
 }

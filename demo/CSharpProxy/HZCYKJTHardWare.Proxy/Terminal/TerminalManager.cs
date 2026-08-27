@@ -44,8 +44,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     public class TerminalManager
     {
         private readonly string[] _terminalUrls = new string[2];
-        private readonly string[] _terminalNames = { "左通道", "右通道" };
-        private int _currentIndex = 1; // 1-based
+        private readonly string[] _terminalNames = new string[2];
+        private readonly bool[] _terminalConfigured = new bool[2];
+        private int _currentIndex; // 1-based
         private long _routeEpoch;
         private readonly object _lock = new object();
 
@@ -54,11 +55,27 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         private string _processSaveDir = "";
         private bool _processActive;
 
+        private static string BuildTerminalUrl(string scheme, string subnetPrefix,
+            int hostSuffix, int port, bool configured)
+        {
+            if (!configured || string.IsNullOrWhiteSpace(subnetPrefix) ||
+                hostSuffix < 1 || hostSuffix > 254)
+                return "";
+            return $"{scheme}://{subnetPrefix}.{hostSuffix}:{port}";
+        }
+
         public TerminalManager()
         {
             var cfg = AppConfig.Instance;
-            _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
-            _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
+            _terminalUrls[0] = BuildTerminalUrl(cfg.TerminalScheme, cfg.SubnetPrefix,
+                cfg.Terminal1HostSuffix, cfg.TerminalPort, cfg.Terminal1Configured);
+            _terminalUrls[1] = BuildTerminalUrl(cfg.TerminalScheme, cfg.SubnetPrefix,
+                cfg.Terminal2HostSuffix, cfg.TerminalPort, cfg.Terminal2Configured);
+            _terminalNames[0] = cfg.Terminal1Name;
+            _terminalNames[1] = cfg.Terminal2Name;
+            _terminalConfigured[0] = cfg.Terminal1Configured;
+            _terminalConfigured[1] = cfg.Terminal2Configured;
+            _currentIndex = cfg.DefaultTerminalIndex;
         }
 
         public int CurrentIndex
@@ -106,6 +123,18 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             lock (_lock) return _currentIndex == index;
         }
 
+        public bool IsTerminalConfigured(int index)
+        {
+            if (index < 1 || index > 2) return false;
+            lock (_lock) return _terminalConfigured[index - 1];
+        }
+
+        public string GetTerminalName(int index)
+        {
+            if (index < 1 || index > 2) return "";
+            lock (_lock) return _terminalNames[index - 1] ?? "";
+        }
+
         public bool SwitchTo(int index)
         {
             if (index < 1 || index > 2) return false;
@@ -114,7 +143,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 _currentIndex = index;
                 _routeEpoch++;
             }
-            Logger.Info($"已切换到终端: {CurrentName}");
+            Logger.Info($"已切换到终端：{CurrentName}");
             return true;
         }
 
@@ -146,8 +175,16 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             var cfg = AppConfig.Instance;
             lock (_lock)
             {
-                _terminalUrls[0] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal1HostSuffix}:{cfg.TerminalPort}";
-                _terminalUrls[1] = $"{cfg.TerminalScheme}://{cfg.SubnetPrefix}.{cfg.Terminal2HostSuffix}:{cfg.TerminalPort}";
+                _terminalUrls[0] = BuildTerminalUrl(cfg.TerminalScheme, cfg.SubnetPrefix,
+                    cfg.Terminal1HostSuffix, cfg.TerminalPort, cfg.Terminal1Configured);
+                _terminalUrls[1] = BuildTerminalUrl(cfg.TerminalScheme, cfg.SubnetPrefix,
+                    cfg.Terminal2HostSuffix, cfg.TerminalPort, cfg.Terminal2Configured);
+                _terminalNames[0] = cfg.Terminal1Name;
+                _terminalNames[1] = cfg.Terminal2Name;
+                _terminalConfigured[0] = cfg.Terminal1Configured;
+                _terminalConfigured[1] = cfg.Terminal2Configured;
+                if (_currentIndex < 1 || _currentIndex > 2)
+                    _currentIndex = cfg.DefaultTerminalIndex;
             }
         }
     }

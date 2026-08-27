@@ -8,8 +8,7 @@
 - 注册 DLL 事件回调
 - 终端 1 / 终端 2 切换
 - 开始流程 / 结束流程
-- 摄像头预览 / 停止摄像头预览
-- 指纹预览 / 停止指纹预览
+- 六路预览统一选择和独立启停：摄像头、指纹、虹膜、CJ、RJ2、RJ3
 - 人脸抓拍
 - 指纹抓拍
 - OCR 请求
@@ -17,7 +16,19 @@
 - NFC/IC 请求
 - 虹膜抓拍
 - 授权模拟
-- 日志窗口显示 DLL callback 事件摘要
+- 日志窗口显示 DLL callback 事件名称、状态、资源、请求 ID 和错误码
+
+Demo 已覆盖当前 `.def` 中全部 24 个 DLL 导出。车牌部分仅调用现有 CJ、RJ2、RJ3 预览接口；当前 DLL 没有车牌抓拍导出，因此 Demo 不提供车牌抓拍按钮。
+
+## DeviceMode
+
+Demo 与 Proxy 读取运行目录中的同一份 `HZCYKJTHardWare.json`：
+
+- `device_mode=1`：显示全部业务按钮及六路预览。
+- `device_mode=2`：仅保留 SDK 初始化/释放以及 RJ2、RJ3 两路预览，隐藏终端、流程和其他硬件操作。
+- 配置缺失、非法或损坏：记录配置警告并回退 Mode 1，保持向后兼容。
+
+模式显示名称优先读取 `device_mode_names`；缺失时使用 Demo 内置默认名称。Demo 只负责界面裁剪，最终能力检查仍由 DLL/Proxy 统一执行。
 
 当 OCR 回调中的 `card_type` 为 `30` 时，`mrz` 字段使用兼容格式 `$证号^鉴伪分数^出生日期^签发日期^姓名^性别`，日志窗口标记为“ID卡兼容串”；同时继续显示 `name`、`sex`、`cardId`、`birthday`、`dateOfissue`、`authen_score` 和 `optical_check_result`。光学鉴伪结果中 `0` 表示通过、`1` 表示不通过、`-1` 表示未知或未检测。
 
@@ -49,7 +60,7 @@ vlc\
 ## 构建
 
 ```text
-dotnet build demo\CSharpThirdPartyDemo\HZCYKJTHardWare.CSharpDemo\HZCYKJTHardWare.CSharpDemo.csproj -c Release
+dotnet build demo\CSharpThirdPartyDemo\HZCYKJTHardWare.CSharpDemo\HZCYKJTHardWare.CSharpDemo.csproj -c Release -p:Platform=x86
 ```
 
 注意：必须使用 `x86` 运行，避免 32 位 DLL 加载失败。

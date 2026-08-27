@@ -93,11 +93,22 @@ int ConfigManager::Load(const std::string& dllDir) {
     std::string json = ss.str();
     file.close();
 
+    const size_t first = json.find_first_not_of(" \t\r\n");
+    const size_t last = json.find_last_not_of(" \t\r\n");
+    if (first == std::string::npos || json[first] != '{' ||
+        last == std::string::npos || json[last] != '}') {
+        LOG_ERROR("配置管理", "配置文件内容损坏，使用默认配置并回退DeviceMode=1：路径=%s",
+                  configPath.c_str());
+        return HZCYKJTHardWare_RET_OK;
+    }
+
     m_hasConfigFile = true;
 
     int ret = ParseJson(json);
     if (ret != HZCYKJTHardWare_RET_OK) {
-        return ret;
+        LOG_ERROR("配置管理", "配置内容无效，使用完整默认配置并回退 DeviceMode=1");
+        ApplyDefaults();
+        return HZCYKJTHardWare_RET_OK;
     }
 
     LOG_INFO("配置管理", "配置文件加载成功：path=%s", configPath.c_str());
@@ -110,6 +121,17 @@ int ConfigManager::Load(const std::string& dllDir) {
 }
 
 int ConfigManager::ParseJson(const std::string& json) {
+    if (JsonHelper::HasKey(json, "device_mode")) {
+        const int mode = JsonHelper::GetInt(json, "device_mode", 0);
+        if (mode == 1 || mode == 2) {
+            m_deviceMode = mode;
+        } else {
+            m_deviceMode = 1;
+        LOG_WARN("配置管理", "device_mode配置非法，仅支持1/2，回退到DeviceMode=1");
+        }
+    } else {
+        LOG_WARN("配置管理", "device_mode配置缺失，回退到DeviceMode=1");
+    }
     if (JsonHelper::HasKey(json, "third_party_input_encoding")) {
         m_thirdPartyInputEncoding = JsonHelper::GetString(
             json, "third_party_input_encoding");
@@ -370,6 +392,7 @@ int ConfigManager::ParseJson(const std::string& json) {
 }
 
 void ConfigManager::ApplyDefaults() {
+    m_deviceMode = 1;
     m_mode = TerminalMode::AutoSubnet;
     m_scheme = "http";
     m_port = 9098;
@@ -434,6 +457,7 @@ void ConfigManager::ApplyDefaults() {
 
 // 访问器实现
 TerminalMode ConfigManager::GetTerminalMode() const { return m_mode; }
+int ConfigManager::GetDeviceMode() const { return m_deviceMode; }
 const std::string& ConfigManager::GetScheme() const { return m_scheme; }
 int ConfigManager::GetPort() const { return m_port; }
 bool ConfigManager::GetCheckOnInit() const { return m_checkOnInit; }

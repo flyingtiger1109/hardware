@@ -38,6 +38,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         private readonly Action<QueueTask<T>> _handler;
         private readonly int _timeoutMs;
         private Thread _worker;
+        private readonly bool _enabled;
         private readonly object _lock = new object();
         private volatile bool _disposed;
         private int _stopLogged;
@@ -65,9 +66,10 @@ namespace HZCYKJTHardWare.Proxy.Core
         public long Completed => Interlocked.Read(ref _completed);
         public long TimedOut => Interlocked.Read(ref _timedOut);
         public long Replaced => Interlocked.Read(ref _replaced);
+        internal bool WorkerStarted => _worker != null;
 
         public WorkerQueue(string name, int maxLength, Action<QueueTask<T>> handler,
-            bool replaceOld = false, int timeoutMs = 15000)
+            bool replaceOld = false, int timeoutMs = 15000, bool enabled = true)
         {
             if (maxLength < 1) throw new ArgumentOutOfRangeException(nameof(maxLength));
             if (handler == null) throw new ArgumentNullException(nameof(handler));
@@ -82,13 +84,21 @@ namespace HZCYKJTHardWare.Proxy.Core
             _tail = 0;
             _count = 0;
 
+            _enabled = enabled;
+            if (!_enabled)
+            {
+                Logger.Info($"[硬件检测] 队列已禁用：{_name}，设备模式(DeviceMode)=" +
+                    (int)DeviceCapabilityManager.Instance.Mode);
+                return;
+            }
+
             _worker = new Thread(Run)
             {
                 Name = name + "_Worker",
                 IsBackground = true
             };
             _worker.Start();
-            Logger.Debug($"[队列] {_name} 已启动, 最大长度={_maxLength}, 替换模式={_replaceOld}");
+            Logger.Debug($"[队列] {_name} 已启动，最大长度={_maxLength}，替换模式={_replaceOld}");
         }
 
         /// <summary>
@@ -97,6 +107,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         /// </summary>
         public bool Enqueue(T data, int generation)
         {
+            if (!_enabled) return false;
             QueueTask<T> replacedTask = null;
             long replacedCount = 0;
 
@@ -129,7 +140,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                     else
                     {
                         Interlocked.Increment(ref _dropped);
-                        Logger.Warn($"[队列] {_name} 队列满, 丢弃新任务 (已丢弃={_dropped})");
+                        Logger.Warn($"[队列] {_name} 队列已满，丢弃新任务（已丢弃={_dropped}）");
                         return false;
                     }
                 }
@@ -147,7 +158,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             if (replacedTask != null)
             {
                 TryCompleteTask(replacedTask, "queue_replaced");
-                Logger.Info($"[队列] {_name} 新请求替换等待任务 (已替换={replacedCount})");
+                Logger.Info($"[队列] {_name} 新请求替换等待任务（已替换={replacedCount}）");
             }
             return true;
         }
@@ -205,7 +216,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 var resultSink = task.Data as IQueueResultSink;
                 if (resultSink != null && resultSink.IsQueueResultCompleted)
                 {
-                    Logger.Debug($"[Queue] {_name} skipped a completed pending task");
+                    Logger.Debug($"[队列] {_name} 已跳过已完成的等待任务");
                     return;
                 }
 
@@ -213,7 +224,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 if (queueWaitMs > _timeoutMs)
                 {
                     Interlocked.Increment(ref _timedOut);
-                    Logger.Warn($"[队列] {_name} 任务排队已超时({_timeoutMs}ms), 已丢弃, 排队耗时={queueWaitMs:F0}ms");
+                    Logger.Warn($"[队列] {_name} 任务排队已超时（{_timeoutMs}ms），已丢弃，排队耗时={queueWaitMs:F0}ms");
                     TryCompleteTask(task, "timeout");
                     return;
                 }
@@ -224,12 +235,12 @@ namespace HZCYKJTHardWare.Proxy.Core
                 sw.Stop();
 
                 if (sw.ElapsedMilliseconds > 500 || queueWaitMs > 200)
-                    Logger.Info($"[队列] {_name} 任务完成, 执行耗时={sw.ElapsedMilliseconds}ms, 排队耗时={queueWaitMs:F0}ms");
+                    Logger.Info($"[队列] {_name} 任务完成，执行耗时={sw.ElapsedMilliseconds}ms，排队耗时={queueWaitMs:F0}ms");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                Logger.Error($"[队列] {_name} 任务异常: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[队列] {_name} 任务异常：{ex.Message}，耗时={sw.ElapsedMilliseconds}ms");
                 TryCompleteTask(task, "failed");
                 Interlocked.Increment(ref _completed);  // Count as completed (handled exception)
             }
@@ -250,6 +261,7 @@ namespace HZCYKJTHardWare.Proxy.Core
 
         public string GetStats()
         {
+            if (!_enabled) return $"{_name}：已禁用";
             return $"{_name}: 当前={Count}/{_maxLength} 入队={Enqueued} 完成={Completed} 丢弃={Dropped} 替换={Replaced} 超时={TimedOut}";
         }
 
@@ -285,7 +297,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 worker.Join(Math.Max(0, timeoutMs));
                 if (worker.IsAlive)
                 {
-                    Logger.Warn($"[队列] {_name} worker 线程未能及时退出");
+                    Logger.Warn($"[队列] {_name} 工作线程未能及时退出");
                     return false;
                 }
             }

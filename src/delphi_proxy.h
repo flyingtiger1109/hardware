@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "include/HZCYKJTHardWare_types.h"
 
 namespace HZCYKJTHardWare {
 
@@ -7,6 +8,7 @@ namespace HZCYKJTHardWare {
 class DelphiProxy {
 public:
     explicit DelphiProxy(const std::string& baseUrl);
+    int LastResultCode() const { return lastResultCode_; }
 
     bool Ping();
     bool GetInstanceId(std::string& outInstanceId, int timeoutMs = 1000);
@@ -89,6 +91,7 @@ public:
 
 private:
     std::string baseUrl_;
+    int lastResultCode_ = HZCYKJTHardWare_RET_OK;
 
     bool Get(const std::string& path,
              std::string& response,

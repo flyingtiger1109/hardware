@@ -13,6 +13,23 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     {
         private readonly HttpClient _httpClient;
 
+        private static string FormatRequestId(string requestId)
+        {
+            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : requestId;
+        }
+
+        private static string ExtractRequestIdForLog(string bodyUtf8)
+        {
+            try
+            {
+                return FormatRequestId(JsonHelper.ExtractString(bodyUtf8 ?? "", "request_id"));
+            }
+            catch
+            {
+                return "<无效>";
+            }
+        }
+
         public TerminalClient()
         {
             // 提高全局连接数上限，避免高频请求耗尽可用 Socket 连接
@@ -34,7 +51,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             int expectedStatusCode = 0)
         {
             var url = baseUrl.TrimEnd('/') + path;
+            var requestTrace = ExtractRequestIdForLog(bodyUtf8);
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            Logger.Debug($"[终端请求] POST开始：路径={path}，request_id={requestTrace}");
             CancellationTokenSource timeoutCancellation = null;
             CancellationTokenSource linkedCancellation = null;
             try
@@ -66,19 +85,25 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         (expectedStatusCode <= 0 || statusCode == expectedStatusCode))
                     {
                         if (sw.ElapsedMilliseconds > 500)
-                            Logger.Warn($"[终端请求] POST {path} 响应较慢: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
+                            Logger.Warn($"[终端请求] POST响应较慢：路径={path}，request_id={requestTrace}，" +
+                                        $"状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms");
+                        else
+                            Logger.Debug($"[终端请求] POST完成：路径={path}，request_id={requestTrace}，" +
+                                         $"状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms，结果=成功");
                         return (true, responseBody);
                     }
 
                     if (response.IsSuccessStatusCode && expectedStatusCode > 0)
                     {
-                        Logger.Warn($"[Terminal request] POST {path} unexpected status: " +
-                            $"actual={statusCode}, expected={expectedStatusCode}, " +
-                            $"elapsed={sw.ElapsedMilliseconds}ms, body={Truncate(responseBody, 256)}");
+                        Logger.Warn($"[终端请求] POST返回非预期状态码：路径={path}，request_id={requestTrace}，" +
+                            $"实际状态={statusCode}，预期状态={expectedStatusCode}，" +
+                            $"耗时={sw.ElapsedMilliseconds}ms，响应正文={Truncate(responseBody, 256)}");
                         return (false, responseBody);
                     }
 
-                    Logger.Warn($"[终端请求] POST {path} 失败: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms, 内容={Truncate(responseBody, 256)}");
+                    Logger.Warn($"[终端请求] POST失败：路径={path}，request_id={requestTrace}，" +
+                                $"状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms，" +
+                                $"响应正文={Truncate(responseBody, 256)}");
                     return (false, responseBody);
                 }
             }
@@ -86,24 +111,28 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             {
                 sw.Stop();
                 if (cancellationToken.IsCancellationRequested)
-                    Logger.Warn($"[终端请求] POST {path} 因终端批次失效而取消, 耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Warn($"[终端请求] POST因终端批次失效而取消：路径={path}，request_id={requestTrace}，" +
+                                $"耗时={sw.ElapsedMilliseconds}ms");
                 else
                 {
                 var timeoutText = timeoutMs > 0 ? timeoutMs + "ms" : _httpClient.Timeout.TotalSeconds + "s";
-                Logger.Error($"[终端请求] POST {path} 超时: timeout={timeoutText}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[终端请求] POST超时：路径={path}，request_id={requestTrace}，" +
+                             $"超时时间={timeoutText}，耗时={sw.ElapsedMilliseconds}ms");
                 }
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] POST {path} 网络错误: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[终端请求] POST网络错误：路径={path}，request_id={requestTrace}，" +
+                             $"耗时={sw.ElapsedMilliseconds}ms，错误={ex.Message}");
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] POST {path} 异常: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[终端请求] POST异常：路径={path}，request_id={requestTrace}，" +
+                             $"耗时={sw.ElapsedMilliseconds}ms，错误={ex.Message}");
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             finally
@@ -147,11 +176,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     if (response.IsSuccessStatusCode)
                     {
                         if (sw.ElapsedMilliseconds > 500)
-                            Logger.Warn($"[终端请求] GET {path} 响应较慢: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
+                            Logger.Warn($"[终端请求] GET {path} 响应较慢：状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms");
                         return (true, responseBody);
                     }
 
-                    Logger.Warn($"[终端请求] GET {path} 失败: {(int)response.StatusCode}, 耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Warn($"[终端请求] GET {path} 失败：状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms");
                     return (false, responseBody);
                 }
             }
@@ -159,21 +188,21 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             {
                 sw.Stop();
                 if (cancellationToken.IsCancellationRequested)
-                    Logger.Warn($"[终端请求] GET {path} 因终端批次失效而取消, 耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Warn($"[终端请求] GET {path} 因终端批次失效而取消，耗时={sw.ElapsedMilliseconds}ms");
                 else
-                    Logger.Error($"[终端请求] GET {path} 超时, 耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Error($"[终端请求] GET {path} 超时，耗时={sw.ElapsedMilliseconds}ms");
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] GET {path} 网络错误: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[终端请求] GET {path} 网络错误：{ex.Message}，耗时={sw.ElapsedMilliseconds}ms");
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] GET {path} 异常: {ex.Message}, 耗时={sw.ElapsedMilliseconds}ms");
+                Logger.Error($"[终端请求] GET {path} 异常：{ex.Message}，耗时={sw.ElapsedMilliseconds}ms");
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             finally

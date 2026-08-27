@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
@@ -20,6 +21,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static readonly Lazy<AppConfig> _lazy = new Lazy<AppConfig>(() => Load());
         public static AppConfig Instance => _lazy.Value;
 
+        public DeviceMode DeviceMode { get; set; } = DeviceMode.Full;
+        public string DeviceModeName { get; set; } = "完整设备模式";
+
         // DLL 通信服务
         public string DllServerHost { get; set; } = "127.0.0.1";
         public int DllServerPort { get; set; } = 18080;
@@ -35,6 +39,13 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public int TerminalPort { get; set; } = 9098;
         public int Terminal1HostSuffix { get; set; } = 30;
         public int Terminal2HostSuffix { get; set; } = 31;
+        public string Terminal1Name { get; set; } = "左通道";
+        public string Terminal2Name { get; set; } = "右通道";
+        // 未提供 devices/auto_subnet_devices 时保持旧版默认双终端行为；
+        // 一旦提供设备列表，则只有列表中实际出现的方向视为已配置。
+        public bool Terminal1Configured { get; private set; } = true;
+        public bool Terminal2Configured { get; private set; } = true;
+        public int DefaultTerminalIndex { get; set; } = 1;
         public string SubnetPrefix { get; set; } = "192.168.20";
 
         // DLL 回调服务（用于向 DLL 返回结果）
@@ -72,6 +83,13 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         /// </summary>
         private const string ConfigFile = "HZCYKJTHardWare.json";
 
+        // 兼容现场配置中把数值型 host_suffix 留空的写法：
+        //   "host_suffix":
+        // 在正式 JSON 解析前归一化为 null，按未配置处理，避免整份配置回退到默认 IP。
+        private static readonly Regex EmptyHostSuffixRegex = new Regex(
+            "(\\\"host_suffix\\\"\\s*:\\s*)(?=[,}])",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private static AppConfig Load()
         {
             var config = new AppConfig();
@@ -80,14 +98,26 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             var jsonPath = Path.Combine(config.ExeDir, ConfigFile);
             if (!File.Exists(jsonPath))
             {
-                Logger.Warn($"Config file not found: {ConfigFile}, using defaults");
+                Logger.Warn("DeviceMode配置项所在配置文件不存在，回退到DeviceMode=1");
+                Logger.Warn($"未找到配置文件：{ConfigFile}，将使用默认配置");
                 return config;
             }
 
             try
             {
                 var json = File.ReadAllText(jsonPath, Encoding.UTF8);
+                var normalizedJson = NormalizeEmptyHostSuffix(json);
+                if (!string.Equals(json, normalizedJson, StringComparison.Ordinal))
+                {
+                    Logger.Info("[终端配置] 检测到空 host_suffix，已按 null 归一化并视为未配置");
+                    json = normalizedJson;
+                }
                 var obj = JObject.Parse(json);
+
+                config.DeviceMode = ResolveDeviceMode(obj["device_mode"],
+                    message => Logger.Warn(message));
+                config.DeviceModeName = ResolveDeviceModeName(
+                    obj["device_mode_names"], config.DeviceMode);
 
                 // 同时兼容旧版 C# 配置键和统一 DLL 配置键
                 var dllServer = obj["dll_server"] ?? obj["delphi_server"];
@@ -113,6 +143,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 {
                     config.TerminalScheme = terminal.Value<string>("scheme") ?? config.TerminalScheme;
                     config.TerminalPort = terminal.Value<int?>("port") ?? config.TerminalPort;
+                    config.DefaultTerminalIndex = ResolveTerminalIndex(
+                        terminal.Value<int?>("default_index"),
+                        message => Logger.Warn(message));
                     config.SubnetPrefix = terminal.Value<string>("subnet_prefix")
                         ?? terminal.Value<string>("preferred_subnet_prefix")
                         ?? config.SubnetPrefix;
@@ -121,12 +154,25 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     var devices = terminal["devices"] ?? terminal["auto_subnet_devices"];
                     if (devices != null)
                     {
+                        config.Terminal1Configured = ResolveTerminalConfigured(devices, 1);
+                        config.Terminal2Configured = ResolveTerminalConfigured(devices, 2);
                         foreach (var dev in devices)
                         {
                             var index = dev.Value<int?>("index") ?? 0;
-                            var suffix = dev.Value<int?>("host_suffix") ?? 0;
-                            if (index == 1) config.Terminal1HostSuffix = suffix;
-                            if (index == 2) config.Terminal2HostSuffix = suffix;
+                            var suffix = ResolveHostSuffix(dev);
+                            var name = dev.Value<string>("name");
+                            if (index == 1)
+                            {
+                                config.Terminal1HostSuffix = suffix;
+                                if (!string.IsNullOrWhiteSpace(name))
+                                    config.Terminal1Name = name.Trim();
+                            }
+                            if (index == 2)
+                            {
+                                config.Terminal2HostSuffix = suffix;
+                                if (!string.IsNullOrWhiteSpace(name))
+                                    config.Terminal2Name = name.Trim();
+                            }
                         }
                     }
                 }
@@ -191,14 +237,131 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.LogMaxTotalSizeMb, config.LogDiskWarningFreeMb,
                     config.LogFlushIntervalMs, config.LogFlushBatchSize);
                 Logger.SetMinLevel(config.LogLevel);
-                Logger.Info($"配置文件已加载: {jsonPath}");
+                LogTerminalConfiguration(config);
+                Logger.Info($"配置文件已加载：{jsonPath}");
             }
             catch (Exception ex)
             {
-                Logger.Error($"Failed to load config: {ex.Message}");
+                config.DeviceMode = DeviceMode.Full;
+                Logger.Error($"加载配置失败：{ex.Message}；回退到 DeviceMode=1");
             }
 
             return config;
+        }
+
+        /// <summary>
+        /// 兼容终端 host_suffix 冒号后直接为空的现场配置。
+        /// 仅处理紧邻逗号或右大括号的空值，不放宽其他 JSON 错误。
+        /// </summary>
+        internal static string NormalizeEmptyHostSuffix(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+                return json;
+            return EmptyHostSuffixRegex.Replace(json, "$1null");
+        }
+
+        private static void LogTerminalConfiguration(AppConfig config)
+        {
+            var summary = $"[终端配置] 终端1={(config.Terminal1Configured ? "已配置" : "未配置")}" +
+                $"（名称={config.Terminal1Name}，主机后缀={config.Terminal1HostSuffix}），" +
+                $"终端2={(config.Terminal2Configured ? "已配置" : "未配置")}" +
+                $"（名称={config.Terminal2Name}，主机后缀={config.Terminal2HostSuffix}），" +
+                $"默认终端={config.DefaultTerminalIndex}";
+            Logger.Info(summary);
+
+            if (config.Terminal1Configured != config.Terminal2Configured)
+            {
+                Logger.Info("[终端配置] 当前仅配置了一个方向；切换到未配置方向时将拒绝切换并返回 terminal_not_configured");
+            }
+        }
+
+        internal static DeviceMode ResolveDeviceMode(JToken token, Action<string> warn)
+        {
+            if (token == null)
+            {
+                warn?.Invoke("DeviceMode缺失，回退到DeviceMode=1");
+                return DeviceMode.Full;
+            }
+
+            if (token.Type == JTokenType.Integer)
+            {
+                var value = token.Value<int>();
+                if (value == (int)DeviceMode.Full ||
+                    value == (int)DeviceMode.RjCameraOnly)
+                    return (DeviceMode)value;
+            }
+
+            warn?.Invoke("DeviceMode无效（仅支持1/2），回退到DeviceMode=1");
+            return DeviceMode.Full;
+        }
+
+        internal static string ResolveDeviceModeName(JToken configuredNames,
+            DeviceMode mode)
+        {
+            var configuredName = configuredNames?
+                .Value<string>(((int)mode).ToString());
+            if (!string.IsNullOrWhiteSpace(configuredName))
+                return configuredName.Trim();
+            return mode == DeviceMode.RjCameraOnly
+                ? "RJ2/RJ3 镜头模式"
+                : "完整设备模式";
+        }
+
+        internal static int ResolveTerminalIndex(int? configuredIndex,
+            Action<string> warn)
+        {
+            if (!configuredIndex.HasValue)
+                return 1;
+            if (configuredIndex.Value == 1 || configuredIndex.Value == 2)
+                return configuredIndex.Value;
+            warn?.Invoke("terminal.default_index 配置非法，仅支持 1/2，回退终端 1");
+            return 1;
+        }
+
+        /// <summary>
+        /// 读取自动子网模式下的终端 IP 最后一段。
+        /// 空字符串、缺失值、0 或超出 IPv4 最后一段范围的值均视为无效。
+        /// </summary>
+        internal static int ResolveHostSuffix(JToken device)
+        {
+            if (device == null)
+                return 0;
+
+            var token = device["host_suffix"];
+            if (token == null || token.Type == JTokenType.Null)
+                return 0;
+
+            int suffix;
+            if (!int.TryParse(token.ToString(), out suffix))
+                return 0;
+
+            return suffix >= 1 && suffix <= 254 ? suffix : 0;
+        }
+
+        /// <summary>
+        /// 判断终端设备列表中是否存在指定方向且配置了有效 IP。
+        /// 未提供设备列表时返回 true，以保持旧配置的默认双终端行为。
+        /// </summary>
+        internal static bool ResolveTerminalConfigured(JToken devices,
+            int terminalIndex)
+        {
+            if (terminalIndex != 1 && terminalIndex != 2)
+                return false;
+            if (devices == null)
+                return true;
+
+            foreach (var dev in devices)
+            {
+                var index = dev.Value<int?>("index") ?? 0;
+                if (index == terminalIndex && ResolveHostSuffix(dev) > 0)
+                    return true;
+            }
+            return false;
+        }
+
+        public string GetTerminalName(int terminalIndex)
+        {
+            return terminalIndex == 2 ? Terminal2Name : Terminal1Name;
         }
 
         public string GetDllServerUrl()

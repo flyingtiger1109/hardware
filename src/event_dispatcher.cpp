@@ -280,17 +280,49 @@ static PlatePreviewState* FindPlatePreviewStateByRequestId(HzsjkjtContext& ctx,
     return nullptr;
 }
 
-static void ClearPlatePreviewLeaseOnFailure(const std::string& resourceType,
-                                            const std::string& requestId) {
-    if (resourceType != HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) return;
+static bool ClearExternalPreviewLeaseOnFailure(const std::string& resourceType,
+                                               const std::string& requestId) {
+    if (requestId.empty()) return false;
 
     auto& ctx = HzsjkjtContext::Instance();
-    auto lock = WriteLock();
-    PlatePreviewState* state = FindPlatePreviewStateByRequestId(ctx, requestId);
-    if (!state) return;
-    state->running = false;
-    state->request_id.clear();
-    state->third_party_hwnd = 0;
+    bool cleared = false;
+    const char* resourceName = resourceType.c_str();
+    {
+        auto lock = WriteLock();
+        if (resourceType == HZCYKJTHardWare_RESOURCE_FACE_IMAGE &&
+            ctx.camera_preview_request_id == requestId) {
+            ctx.camera_preview_running = false;
+            ctx.camera_preview_request_id.clear();
+            ctx.camera_preview_third_party_hwnd = 0;
+            cleared = true;
+        } else if (resourceType == HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE &&
+                   ctx.fingerprint_preview_request_id == requestId) {
+            ctx.fingerprint_preview_running = false;
+            ctx.fingerprint_preview_request_id.clear();
+            ctx.fingerprint_preview_third_party_hwnd = 0;
+            cleared = true;
+        } else if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE &&
+                   ctx.iris_preview_request_id == requestId) {
+            ctx.iris_preview_running = false;
+            ctx.iris_preview_request_id.clear();
+            ctx.iris_preview_third_party_hwnd = 0;
+            cleared = true;
+        } else if (resourceType == HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) {
+            PlatePreviewState* state = FindPlatePreviewStateByRequestId(ctx, requestId);
+            if (state) {
+                state->running = false;
+                state->request_id.clear();
+                state->third_party_hwnd = 0;
+                cleared = true;
+            }
+        }
+    }
+
+    if (cleared) {
+        LOG_WARN("预览", "异步预览失败后已清理DLL预览租约：resource=%s，request_id=%s",
+                 resourceName, requestId.c_str());
+    }
+    return cleared;
 }
 
 void EventDispatcher::SetCallback(THZCYKJTHardWareEventCallback callback) {
@@ -969,7 +1001,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
         }
         LOG_ERROR("事件分发", "硬件控制程序异步预览启动失败：request_id=%s，resource=%s，code=%s，msg=%s",
                   requestId.c_str(), resourceType.c_str(), errorCode.c_str(), errorMsg.c_str());
-        ClearPlatePreviewLeaseOnFailure(resourceType, requestId);
+        ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                   nullptr, body.c_str());
@@ -1020,7 +1052,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     if (renderHwnd == 0 || !IsWindow(renderWindow)) {
         LOG_ERROR("事件分发", "硬件控制程序预览就绪回调处理失败：render_hwnd无效，request_id=%s，render_hwnd=%p",
                   requestId.c_str(), renderWindow);
-        ClearPlatePreviewLeaseOnFailure(resourceType, requestId);
+        ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_INVALID_HWND, "", "预览渲染窗口句柄无效",
                   nullptr, body.c_str());
@@ -1030,7 +1062,7 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     if (thirdPartyHwndValue == 0 || !IsWindow(thirdPartyWindow)) {
         LOG_ERROR("事件分发", "硬件控制程序预览就绪回调处理失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，render_hwnd=%p",
                   requestId.c_str(), thirdPartyWindow, renderWindow);
-        ClearPlatePreviewLeaseOnFailure(resourceType, requestId);
+        ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_INVALID_HWND, "", "第三方预览窗口句柄无效",
                   nullptr, body.c_str());
@@ -1040,14 +1072,15 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     if (renderWindow != thirdPartyWindow) {
         LOG_ERROR("事件分发", "硬件控制程序预览渲染目标不一致：request_id=%s，resource=%s，third_party_hwnd=%p，render_hwnd=%p",
                   requestId.c_str(), resourceType.c_str(), thirdPartyWindow, renderWindow);
-        ClearPlatePreviewLeaseOnFailure(resourceType, requestId);
+        ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED, "", "预览渲染窗口与传入窗口不一致",
                   nullptr, body.c_str());
         return;
     }
 
-    LOG_INFO("事件分发", "预览已启动");
+    LOG_INFO("事件分发", "预览已启动：request_id=%s，资源=%s，third_party_hwnd=%p，render_hwnd=%p",
+             requestId.c_str(), resourceType.c_str(), thirdPartyWindow, renderWindow);
     SendEvent(requestId, resourceType, startedEventType,
               HZCYKJTHardWare_RET_OK, "", "预览已就绪",
               nullptr, body.c_str());

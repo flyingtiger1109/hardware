@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "callback_server.h"
 #include "event_dispatcher.h"
+#include "json_helper.h"
 #include "logger.h"
 
 namespace HZCYKJTHardWare {
@@ -253,9 +254,13 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
                 char remoteIp[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &clientAddr.sin_addr, remoteIp, sizeof(remoteIp));
 
-                LOG_INFO("回调服务",
-                         "收到硬件控制程序回调：path=%s，remote=%s，body_size=%zu",
-                         path.c_str(), remoteIp, body.size());
+                const std::string requestId = JsonHelper::GetString(body, "request_id");
+                const std::string resourceType = JsonHelper::GetString(body, "resource_type");
+                LOG_DEBUG("回调服务",
+                          "收到硬件控制程序回调：路径=%s，request_id=%s，资源=%s，来源=%s，正文长度=%zu",
+                          path.c_str(), requestId.empty() ? "<无>" : requestId.c_str(),
+                          resourceType.empty() ? "<无>" : resourceType.c_str(),
+                          remoteIp, body.size());
                 CallbackData cbData;
                 cbData.path = path;
                 cbData.body = body;

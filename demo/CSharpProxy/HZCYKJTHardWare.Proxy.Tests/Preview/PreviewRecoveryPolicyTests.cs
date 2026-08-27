@@ -23,5 +23,24 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
             Assert.IsFalse(PreviewManager.ShouldValidatePreviewUrl("HTTPS://terminal/live"));
             Assert.IsTrue(PreviewManager.ShouldValidatePreviewUrl("rtsp://192.168.20.30/live"));
         }
+
+        [TestMethod]
+        public void SelectRecoveryPreviewUrl_PrefersSavedExplicitUrl()
+        {
+            const string savedUrl = "http://127.0.0.1:18080/plate-live";
+            const string requestedUrl = "http://127.0.0.1:18081/other-live";
+
+            Assert.AreEqual(savedUrl,
+                PreviewManager.SelectRecoveryPreviewUrl(savedUrl, requestedUrl));
+        }
+
+        [TestMethod]
+        public void SelectRecoveryPreviewUrl_UsesRequestedUrlWhenExplicitUrlMissing()
+        {
+            const string requestedUrl = "http://127.0.0.1:18081/terminal-live";
+
+            Assert.AreEqual(requestedUrl,
+                PreviewManager.SelectRecoveryPreviewUrl(" ", requestedUrl));
+        }
     }
 }

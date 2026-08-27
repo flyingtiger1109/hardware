@@ -25,6 +25,94 @@ using HZCYKJTHardWare::PlatePreviewCameraConfig;
 using HZCYKJTHardWare::PlatePreviewChannel;
 using HZCYKJTHardWare::PlatePreviewState;
 
+enum class DeviceCapability {
+    PlateCJ, PlateRJ2, PlateRJ3, Face, Fingerprint, Iris, OCR, NfcCard,
+    Authorize, TerminalControl, ProcessControl
+};
+
+static void PostCaptureEvent(const std::string& requestId,
+                             const std::string& resourceType,
+                             int eventType, int status,
+                             const char* errorCode, const char* message,
+                             const char* savePath, const char* rawJson);
+
+static const char* CapabilityName(DeviceCapability capability) {
+    switch (capability) {
+        case DeviceCapability::PlateCJ: return "PlateCJ";
+        case DeviceCapability::PlateRJ2: return "PlateRJ2";
+        case DeviceCapability::PlateRJ3: return "PlateRJ3";
+        case DeviceCapability::Face: return "Face";
+        case DeviceCapability::Fingerprint: return "Fingerprint";
+        case DeviceCapability::Iris: return "Iris";
+        case DeviceCapability::OCR: return "OCR";
+        case DeviceCapability::NfcCard: return "NfcCard";
+        case DeviceCapability::Authorize: return "Authorize";
+        case DeviceCapability::TerminalControl: return "TerminalControl";
+        case DeviceCapability::ProcessControl: return "ProcessControl";
+        default: return "Unknown";
+    }
+}
+
+static const char* CapabilityDisplayName(DeviceCapability capability) {
+    switch (capability) {
+        case DeviceCapability::PlateCJ: return "车牌CJ";
+        case DeviceCapability::PlateRJ2: return "车牌RJ2";
+        case DeviceCapability::PlateRJ3: return "车牌RJ3";
+        case DeviceCapability::Face: return "人脸";
+        case DeviceCapability::Fingerprint: return "指纹";
+        case DeviceCapability::Iris: return "虹膜";
+        case DeviceCapability::OCR: return "OCR";
+        case DeviceCapability::NfcCard: return "NFC卡";
+        case DeviceCapability::Authorize: return "授权";
+        case DeviceCapability::TerminalControl: return "终端控制";
+        case DeviceCapability::ProcessControl: return "流程控制";
+        default: return "未知";
+    }
+}
+
+static bool IsCapabilitySupported(DeviceCapability capability) {
+    auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
+    auto lock = HZCYKJTHardWare::ReadLock();
+    return ctx.device_mode != 2 || capability == DeviceCapability::PlateRJ2 ||
+        capability == DeviceCapability::PlateRJ3;
+}
+
+static int RequireCapability(const char* interfaceName,
+                             DeviceCapability capability) {
+    if (IsCapabilitySupported(capability)) return HZCYKJTHardWare_RET_OK;
+    static std::mutex warningMutex;
+    static std::map<std::string, std::pair<int64_t, int>> warnings;
+    const int64_t now = static_cast<int64_t>(GetTickCount64());
+    const std::string key = std::string(interfaceName ? interfaceName : "unknown") +
+        "|" + CapabilityName(capability);
+    std::lock_guard<std::mutex> lock(warningMutex);
+    auto& state = warnings[key];
+    if (state.first != 0 && now - state.first < 60000) {
+        ++state.second;
+        return HZCYKJTHardWare_RET_UNSUPPORTED;
+    }
+    LOG_WARN("能力检查", "接口=%s，设备模式(DeviceMode)=2，能力=%s，结果=不支持，已抑制次数=%d",
+             interfaceName, CapabilityDisplayName(capability), state.second);
+    state = {now, 0};
+    return HZCYKJTHardWare_RET_UNSUPPORTED;
+}
+
+static bool RejectUnsupportedAsync(const char* interfaceName,
+                                   DeviceCapability capability,
+                                   const char* resourceType,
+                                   int failedEventType) {
+    if (RequireCapability(interfaceName, capability) == HZCYKJTHardWare_RET_OK)
+        return false;
+    static std::atomic<unsigned long> sequence{0};
+    const std::string requestId = "not-supported-" +
+        std::to_string(GetTickCount64()) + "-" +
+        std::to_string(++sequence);
+    PostCaptureEvent(requestId, resourceType, failedEventType,
+        HZCYKJTHardWare_RET_UNSUPPORTED, "not_supported",
+        "Current DeviceMode does not support this capability", nullptr, nullptr);
+    return true;
+}
+
 // BusyGuard 已移除，并发控制由 C# Proxy Scheduler 负责
 
 struct SwitchPendingScope {
@@ -47,6 +135,12 @@ struct SwitchPendingScope {
 // 检查终端切换是否进行中；切换期间拒绝新操作，保证切换优先
 static bool IsSwitchPending() {
     return HZCYKJTHardWare::HzsjkjtContext::Instance().switch_pending.load();
+}
+
+static int ProxyFailureCode(const HZCYKJTHardWare::DelphiProxy& proxy) {
+    return proxy.LastResultCode() == HZCYKJTHardWare_RET_UNSUPPORTED
+        ? HZCYKJTHardWare_RET_UNSUPPORTED
+        : HZCYKJTHardWare_RET_HTTP_FAILED;
 }
 
 static std::string LogValue(const std::string& value, size_t maxLength = 256) {
@@ -933,6 +1027,7 @@ static int InitSdkBody() {
     {
         auto lock = WriteLock();
         ctx.delphi_server_url = delphiServerUrl;
+        ctx.device_mode = cfg.GetDeviceMode();
         ctx.current_terminal_index = 0;
         ctx.current_terminal_base_url = delphiServerUrl;
         ctx.selected_lan_ip.clear();
@@ -970,6 +1065,8 @@ static int InitSdkBody() {
 
     LOG_INFO("配置管理", "第三方输入编码模式：%s",
              cfg.GetThirdPartyInputEncoding().c_str());
+    LOG_INFO("配置管理", "设备模式(DeviceMode)=%d，能力列表=[%s]",
+             cfg.GetDeviceMode(), cfg.GetDeviceMode() == 2 ? "车牌RJ2，车牌RJ3" : "全部");
 
     auto warnInvalidPlateConfig = [&cfg](PlatePreviewChannel channel) {
         const PlatePreviewCameraConfig& config = cfg.GetPlatePreviewConfig(channel);
@@ -1036,7 +1133,7 @@ static int InitSdkBody() {
             ctx.http_client = nullptr;
         }
         Logger::Instance().Shutdown();
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return ProxyFailureCode(proxy);
     }
 
     {
@@ -1297,7 +1394,7 @@ static int StartProcessBody(const char* saveDir) {
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
         LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return ProxyFailureCode(proxy);
     }
 
     LOG_INFO("接口", "开始流程已受理");
@@ -1318,7 +1415,7 @@ static int EndProcessBody() {
     if (!ok) {
         LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return ProxyFailureCode(proxy);
     }
 
     LOG_INFO("接口", "结束流程已处理：request_id=%s", requestId.c_str());
@@ -1333,11 +1430,13 @@ static int StartCameraPreviewBody(void* hwnd) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("接口", "启动摄像头预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动摄像头预览失败：第三方HWND无效，HWND=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
+    LOG_INFO("接口", "摄像头预览请求已创建：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     std::string delphiServerUrl;
     std::string callbackUrl;
     intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
@@ -1385,11 +1484,12 @@ static int StartCameraPreviewBody(void* hwnd) {
             ctx.camera_preview_request_id.clear();
             ctx.camera_preview_third_party_hwnd = 0;
         }
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return ProxyFailureCode(proxy);
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "摄像头预览已启动");
+    LOG_INFO("接口", "摄像头预览已启动：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1427,7 +1527,7 @@ static int StopCameraPreviewBody() {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "摄像头预览已停止");
+    LOG_INFO("接口", "摄像头预览已停止：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1437,11 +1537,13 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("接口", "启动指纹预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动指纹预览失败：第三方HWND无效，HWND=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP_PREVIEW");
+    LOG_INFO("接口", "指纹预览请求已创建：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     std::string delphiServerUrl;
     std::string callbackUrl;
     intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
@@ -1492,7 +1594,8 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "指纹预览已启动");
+    LOG_INFO("接口", "指纹预览已启动：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1540,11 +1643,13 @@ static int StartIrisPreviewBody(void* hwnd) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("接口", "启动虹膜预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动虹膜预览失败：第三方HWND无效，HWND=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
+    LOG_INFO("接口", "虹膜预览请求已创建：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     std::string rtspUrl;
     std::string delphiServerUrl;
     intptr_t thirdPartyHwnd = reinterpret_cast<intptr_t>(hwnd);
@@ -1595,6 +1700,8 @@ static int StartIrisPreviewBody(void* hwnd) {
 
     int ret = PreviewManager::Instance().StartIrisPreviewFromUrl(reinterpret_cast<HWND>(hwnd), rtspUrl);
     if (ret != HZCYKJTHardWare_RET_OK) {
+        LOG_ERROR("接口", "启动虹膜预览失败：本地渲染器启动失败，request_id=%s，third_party_hwnd=%p，返回值=%d",
+                  requestId.c_str(), hwnd, ret);
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1607,7 +1714,8 @@ static int StartIrisPreviewBody(void* hwnd) {
     PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE,
                      HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STARTED,
                      HZCYKJTHardWare_RET_OK, "", "预览已就绪");
-    LOG_INFO("接口", "虹膜预览已启动");
+    LOG_INFO("接口", "虹膜预览已启动：request_id=%s，third_party_hwnd=%p",
+             requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1647,7 +1755,7 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
-        LOG_ERROR("接口", "启动车牌预览失败：第三方HWND无效，hwnd=%p", hwnd);
+        LOG_ERROR("接口", "启动车牌预览失败：第三方HWND无效，HWND=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
@@ -1656,6 +1764,8 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     const std::string requestPrefix =
         std::string("HZCYKJTHardWare_PLATE_PREVIEW_") + plateName;
     std::string requestId = GenerateSyncRequestId(requestPrefix.c_str());
+    LOG_INFO("接口", "车牌%s预览请求已创建：request_id=%s，third_party_hwnd=%p",
+             plateName, requestId.c_str(), hwnd);
     std::string proxyUrl;
     std::string callbackUrl;
     int streamChannel = 101;
@@ -1669,12 +1779,13 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
         if (!plateState.enabled) {
-            LOG_WARN("接口", "启动车牌%s预览失败：preview.plate.%s.enabled=false",
-                     plateName, plateCode);
+            LOG_WARN("接口", "启动车牌%s预览失败：配置preview.plate.%s.enabled=false，request_id=%s",
+                     plateName, plateCode, requestId.c_str());
             return HZCYKJTHardWare_RET_UNSUPPORTED;
         }
         if (plateState.rtsp_url.empty()) {
-            LOG_ERROR("接口", "启动车牌%s预览失败：车牌相机RTSP配置不完整", plateName);
+            LOG_ERROR("接口", "启动车牌%s预览失败：车牌相机RTSP配置不完整，request_id=%s",
+                      plateName, requestId.c_str());
             return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
         }
 
@@ -1701,8 +1812,8 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "车牌预览请求已由C# Proxy受理：request_id=%s，stream_channel=%d，hwnd=%p",
-             requestId.c_str(), streamChannel, hwnd);
+    LOG_INFO("接口", "车牌%s预览请求已由C# Proxy受理：request_id=%s，码流通道=%d，third_party_hwnd=%p",
+             plateName, requestId.c_str(), streamChannel, hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1746,7 +1857,7 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_PLATE_IMAGE,
         HZCYKJTHardWare_EVENT_PLATE_PREVIEW_STOPPED,
         HZCYKJTHardWare_RET_OK, "", "plate preview stopped");
-    LOG_INFO("接口", "车牌预览已停止");
+    LOG_INFO("接口", "车牌%s预览已停止：request_id=%s", plateCode, requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1884,13 +1995,16 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
+        const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("接口", "虹膜抓拍提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
-                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "虹膜抓拍请求发送失败",
+                         failureCode,
+                         failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
+                         "虹膜抓拍请求发送失败",
                          nullptr, nullptr);
         RequestSessionManager::Instance().MarkCompleted(requestId);
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return failureCode;
     }
 
     if (IsSwitchPending()) {
@@ -1949,13 +2063,16 @@ static int RequestOCRDirect(const char* saveDir) {
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
+        const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("接口", "OCR请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
-                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "OCR识别请求发送失败",
+                         failureCode,
+                         failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
+                         "OCR识别请求发送失败",
                          nullptr, nullptr);
         RequestSessionManager::Instance().MarkCompleted(requestId);
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return failureCode;
     }
 
     if (IsSwitchPending()) {
@@ -2015,13 +2132,16 @@ static int RequestNfcCardDirect(const char* saveDir) {
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
+        const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
                   requestId.c_str(), ctx.delphi_server_url.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
-                         HZCYKJTHardWare_RET_HTTP_FAILED, "", "IC卡识别请求发送失败",
+                         failureCode,
+                         failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
+                         "IC卡识别请求发送失败",
                          nullptr, nullptr);
         RequestSessionManager::Instance().MarkCompleted(requestId);
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return failureCode;
     }
 
     if (IsSwitchPending()) {
@@ -2111,16 +2231,18 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
                                 authKADM,
                                 callbackUrl,
                                 httpTimeoutMs)) {
+        const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("授权", "EXE授权请求受理失败：请求ID=%s，EXE地址=%s",
                   requestId.c_str(), LogValue(ctx.delphi_server_url).c_str());
         LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
-                         HZCYKJTHardWare_RET_HTTP_FAILED, "",
+                         failureCode,
+                         failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
                          "授权请求发送失败",
                          nullptr, nullptr);
         RequestSessionManager::Instance().MarkCompleted(requestId);
-        return HZCYKJTHardWare_RET_HTTP_FAILED;
+        return failureCode;
     }
 
     if (IsSwitchPending()) {
@@ -2221,46 +2343,57 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_ReleaseSdk(void) 
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_SwitchTerminal(int terminalIndex) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::TerminalControl) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(SwitchTerminalBody(terminalIndex));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartProcess(const char* saveDir) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::ProcessControl) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StartProcessBody(saveDir));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_EndProcess(void) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::ProcessControl) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(EndProcessBody());
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartCameraPreview(void* hwnd) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Face) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StartCameraPreviewBody(hwnd));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopCameraPreview(void) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Face) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StopCameraPreviewBody());
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartFingerprintPreview(void* hwnd) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Fingerprint) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StartFingerprintPreviewBody(hwnd));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopFingerprintPreview(void) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Fingerprint) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StopFingerprintPreviewBody());
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartIrisPreview(void* hwnd) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Iris) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StartIrisPreviewBody(hwnd));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopIrisPreview(void) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Iris) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StopIrisPreviewBody());
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewCJ(void* hwnd) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::PlateCJ) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StartPlatePreviewBody(PlatePreviewChannel::CJ, hwnd));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewCJ(void) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::PlateCJ) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(StopPlatePreviewBody(PlatePreviewChannel::CJ));
 }
 
@@ -2281,6 +2414,7 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewR
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureCameraImage(const char* saveDir) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Face) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(CaptureCameraImageBody(saveDir));
 }
 
@@ -2293,18 +2427,28 @@ static int CaptureFingerprintImageBody(const char* saveDir, const char* saveDirH
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureFingerprintImage(const char* saveDir, const char* saveDirHk) {
+    if (RequireCapability(__FUNCTION__, DeviceCapability::Fingerprint) != HZCYKJTHardWare_RET_OK) return 0;
     HZCY_GUARDED_EXPORT(CaptureFingerprintImageBody(saveDir, saveDirHk));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureIrisImage(const char* saveDir) {
+    if (RejectUnsupportedAsync(__FUNCTION__, DeviceCapability::Iris,
+            HZCYKJTHardWare_RESOURCE_IRIS_IMAGE,
+            HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED)) return 0;
     HZCY_GUARDED_EXPORT(CaptureIrisImageBody(saveDir));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestOCR(const char* saveDir) {
+    if (RejectUnsupportedAsync(__FUNCTION__, DeviceCapability::OCR,
+            HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT,
+            HZCYKJTHardWare_EVENT_OCR_FAILED)) return 0;
     HZCY_GUARDED_EXPORT(RequestOCRBody(saveDir));
 }
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestNfcCard(const char* saveDir) {
+    if (RejectUnsupportedAsync(__FUNCTION__, DeviceCapability::NfcCard,
+            HZCYKJTHardWare_RESOURCE_NFC_CARD,
+            HZCYKJTHardWare_EVENT_NFC_CARD_FAILED)) return 0;
     HZCY_GUARDED_EXPORT(RequestNfcCardBody(saveDir));
 }
 
@@ -2312,6 +2456,9 @@ extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_RequestAuthorize(
     const char* ZJHM, const char* ZJLB, const char* GJDQDM,
     const char* XM, const char* XB, const char* CSRQ, const char* KADM)
 {
+    if (RejectUnsupportedAsync(__FUNCTION__, DeviceCapability::Authorize,
+            HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
+            HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED)) return 0;
     HZCY_GUARDED_EXPORT(RequestAuthorizeBody(ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ, KADM));
 }
 

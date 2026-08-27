@@ -25,6 +25,8 @@ namespace HZCYKJTHardWare.Proxy
         private Icon _appIcon;
         private System.Windows.Forms.Timer _uiLogTimer;
         private readonly ConcurrentQueue<string> _pendingUiLogs = new ConcurrentQueue<string>();
+        private readonly DeviceCapabilityManager _capabilities =
+            DeviceCapabilityManager.Instance;
         private int _pendingUiLogCount;
         private bool _finalStartupLayoutScheduled;
         private int _pendingFaceCaptureSuccessCount;
@@ -33,6 +35,8 @@ namespace HZCYKJTHardWare.Proxy
         private bool _exitRequested;
         private int _headerTerminalIndex = 1;
         private HardwareHealthPanel _hardwareHealthPanel;
+        private TableLayoutPanel _titleStackPanel;
+        private Label _lblVersion;
         private ComboBox _previewDeviceComboBox;
         private Button _btnStartSelectedPreview;
         private Button _btnStopSelectedPreview;
@@ -115,6 +119,7 @@ namespace HZCYKJTHardWare.Proxy
         public MainForm()
         {
             InitializeComponent();
+            _headerTerminalIndex = AppConfig.Instance.DefaultTerminalIndex;
             ApplyVersionDisplay();
             ApplyCompactVerticalLayout();
             InitializeHardwareHealthPanel();
@@ -197,6 +202,7 @@ namespace HZCYKJTHardWare.Proxy
             btnExportLog.Location = new Point(btnClearLog.Right + gap, alignY);
 
             InitCardLayouts();
+            ApplyDeviceCapabilityLayout();
             ApplyUIPolish();
             InitializeResponsiveMainLayout();
             InitializeTrayIcon();
@@ -210,6 +216,51 @@ namespace HZCYKJTHardWare.Proxy
         {
             Text = ProductVersionInfo.WindowTitle;
             lblPageTitle.Text = ProductVersionInfo.DisplayName;
+            InitializeTitleVersionLayout();
+        }
+
+        private void InitializeTitleVersionLayout()
+        {
+            if (_titleStackPanel != null)
+                return;
+
+            headerLayout.Controls.Remove(lblPageTitle);
+            _titleStackPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Margin = Padding.Empty,
+                Padding = new Padding(0, ScaleDesignPixels(12, 6), 0,
+                    ScaleDesignPixels(10, 5)),
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = Color.White
+            };
+            _titleStackPanel.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100F));
+            _titleStackPanel.RowStyles.Add(
+                new RowStyle(SizeType.Percent, 64F));
+            _titleStackPanel.RowStyles.Add(
+                new RowStyle(SizeType.Percent, 36F));
+
+            lblPageTitle.Dock = DockStyle.Fill;
+            lblPageTitle.Margin = Padding.Empty;
+            lblPageTitle.TextAlign = ContentAlignment.BottomCenter;
+
+            _lblVersion = new Label
+            {
+                Name = "lblVersion",
+                Dock = DockStyle.Fill,
+                Margin = Padding.Empty,
+                Font = new Font("Microsoft YaHei", 8.5F, FontStyle.Regular),
+                ForeColor = Color.FromArgb(100, 116, 139),
+                Text = ProductVersionInfo.DisplayVersion,
+                TextAlign = ContentAlignment.TopCenter,
+                AutoEllipsis = false
+            };
+
+            _titleStackPanel.Controls.Add(lblPageTitle, 0, 0);
+            _titleStackPanel.Controls.Add(_lblVersion, 0, 1);
+            headerLayout.Controls.Add(_titleStackPanel, 0, 0);
         }
 
         private int ScaleDesignPixels(int designPixels, int minimum)
@@ -264,6 +315,8 @@ namespace HZCYKJTHardWare.Proxy
 
         private void InitializeHardwareHealthPanel()
         {
+            if (!_capabilities.IsSupported(DeviceCapability.TerminalControl))
+                return;
             var headerHeightBeforeHealthPanel = panelHeader.Height;
             _hardwareHealthPanel = new HardwareHealthPanel
             {
@@ -346,6 +399,34 @@ namespace HZCYKJTHardWare.Proxy
             panelPlateCJ.Margin = Padding.Empty;
             panelPlateRJ2.Margin = Padding.Empty;
             panelPlateRJ3.Margin = Padding.Empty;
+        }
+
+        private void ApplyDeviceCapabilityLayout()
+        {
+            if (_capabilities.Mode != DeviceMode.RjCameraOnly)
+                return;
+
+            cardOperation.Visible = false;
+            cardLayout.Controls.Remove(cardOperation);
+            cardLayout.ColumnStyles.Clear();
+            cardLayout.ColumnCount = 2;
+            cardLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            cardLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            cardLayout.SetColumn(cardService, 0);
+            cardLayout.SetColumn(cardPreviewControl, 1);
+            cardService.Margin = new Padding(0, 0, ScaleDesignPixels(24, 12), 0);
+
+            // Mode 2 只保留服务启停，不显示流程和终端控制。
+            tlpService.Controls.Remove(btnStartProcess);
+            tlpService.Controls.Remove(btnEndProcess);
+            tlpService.Controls.Remove(btnSwitchTerminal1);
+            tlpService.Controls.Remove(btnSwitchTerminal2);
+            tlpService.RowStyles.Clear();
+            tlpService.RowCount = 1;
+            tlpService.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            lblTerminalCaption.Visible = false;
+            lblTerminalValue.Visible = false;
         }
 
         private void InitializeResponsiveMainLayout()
@@ -461,8 +542,20 @@ namespace HZCYKJTHardWare.Proxy
                 previewLayout.Controls.Clear();
                 previewLayout.ColumnStyles.Clear();
                 previewLayout.RowStyles.Clear();
-                previewLayout.ColumnCount = 5;
-                previewLayout.RowCount = 3;
+                var rjOnly = _capabilities.Mode == DeviceMode.RjCameraOnly;
+                previewLayout.ColumnCount = rjOnly ? 3 : 5;
+                previewLayout.RowCount = rjOnly ? 1 : 3;
+
+                if (rjOnly)
+                {
+                    previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                    previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, gap));
+                    previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                    previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+                    AddPreviewPanel(panelPlateRJ2, 0, 0);
+                    AddPreviewPanel(panelPlateRJ3, 2, 0);
+                    return;
+                }
 
                 previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
                 previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, gap));
@@ -504,6 +597,21 @@ namespace HZCYKJTHardWare.Proxy
 
             var area = _previewGridHost.ClientRectangle;
             var gap = ScaleDesignPixels(16, 10);
+            if (_capabilities.Mode == DeviceMode.RjCameraOnly)
+            {
+                var usableWidthRj = Math.Max(0, area.Width - gap);
+                var cellWidthRj = usableWidthRj / 2;
+                var cellHeightRj = Math.Min(area.Height,
+                    (int)Math.Floor(cellWidthRj * (9.0 / 16.0)));
+                if (cellWidthRj <= 0 || cellHeightRj <= 0)
+                {
+                    previewLayout.Bounds = Rectangle.Empty;
+                    return;
+                }
+                previewLayout.SetBounds(0, Math.Max(0, (area.Height - cellHeightRj) / 2),
+                    cellWidthRj * 2 + gap, cellHeightRj);
+                return;
+            }
             var usableWidth = Math.Max(0, area.Width - gap * 2);
             var usableHeight = Math.Max(0, area.Height - gap);
             var cellWidthByWindow = usableWidth / 3;
@@ -690,6 +798,11 @@ namespace HZCYKJTHardWare.Proxy
                 new PreviewDeviceOption("plate_rj3", "入境车牌 3", panelPlateRJ3,
                     lblPlateRJ3Placeholder, btnStartPlatePreviewRJ3, btnStopPlatePreviewRJ3)
             };
+            _previewDeviceOptions = _previewDeviceOptions.Where(option =>
+            {
+                return !_capabilities.TryGetPreviewCapability(option.ResourceType,
+                    out var capability) || _capabilities.IsSupported(capability);
+            }).ToList();
 
             tlpPreviewControl.SuspendLayout();
             try
@@ -875,10 +988,12 @@ namespace HZCYKJTHardWare.Proxy
         {
             UpdateHeaderStatus();
             Logger.Info(ProductVersionInfo.DisplayName + "应用程序启动中...");
+            Logger.Info("设备模式(DeviceMode)=" + (int)_capabilities.Mode +
+                "，能力列表=[" + _capabilities.CapabilitiesText + "]");
             Logger.Info("[运行环境] 进程架构=" +
                 (Environment.Is64BitProcess ? "x64" : "x86") +
-                ", 操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
-                ", CLR=" + Environment.Version);
+                "，操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
+                "，CLR=" + Environment.Version);
             memoLog.ScrolledToTop += OnLogScrolledToTop;
             memoLog.ScrolledToBottom += OnLogScrolledToBottom;
             chkAutoScroll.CheckedChanged += (s, ev) =>
@@ -1187,7 +1302,7 @@ namespace HZCYKJTHardWare.Proxy
                 _server = null;
                 _hardwareHealthPanel?.ShowServiceStopped();
                 UpdateHeaderStatus();
-                AppendLog("启动服务失败: " + ex.Message);
+                AppendLog("启动服务失败：" + ex.Message);
             }
         }
 
@@ -1215,7 +1330,7 @@ namespace HZCYKJTHardWare.Proxy
             catch (Exception ex)
             {
                 UpdateHeaderStatus();
-                AppendLog("停止服务失败: " + ex.Message);
+                AppendLog("停止服务失败：" + ex.Message);
             }
         }
 
@@ -1236,12 +1351,26 @@ namespace HZCYKJTHardWare.Proxy
             {
                 var config = AppConfig.Instance;
                 lblDllListenValue.Text = string.Format("{0}:{1}", config.DllServerHost, config.DllServerPort);
-                lblCallbackListenValue.Text = string.Format("{0}:{1}", config.CallbackListenHost, config.CallbackListenPort);
+                lblCallbackListenCaption.Text = _capabilities.Mode == DeviceMode.RjCameraOnly
+                    ? "设备模式"
+                    : "回调监听";
+                lblCallbackListenValue.Text = _capabilities.Mode == DeviceMode.RjCameraOnly
+                    ? config.DeviceModeName
+                    : string.Format("{0}:{1}", config.CallbackListenHost, config.CallbackListenPort);
 
-                var terminalName = _headerTerminalIndex == 1 ? "终端 1 / 左通道" : "终端 2 / 右通道";
+                var terminalName = string.Format("终端 {0} / {1}",
+                    _headerTerminalIndex, config.GetTerminalName(_headerTerminalIndex));
                 var hostSuffix = _headerTerminalIndex == 1
                     ? config.Terminal1HostSuffix
                     : config.Terminal2HostSuffix;
+                var terminalConfigured = _headerTerminalIndex == 1
+                    ? config.Terminal1Configured
+                    : config.Terminal2Configured;
+                if (!terminalConfigured)
+                {
+                    lblTerminalValue.Text = string.Format("{0}（未配置）", terminalName);
+                    return;
+                }
                 var terminalUrl = string.Format(
                     "{0}://{1}.{2}:{3}",
                     config.TerminalScheme,
@@ -1255,7 +1384,7 @@ namespace HZCYKJTHardWare.Proxy
                 lblDllListenValue.Text = "配置读取失败";
                 lblCallbackListenValue.Text = "配置读取失败";
                 lblTerminalValue.Text = "配置读取失败";
-                Logger.Warn("Header 配置状态更新失败: " + ex.Message);
+                Logger.Warn("顶部运行信息区配置状态更新失败：" + ex.Message);
             }
         }
 
@@ -1470,7 +1599,7 @@ namespace HZCYKJTHardWare.Proxy
             if (_server == null) return;
             var result = await Task.Run(() => _server.StartProcess(AppConfig.Instance.DefaultSaveDir));
             SetPersistentButtonStyle(btnStartProcess, string.Equals(result, "OK", StringComparison.OrdinalIgnoreCase));
-            AppendLog("开始流程: " + result);
+            AppendLog("开始流程：" + result);
         }
 
         private async void btnEndProcess_Click(object sender, EventArgs e)
@@ -1479,21 +1608,21 @@ namespace HZCYKJTHardWare.Proxy
             var result = await Task.Run(() => _server.EndProcess());
             if (string.Equals(result, "OK", StringComparison.OrdinalIgnoreCase))
                 SetPersistentButtonStyle(btnStartProcess, false);
-            AppendLog("结束流程: " + result);
+            AppendLog("结束流程：" + result);
         }
 
         private async void btnSwitchTerminal1_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(1));
-            AppendLog("切换到左通道: " + result);
+            AppendLog("切换到左通道：" + result);
         }
 
         private async void btnSwitchTerminal2_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
             var result = await Task.Run(() => _server.SwitchTerminal(2));
-            AppendLog("切换到右通道: " + result);
+            AppendLog("切换到右通道：" + result);
         }
 
         private async void btnFaceCapture_Click(object sender, EventArgs e)
@@ -1512,21 +1641,21 @@ namespace HZCYKJTHardWare.Proxy
         {
             if (_server == null) return;
             var requestId = await Task.Run(() => _server.RequestOCR(AppConfig.Instance.DefaultSaveDir));
-            AppendLog("OCR 已下发, request_id: " + requestId);
+            AppendLog("OCR 已下发，request_id=" + requestId);
         }
 
         private async void btnNfcCard_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
             var requestId = await Task.Run(() => _server.RequestNfc(AppConfig.Instance.DefaultSaveDir));
-            AppendLog("IC 卡已下发, request_id: " + requestId);
+            AppendLog("IC 卡已下发，request_id=" + requestId);
         }
 
         private async void btnIrisCapture_Click(object sender, EventArgs e)
         {
             if (_server == null) return;
             var requestId = await Task.Run(() => _server.CaptureIris(AppConfig.Instance.DefaultSaveDir));
-            AppendLog("虹膜抓拍已下发, request_id: " + requestId);
+            AppendLog("虹膜抓拍已下发，request_id=" + requestId);
         }
 
         // --- 预览操作 ---
@@ -1706,21 +1835,27 @@ namespace HZCYKJTHardWare.Proxy
             var result = await Task.Run(() => _server.RequestAuthorize(
                 "H111111111", "24", "HKG", "TEST", "M", "19950101"));
             if (result.Ok)
-                AppendLog("授权已下发, request_id: " + result.RequestId);
+                AppendLog("授权已下发，request_id=" + result.RequestId);
             else
-                AppendLog("授权下发失败: " + result.Message + ", request_id: " + result.RequestId);
+                AppendLog("授权下发失败：" + result.Message + "，request_id=" + result.RequestId);
         }
 
         // --- 日志处理 ---
 
         private void AppendLog(string message)
         {
-            Logger.Info(message);
+            Logger.WriteMessage(message);
+
+            // 文件日志按 log.level 过滤后，UI 也必须同步过滤调试明细；否则主界面仍会被
+            // HTTP 收发和回调成功明细刷满，导致“文件不乱、界面仍乱”。
+            if (!Logger.IsMessageEnabled(message))
+                return;
 
             if (TryAggregateCaptureSuccess(message))
                 return;
 
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                       Logger.NormalizeForDisplay(message);
             EnqueueUiLog(line);
         }
 
@@ -2302,7 +2437,7 @@ namespace HZCYKJTHardWare.Proxy
                     if (dlg.ShowDialog() == DialogResult.OK)
                     {
                         File.WriteAllText(dlg.FileName, memoLog.Text, Encoding.UTF8);
-                        AppendLog("日志已导出: " + dlg.FileName);
+                        AppendLog("日志已导出：" + dlg.FileName);
                     }
                 }
             }

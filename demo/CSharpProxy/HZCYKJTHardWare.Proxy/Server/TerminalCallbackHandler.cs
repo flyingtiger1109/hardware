@@ -63,8 +63,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // ocr_event_status 高频推送，日志已在 HandleOcrEventStatus 内按事件类型精简
                 if (!string.IsNullOrEmpty(resourceType) && resourceType != "ocr_event_status")
-                    _log("[终端回调] resource_type=" + resourceType +
-                        (inferredResourceType ? "(inferred)" : ""));
+                    _log("[终端回调][调试] 资源类型=" + resourceType +
+                        (inferredResourceType ? "（根据字段推断）" : ""));
 
                 switch (resourceType)
                 {
@@ -91,14 +91,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                         break;
                     case "protocol":
                         if (inferredResourceType)
-                            _log($"[授权回调] 通过字段特征识别协议回调: status={cbStatus}");
+                            _log($"[授权回调][调试] 通过字段特征识别协议回调：状态={cbStatus}");
                         await HandleProtocolAsync(bodyUtf8, sourceAddress)
                             .ConfigureAwait(false);
                         break;
                     default:
                         // 记录正文片段，用于定位未知回调类型
                         var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
-                        _log($"[终端回调] 未知资源类型: path={callbackPath}, body={snippet}");
+                        _log($"[终端回调][警告] 未知资源类型：路径={callbackPath}，正文={snippet}");
                         break;
                 }
             }
@@ -173,8 +173,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             bool showInUi = (eventType == "event_type_card_detect" || eventType == "event_type_card_leave");
 
             var logLine = !string.IsNullOrEmpty(errorCode)
-                ? $"[OCR事件] request_id={requestId}, event={chineseEvent}, error={errorCode}, message={message}"
-                : $"[OCR事件] request_id={requestId}, event={chineseEvent}";
+                ? $"[OCR事件] request_id={requestId}，事件={chineseEvent}，错误码={errorCode}，消息={message}"
+                : $"[OCR事件] request_id={requestId}，事件={chineseEvent}";
 
             if (showInUi)
                 _log(logLine);           // UI + file — 证件检测/证件离开
@@ -190,7 +190,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var parsedBody = ParsedJsonBody.Parse(bodyUtf8);
             var result = CallbackParser.ParseOcrDocument(
                 parsedBody.Root, parsedBody.RawBody);
-            if (!result.Valid) { _log("[OCR回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[OCR回调][警告] 数据无效"); return; }
             var route = await ResolveCallbackAsync(result.RequestId,
                 ProxyResourceTypes.OcrDocument, "OCR", bodyUtf8, sourceAddress)
                 .ConfigureAwait(false);
@@ -231,14 +231,14 @@ namespace HZCYKJTHardWare.Proxy.Server
             IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseNfcCard(bodyUtf8);
-            if (!result.Valid) { _log("[IC卡回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[IC卡回调][警告] 数据无效"); return; }
             var route = await ResolveCallbackAsync(result.RequestId,
                 ProxyResourceTypes.NfcCard, "NFC", bodyUtf8, sourceAddress)
                 .ConfigureAwait(false);
             if (route == null)
                 return;
 
-            _log($"[IC卡回调] card_text={result.CardText}");
+            _log($"[IC卡回调] 卡片文本={result.CardText}");
 
             if (!CanDeliver(route, "NFC")) return;
             var delivery = await _dllCallback.SendNfcResult(route.DeliveryRequestId,
@@ -250,7 +250,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseIrisCapture(bodyUtf8);
-            if (!result.Valid) { _log("[虹膜回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[虹膜回调][警告] 数据无效"); return; }
 
             var route = await ResolveCallbackAsync(result.RequestId,
                 ProxyResourceTypes.IrisImage, "虹膜", bodyUtf8, sourceAddress)
@@ -299,7 +299,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
-            _log($"[虹膜回调] 保存完成: request_id={result.RequestId}, eyes={savedCount}, path={savePath}");
+            _log($"[虹膜回调] 保存完成：request_id={result.RequestId}，眼数={savedCount}，路径={savePath}");
             if (!CanDeliver(route, "虹膜")) return;
             var delivery = await _dllCallback.SendIrisResult(route.DeliveryRequestId,
                 savePath, route.CancellationToken).ConfigureAwait(false);
@@ -314,17 +314,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\",\"resource_type\":\"iris_image\",\"error\":true,\"code\":\"" +
                 JsonHelper.EscapeString(errorCode) + "\",\"message\":\"" +
                 JsonHelper.EscapeString(message) + "\"}";
-            _log($"[虹膜回调] 采集失败: request_id={requestId}, code={errorCode}, message={message}");
+            _log($"[虹膜回调] 采集失败：request_id={requestId}，错误码={errorCode}，消息={message}");
             return _dllCallback.PostCallbackRaw("/iris", payload, cancellationToken);
         }
 
         private void HandleFaceImage(string bodyUtf8)
         {
             var result = CallbackParser.ParseImageCapture(bodyUtf8, "face_image");
-            if (!result.Valid) { _log("[人脸回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[人脸回调][警告] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"[人脸回调] 异步抓拍结果: request_id={result.RequestId}");
+            _log($"[人脸回调] 异步抓拍结果：request_id={result.RequestId}");
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -336,10 +336,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void HandleFingerprintImage(string bodyUtf8)
         {
             var result = CallbackParser.ParseImageCapture(bodyUtf8, "fingerprint_image");
-            if (!result.Valid) { _log("[指纹回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[指纹回调][警告] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"[指纹回调] 异步抓拍结果: request_id={result.RequestId}");
+            _log($"[指纹回调] 异步抓拍结果：request_id={result.RequestId}");
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -357,7 +357,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             IPAddress sourceAddress)
         {
             var result = CallbackParser.ParseAuthorize(bodyUtf8);
-            if (!result.Valid) { _log("[授权回调] 数据无效"); return; }
+            if (!result.Valid) { _log("[授权回调][警告] 数据无效"); return; }
             var route = await ResolveCallbackAsync(result.RequestId,
                 ProxyResourceTypes.Protocol, "授权", bodyUtf8, sourceAddress)
                 .ConfigureAwait(false);
@@ -581,7 +581,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 System.IO.File.WriteAllText(filePath,
                     mrzObj.ToString(Newtonsoft.Json.Formatting.Indented),
                     System.Text.Encoding.UTF8);
-                _log($"[OCR] MRZ信息已保存: path={filePath}");
+                _log($"[OCR] MRZ信息已保存：路径={filePath}");
             }
             catch (Exception ex)
             {
@@ -610,7 +610,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                          operation, requestId)))
                 {
                     _requestRegistry.Fail(requestId, resourceType);
-                    Logger.Warn($"[{operation}回调] 回调终端与请求路由不一致，已跳过: request_id={requestId}, request_terminal={context.TerminalIndex}, current_terminal={current.TerminalIndex}");
+                    Logger.Warn($"[{operation}回调] 回调终端与请求路由不一致，已跳过：request_id={requestId}，请求终端={context.TerminalIndex}，当前终端={current.TerminalIndex}");
                     return null;
                 }
 
@@ -622,7 +622,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (!_processRegistry.TryGetByRequestId(requestId, out var session))
             {
-                Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过: request_id={requestId}");
+                Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过：request_id={requestId}");
                 return null;
             }
 
@@ -631,18 +631,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                 !SourceMatchesTerminal(sourceAddress, session.TerminalIndex,
                     operation, requestId))
             {
-                Logger.Warn($"[{operation}回调] 来自非当前终端的流程回调已跳过: request_id={requestId}, callback_terminal={session.TerminalIndex}, current_terminal={activeRoute.TerminalIndex}");
+                Logger.Warn($"[{operation}回调] 来自非当前终端的流程回调已跳过：request_id={requestId}，回调终端={session.TerminalIndex}，当前终端={activeRoute.TerminalIndex}");
                 return null;
             }
 
             if (!_processRegistry.TryReserveEvent(session, resourceType,
                 callbackBody, out var deliveryRequestId))
             {
-                Logger.Warn($"[{operation}回调] 流程事件重复或会话已失效，已跳过: request_id={requestId}");
+                Logger.Warn($"[{operation}回调] 流程事件重复或会话已失效，已跳过：request_id={requestId}");
                 return null;
             }
 
-            Logger.Debug($"[{operation}回调] 流程路由: process_request_id={requestId}, delivery_request_id={deliveryRequestId}, terminal={session.TerminalIndex}");
+            Logger.Debug($"[{operation}回调] 流程路由：process_request_id={requestId}，delivery_request_id={deliveryRequestId}，终端={session.TerminalIndex}");
             return new CallbackRoute(requestId, deliveryRequestId, resourceType,
                 PathHelper.SafeResolveSaveDir(session.SaveDir),
                 session.CancellationToken, session.TerminalIndex,
@@ -654,21 +654,21 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (sourceAddress == null)
             {
-                Logger.Warn($"[{operation}回调] 缺少来源IP，已拒绝: request_id={requestId}, expected_terminal={expectedTerminalIndex}");
+                Logger.Warn($"[{operation}回调] 缺少来源IP，已拒绝：request_id={requestId}，期望终端={expectedTerminalIndex}");
                 return false;
             }
 
             if (!_terminalManager.TryResolveTerminalIndex(sourceAddress,
                 out var sourceTerminalIndex))
             {
-                Logger.Warn($"[{operation}回调] 来源IP不属于已配置终端，已拒绝: request_id={requestId}, source={sourceAddress}, expected_terminal={expectedTerminalIndex}");
+                Logger.Warn($"[{operation}回调] 来源IP不属于已配置终端，已拒绝：request_id={requestId}，来源={sourceAddress}，期望终端={expectedTerminalIndex}");
                 return false;
             }
 
             if (sourceTerminalIndex == expectedTerminalIndex)
                 return true;
 
-            Logger.Warn($"[{operation}回调] 来源IP与回调会话不一致: request_id={requestId}, source={sourceAddress}, source_terminal={sourceTerminalIndex}, expected_terminal={expectedTerminalIndex}");
+            Logger.Warn($"[{operation}回调] 来源IP与回调会话不一致：request_id={requestId}，来源={sourceAddress}，来源终端={sourceTerminalIndex}，期望终端={expectedTerminalIndex}");
             return false;
         }
 
@@ -685,7 +685,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 current.RouteEpoch == route.RouteEpoch)
                 return true;
 
-            Logger.Warn($"[{operation}回调] 处理期间终端路由已变更，取消投递: request_id={route.SourceRequestId}, callback_terminal={route.TerminalIndex}, current_terminal={current.TerminalIndex}");
+            Logger.Warn($"[{operation}回调] 处理期间终端路由已变更，取消投递：request_id={route.SourceRequestId}，回调终端={route.TerminalIndex}，当前终端={current.TerminalIndex}");
             if (!route.Persistent)
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             return false;
@@ -697,7 +697,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (route == null || route.Persistent)
             {
                 if (route != null && delivery == CallbackDeliveryResult.Failed)
-                    Logger.Warn($"[DLL回调] 流程事件投递失败，本次不重试且会话保持有效: process_request_id={route.SourceRequestId}, delivery_request_id={route.DeliveryRequestId}, resource={route.ResourceType}");
+                    Logger.Warn($"[DLL回调] 流程事件投递失败，本次不重试且会话保持有效：process_request_id={route.SourceRequestId}，delivery_request_id={route.DeliveryRequestId}，资源={route.ResourceType}");
                 return;
             }
 
@@ -710,7 +710,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (delivery == CallbackDeliveryResult.Failed)
             {
-                Logger.Warn($"[DLL回调] 结果投递失败，请求立即结束且不重试: request_id={route.SourceRequestId}, resource={route.ResourceType}");
+                Logger.Warn($"[DLL回调] 结果投递失败，请求立即结束且不重试：request_id={route.SourceRequestId}，资源={route.ResourceType}");
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             }
         }

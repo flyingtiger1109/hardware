@@ -399,8 +399,13 @@ bool DelphiProxy::PostJson(const std::string& path,
                            std::string& response,
                            int timeoutMs,
                            bool logRawResponse) {
+    lastResultCode_ = HZCYKJTHardWare_RET_OK;
+    const std::string requestId = JsonHelper::GetString(body, "request_id");
+    const char* requestIdForLog = requestId.empty() ? "<无>" : requestId.c_str();
     if (baseUrl_.empty()) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：base_url为空，method=POST，path=%s", path.c_str());
+        lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
+        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：基础地址为空，方法=POST，路径=%s，request_id=%s",
+                  path.c_str(), requestIdForLog);
         return false;
     }
 
@@ -415,23 +420,32 @@ bool DelphiProxy::PostJson(const std::string& path,
     int statusCode = 0;
     auto* http = ctx.http_client;
     if (!http) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，method=POST，path=%s", path.c_str());
+        lastResultCode_ = HZCYKJTHardWare_RET_NOT_INITIALIZED;
+        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，方法=POST，路径=%s，request_id=%s",
+                  path.c_str(), requestIdForLog);
         return false;
     }
     std::string url = BuildUrl(path);
-    LOG_DEBUG("代理服务", "DLL正在下发硬件控制程序：method=POST，url=%s", url.c_str());
+    LOG_DEBUG("代理服务", "DLL正在下发硬件控制程序：方法=POST，地址=%s，request_id=%s",
+              url.c_str(), requestIdForLog);
     bool ok = http->PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=POST，url=%s", url.c_str());
+        lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
+        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：方法=POST，地址=%s，request_id=%s",
+                  url.c_str(), requestIdForLog);
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
+        lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
+        const std::string responseCode = JsonHelper::GetString(response, "code");
+        if (responseCode == "not_supported")
+            lastResultCode_ = HZCYKJTHardWare_RET_UNSUPPORTED;
         if (logRawResponse) {
-            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=POST，url=%s，status=%d，response=%s",
-                      url.c_str(), statusCode, response.c_str());
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：方法=POST，地址=%s，状态=%d，request_id=%s，响应=%s",
+                      url.c_str(), statusCode, requestIdForLog, response.c_str());
         } else {
-            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=POST，url=%s，HTTP状态=%d，错误码=%s，消息=%s",
-                      url.c_str(), statusCode,
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：方法=POST，地址=%s，HTTP状态=%d，request_id=%s，错误码=%s，消息=%s",
+                      url.c_str(), statusCode, requestIdForLog,
                       LogValue(JsonHelper::GetString(response, "code")).c_str(),
                       LogValue(JsonHelper::GetString(response, "message")).c_str());
         }
@@ -441,18 +455,21 @@ bool DelphiProxy::PostJson(const std::string& path,
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
+        if (errorCode == "not_supported")
+            lastResultCode_ = HZCYKJTHardWare_RET_UNSUPPORTED;
         if (logRawResponse) {
-            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：url=%s，code=%s，message=%s，response=%s",
-                      url.c_str(), errorCode.c_str(), errorMessage.c_str(), response.c_str());
+            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：地址=%s，request_id=%s，代码=%s，消息=%s，响应=%s",
+                      url.c_str(), requestIdForLog, errorCode.c_str(), errorMessage.c_str(), response.c_str());
         } else {
-            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：url=%s，错误码=%s，消息=%s",
-                      url.c_str(), LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
+            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：地址=%s，request_id=%s，错误码=%s，消息=%s",
+                      url.c_str(), requestIdForLog,
+                      LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
         }
         return false;
     }
 
-    LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：method=POST，url=%s，status=%d",
-              url.c_str(), statusCode);
+    LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：方法=POST，地址=%s，状态=%d，request_id=%s",
+              url.c_str(), statusCode, requestIdForLog);
     return true;
 }
 

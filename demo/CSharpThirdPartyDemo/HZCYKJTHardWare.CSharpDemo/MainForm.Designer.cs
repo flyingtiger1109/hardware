@@ -18,10 +18,11 @@ namespace HZCYKJTHardWare.CSharpDemo
         private TextBox txtSaveDir;
         private Label lblSaveDirHk;
         private TextBox txtSaveDirHk;
-        private Button btnCameraPreview;
-        private Button btnStopCameraPreview;
-        private Button btnFingerprintPreview;
-        private Button btnStopFingerprintPreview;
+        private Label lblDeviceMode;
+        private Label lblPreviewDevice;
+        private ComboBox cmbPreviewDevice;
+        private Button btnStartSelectedPreview;
+        private Button btnStopSelectedPreview;
         private Button btnFaceCapture;
         private Button btnFingerprintCapture;
         private Button btnOcr;
@@ -47,6 +48,9 @@ namespace HZCYKJTHardWare.CSharpDemo
         private CaptionPanel panelCamera;
         private CaptionPanel panelFingerprint;
         private CaptionPanel panelIris;
+        private CaptionPanel panelPlateCJ;
+        private CaptionPanel panelPlateRJ2;
+        private CaptionPanel panelPlateRJ3;
         private TextBox txtLog;
 
         protected override void Dispose(bool disposing)
@@ -71,10 +75,11 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.txtSaveDir = new TextBox();
             this.lblSaveDirHk = new Label();
             this.txtSaveDirHk = new TextBox();
-            this.btnCameraPreview = new Button();
-            this.btnStopCameraPreview = new Button();
-            this.btnFingerprintPreview = new Button();
-            this.btnStopFingerprintPreview = new Button();
+            this.lblDeviceMode = new Label();
+            this.lblPreviewDevice = new Label();
+            this.cmbPreviewDevice = new ComboBox();
+            this.btnStartSelectedPreview = new Button();
+            this.btnStopSelectedPreview = new Button();
             this.btnFaceCapture = new Button();
             this.btnFingerprintCapture = new Button();
             this.btnOcr = new Button();
@@ -100,6 +105,9 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.panelCamera = new CaptionPanel();
             this.panelFingerprint = new CaptionPanel();
             this.panelIris = new CaptionPanel();
+            this.panelPlateCJ = new CaptionPanel();
+            this.panelPlateRJ2 = new CaptionPanel();
+            this.panelPlateRJ3 = new CaptionPanel();
             this.txtLog = new TextBox();
             this.panelTop.SuspendLayout();
             this.previewLayout.SuspendLayout();
@@ -117,10 +125,11 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.panelTop.Controls.Add(this.txtSaveDir);
             this.panelTop.Controls.Add(this.lblSaveDirHk);
             this.panelTop.Controls.Add(this.txtSaveDirHk);
-            this.panelTop.Controls.Add(this.btnCameraPreview);
-            this.panelTop.Controls.Add(this.btnStopCameraPreview);
-            this.panelTop.Controls.Add(this.btnFingerprintPreview);
-            this.panelTop.Controls.Add(this.btnStopFingerprintPreview);
+            this.panelTop.Controls.Add(this.lblDeviceMode);
+            this.panelTop.Controls.Add(this.lblPreviewDevice);
+            this.panelTop.Controls.Add(this.cmbPreviewDevice);
+            this.panelTop.Controls.Add(this.btnStartSelectedPreview);
+            this.panelTop.Controls.Add(this.btnStopSelectedPreview);
             this.panelTop.Controls.Add(this.btnFaceCapture);
             this.panelTop.Controls.Add(this.btnFingerprintCapture);
             this.panelTop.Controls.Add(this.btnOcr);
@@ -208,6 +217,15 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.btnEndProcess.UseVisualStyleBackColor = true;
             this.btnEndProcess.Click += this.btnEndProcess_Click;
             //
+            // lblDeviceMode
+            //
+            this.lblDeviceMode.AutoSize = true;
+            this.lblDeviceMode.Font = new Font("Tahoma", 9F, FontStyle.Bold);
+            this.lblDeviceMode.Location = new Point(662, 13);
+            this.lblDeviceMode.Name = "lblDeviceMode";
+            this.lblDeviceMode.Size = new Size(110, 14);
+            this.lblDeviceMode.Text = "设备模式：模式 1";
+            //
             // lblSaveDir
             //
             this.lblSaveDir.AutoSize = true;
@@ -236,45 +254,42 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.txtSaveDirHk.TabIndex = 7;
             this.txtSaveDirHk.Text = @".\captures_hk\fingerprint_undistorted.bmp";
             //
-            // btnCameraPreview
+            // lblPreviewDevice
             //
-            this.btnCameraPreview.Location = new Point(8, 76);
-            this.btnCameraPreview.Name = "btnCameraPreview";
-            this.btnCameraPreview.Size = new Size(130, 25);
-            this.btnCameraPreview.TabIndex = 7;
-            this.btnCameraPreview.Text = "视频预览";
-            this.btnCameraPreview.UseVisualStyleBackColor = true;
-            this.btnCameraPreview.Click += this.btnCameraPreview_Click;
+            this.lblPreviewDevice.AutoSize = true;
+            this.lblPreviewDevice.Location = new Point(8, 82);
+            this.lblPreviewDevice.Name = "lblPreviewDevice";
+            this.lblPreviewDevice.Size = new Size(56, 14);
+            this.lblPreviewDevice.Text = "预览设备";
             //
-            // btnStopCameraPreview
+            // cmbPreviewDevice
             //
-            this.btnStopCameraPreview.Location = new Point(144, 76);
-            this.btnStopCameraPreview.Name = "btnStopCameraPreview";
-            this.btnStopCameraPreview.Size = new Size(130, 25);
-            this.btnStopCameraPreview.TabIndex = 8;
-            this.btnStopCameraPreview.Text = "停止视频预览";
-            this.btnStopCameraPreview.UseVisualStyleBackColor = true;
-            this.btnStopCameraPreview.Click += this.btnStopCameraPreview_Click;
+            this.cmbPreviewDevice.DropDownStyle = ComboBoxStyle.DropDownList;
+            this.cmbPreviewDevice.FormattingEnabled = true;
+            this.cmbPreviewDevice.Location = new Point(70, 78);
+            this.cmbPreviewDevice.Name = "cmbPreviewDevice";
+            this.cmbPreviewDevice.Size = new Size(194, 22);
+            this.cmbPreviewDevice.TabIndex = 8;
             //
-            // btnFingerprintPreview
+            // btnStartSelectedPreview
             //
-            this.btnFingerprintPreview.Location = new Point(280, 76);
-            this.btnFingerprintPreview.Name = "btnFingerprintPreview";
-            this.btnFingerprintPreview.Size = new Size(130, 25);
-            this.btnFingerprintPreview.TabIndex = 9;
-            this.btnFingerprintPreview.Text = "指纹预览";
-            this.btnFingerprintPreview.UseVisualStyleBackColor = true;
-            this.btnFingerprintPreview.Click += this.btnFingerprintPreview_Click;
+            this.btnStartSelectedPreview.Location = new Point(274, 76);
+            this.btnStartSelectedPreview.Name = "btnStartSelectedPreview";
+            this.btnStartSelectedPreview.Size = new Size(130, 25);
+            this.btnStartSelectedPreview.TabIndex = 9;
+            this.btnStartSelectedPreview.Text = "开始预览";
+            this.btnStartSelectedPreview.UseVisualStyleBackColor = true;
+            this.btnStartSelectedPreview.Click += this.btnStartSelectedPreview_Click;
             //
-            // btnStopFingerprintPreview
+            // btnStopSelectedPreview
             //
-            this.btnStopFingerprintPreview.Location = new Point(416, 76);
-            this.btnStopFingerprintPreview.Name = "btnStopFingerprintPreview";
-            this.btnStopFingerprintPreview.Size = new Size(130, 25);
-            this.btnStopFingerprintPreview.TabIndex = 10;
-            this.btnStopFingerprintPreview.Text = "停止指纹预览";
-            this.btnStopFingerprintPreview.UseVisualStyleBackColor = true;
-            this.btnStopFingerprintPreview.Click += this.btnStopFingerprintPreview_Click;
+            this.btnStopSelectedPreview.Location = new Point(410, 76);
+            this.btnStopSelectedPreview.Name = "btnStopSelectedPreview";
+            this.btnStopSelectedPreview.Size = new Size(130, 25);
+            this.btnStopSelectedPreview.TabIndex = 10;
+            this.btnStopSelectedPreview.Text = "停止预览";
+            this.btnStopSelectedPreview.UseVisualStyleBackColor = true;
+            this.btnStopSelectedPreview.Click += this.btnStopSelectedPreview_Click;
             //
             // btnFaceCapture
             //
@@ -400,11 +415,15 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.previewLayout.Controls.Add(this.panelCamera, 0, 0);
             this.previewLayout.Controls.Add(this.panelFingerprint, 1, 0);
             this.previewLayout.Controls.Add(this.panelIris, 2, 0);
+            this.previewLayout.Controls.Add(this.panelPlateCJ, 0, 1);
+            this.previewLayout.Controls.Add(this.panelPlateRJ2, 1, 1);
+            this.previewLayout.Controls.Add(this.panelPlateRJ3, 2, 1);
             this.previewLayout.Dock = DockStyle.Fill;
             this.previewLayout.Location = new Point(0, 208);
             this.previewLayout.Name = "previewLayout";
-            this.previewLayout.RowCount = 1;
-            this.previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            this.previewLayout.RowCount = 2;
+            this.previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            this.previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             this.previewLayout.Size = new Size(1200, 372);
             this.previewLayout.TabIndex = 1;
             //
@@ -413,6 +432,9 @@ namespace HZCYKJTHardWare.CSharpDemo
             ConfigurePreviewPanel(this.panelCamera, "视频预览");
             ConfigurePreviewPanel(this.panelFingerprint, "指纹预览");
             ConfigurePreviewPanel(this.panelIris, "虹膜预览");
+            ConfigurePreviewPanel(this.panelPlateCJ, "出境车牌预览");
+            ConfigurePreviewPanel(this.panelPlateRJ2, "入境车牌预览 2");
+            ConfigurePreviewPanel(this.panelPlateRJ3, "入境车牌预览 3");
             //
             // txtLog
             //

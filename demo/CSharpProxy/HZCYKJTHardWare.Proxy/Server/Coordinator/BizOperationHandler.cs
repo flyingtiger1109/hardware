@@ -104,8 +104,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 var committed = false;
                 try
                 {
-                    _log("[流程] 正在向终端开始流程，url=" + route.BaseUrl +
-                        "/process/start，save_dir=" + resolvedSaveDir);
+                    _log("[流程] 正在向终端开始流程，地址=" + route.BaseUrl +
+                        "/process/start，保存目录=" + resolvedSaveDir);
 
                     var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
                         "/process/start", body, OperationTimeouts.ProcessStartTerminalRequestMs,
@@ -118,8 +118,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     _terminalManager.ProcessSaveDir = resolvedSaveDir;
                     _terminalManager.ProcessActive = true;
                     _onProcessStateChanged?.Invoke(true);
-                    _log("[流程] 终端流程已开始，terminal=" + route.TerminalIndex +
-                        ", request_id=" + requestId + ", save_dir=" + resolvedSaveDir);
+                    _log("[流程] 终端流程已开始，终端=" + route.TerminalIndex +
+                        "，request_id=" + requestId + "，保存目录=" + resolvedSaveDir);
                     return "OK";
                 }
                 finally
@@ -144,6 +144,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> SwitchTerminalAsync(int index)
         {
+            if (!_terminalManager.IsTerminalConfigured(index))
+                return RejectUnconfiguredTerminalSwitch(index);
+
             if (_terminalManager.IsSameTerminal(index))
                 return $"已在目标终端，无需切换";
 
@@ -151,6 +154,24 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
             var ok = await _switchCoordinator.SwitchToAsync(index).ConfigureAwait(false);
             return ok ? $"已切换到终端 {index}" : "切换失败";
+        }
+
+        private string RejectUnconfiguredTerminalSwitch(int index)
+        {
+            var terminalName = _terminalManager.GetTerminalName(index);
+            if (string.IsNullOrWhiteSpace(terminalName))
+                terminalName = "终端" + index;
+
+            var message = "未配备" + terminalName + "终端，无法切换";
+            var logMessage = "[终端切换] 拒绝切换：当前终端=" +
+                _terminalManager.CurrentIndex + "(" + _terminalManager.CurrentName + ")，" +
+                "目标终端=" + index + "(" + terminalName + ")未配置，" +
+                "code=terminal_not_configured";
+            if (_log != null)
+                _log(logMessage);
+            else
+                Logger.Info(logMessage);
+            return message;
         }
 
         // ====== 同步采集 ======

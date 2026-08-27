@@ -55,19 +55,27 @@ namespace HZCYKJTHardWare.Proxy.Core
         public WorkerQueue<object> NfcQueue => _nfcQueue;
         public WorkerQueue<object> AuthorizeQueue => _authorizeQueue;
 
-        public QueueManager()
+        public QueueManager(DeviceCapabilityManager capabilities = null)
         {
+            capabilities = capabilities ?? DeviceCapabilityManager.Instance;
             // 切换队列：最大容量为 1，优先级最高
-            _switchQueue = new WorkerQueue<object>("切换终端", 1, ExecuteSwitch, false, 30000);
+            _switchQueue = new WorkerQueue<object>("切换终端", 1, ExecuteSwitch, false, 30000,
+                capabilities.IsSupported(DeviceCapability.TerminalControl));
 
             // 业务队列：1 个任务执行，并保留 1 个最新待执行任务
-            _faceCapQueue = new WorkerQueue<object>("人脸抓拍", 2, ExecuteFaceCapture, true, 15000);
-            _fingerCapQueue = new WorkerQueue<object>("指纹抓拍", 2, ExecuteFingerprintCapture, true, 15000);
-            _irisQueue = new WorkerQueue<object>("虹膜抓拍", 2, ExecuteIris, true, 20000);
+            _faceCapQueue = new WorkerQueue<object>("人脸抓拍", 2, ExecuteFaceCapture, true, 15000,
+                capabilities.IsSupported(DeviceCapability.Face));
+            _fingerCapQueue = new WorkerQueue<object>("指纹抓拍", 2, ExecuteFingerprintCapture, true, 15000,
+                capabilities.IsSupported(DeviceCapability.Fingerprint));
+            _irisQueue = new WorkerQueue<object>("虹膜抓拍", 2, ExecuteIris, true, 20000,
+                capabilities.IsSupported(DeviceCapability.Iris));
 
-            _ocrQueue = new WorkerQueue<object>("OCR识别", 2, ExecuteOcr, true, 20000);
-            _nfcQueue = new WorkerQueue<object>("NFC读卡", 2, ExecuteNfc, true, 20000);
-            _authorizeQueue = new WorkerQueue<object>("授权", 2, ExecuteAuthorize, true, 20000);
+            _ocrQueue = new WorkerQueue<object>("OCR识别", 2, ExecuteOcr, true, 20000,
+                capabilities.IsSupported(DeviceCapability.OCR));
+            _nfcQueue = new WorkerQueue<object>("NFC读卡", 2, ExecuteNfc, true, 20000,
+                capabilities.IsSupported(DeviceCapability.NfcCard));
+            _authorizeQueue = new WorkerQueue<object>("授权", 2, ExecuteAuthorize, true, 20000,
+                capabilities.IsSupported(DeviceCapability.Authorize));
 
         }
 
@@ -86,7 +94,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         public void ClearSwitching()
         {
             _switchingTerminal = false;
-            Logger.Info("[终端切换] 切换完成, 清除切换中标志");
+            Logger.Info("[终端切换] 切换完成，清除切换中标志");
         }
 
         /// <summary>
@@ -166,7 +174,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         private bool RejectStale(QueueTask<object> task, string operation)
         {
             if (IsGenerationValid(task.Generation)) return false;
-            Logger.Warn($"[{operation}] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}, 已丢弃");
+            Logger.Warn($"[{operation}] 请求批次 {task.Generation} 早于当前终端切换批次 {_terminalGeneration}，已丢弃");
             WorkerQueue<object>.TryCompleteTask(task, "terminal_switching");
             return true;
         }

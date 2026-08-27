@@ -1,115 +1,176 @@
 {
+  // 设备工作模式，1=出境模式，2=入境模式
+  "device_mode": 1,
+  "device_mode_names": {
+    "1": "出境模式",
+    "2": "入境模式"
+  },
+  // 第三方调用方输入字符编码，auto=自动识别，也可指定 gbk 或 utf8
   "third_party_input_encoding": "auto",
+  // 代理服务连接配置
   "delphi_server": {
+    // 代理服务地址
     "host": "127.0.0.1",
+    // 代理服务端口
     "port": 8089,
+    // 是否自动启动程序
     "auto_start": true,
     "executable": "HZCYKJTHardWare.Proxy.exe",
+    // 启动后等待就绪的时间
     "start_wait_ms": 10000,
+    // 心跳检测间隔毫秒数
     "ping_interval_ms": 300
   },
+  // 终端回调接收服务配置
   "terminal_callback_server": {
+    // 监听地址
     "listen_host": "0.0.0.0",
     "public_host": "",
+    // 监听端口
     "port": 8088,
+    // 回调路径
     "path": "/terminal-callback"
   },
+  // 终端设备配置
   "terminal": {
-    "mode": "auto_subnet",
     "scheme": "http",
+    // 终端服务端口
     "port": 9098,
-    "check_on_init": false,
+    // 默认终端序号，1 或 2
     "default_index": 2,
+    // 自动发现终端时的首选子网前缀
     "preferred_subnet_prefix": "192.168.20",
-    "fixed_terminals": [
-      {
-        "index": 1,
-        "name": "左通道",
-        "base_url": ""
-      },
-      {
-        "index": 2,
-        "name": "右通道",
-        "base_url": ""
-      }
-    ],
+    // 自动发现子网内的终端设备列表
     "auto_subnet_devices": [
       {
+        // 终端序号
         "index": 1,
+        // 终端显示名称
         "name": "左通道",
+        // 终端 IP 最后一段
         "host_suffix": 30
       },
       {
+        // 终端序号
         "index": 2,
+        // 终端显示名称
         "name": "右通道",
+        // 终端 IP 最后一段
         "host_suffix": 31
       }
     ]
   },
+  // DLL 回调服务配置，用于向 DLL 返回处理结果
   "callback_server": {
     "host": "",
-    "auto_bind_lan_ip": true,
     "listen_any": false,
+    // 回调服务端口
     "port": 39091,
+    // 回调基础路径
     "base_path": "/HZCYKJTHardWare/callback"
   },
+  // 各业务操作超时时间配置
   "timeout": {
+    // HTTP 建连超时毫秒数
     "http_connect_ms": 3000,
+    // HTTP 请求超时毫秒数
     "http_request_ms": 15000,
+    // 人脸抓拍超时毫秒数
     "face_capture_ms": 5000,
+    // 指纹采集超时毫秒数
     "fingerprint_capture_ms": 5000,
+    // OCR 识别超时毫秒数
     "ocr_ms": 10000,
+    // 授权操作超时毫秒数
     "authorize_ms": 60000
   },
+  // 图片等文件的保存路径配置
   "save": {
+    // 默认保存根目录
     "default_root": ".\\captures",
+    // 摄像头照片默认保存路径
     "camera_default_path": ".\\captures\\camera.jpg",
+    // 指纹照片默认保存路径
     "fingerprint_default_path": ".\\captures\\fingerprint.jpg",
+    // 是否按日期创建子目录
     "create_date_folder": false,
+    // 是否按请求创建子目录
     "create_request_folder": false
   },
+  // 预览相关配置
   "preview": {
-    "renderer": "libvlc",
-    "auto_reconnect": true,
+    // 预览窗口句柄检测间隔毫秒数
     "check_hwnd_interval_ms": 500,
-    "stop_preview_on_end_process": false,
+    // RTSP 网络流缓存毫秒数
     "rtsp_network_caching_ms": 50,
+    // RTSP 直播流缓存毫秒数
     "rtsp_live_caching_ms": 50,
+    // RTSP 传输协议，tcp 或 udp
     "rtsp_transport": "tcp",
+    // 车牌相机预览配置，按通道区分
     "plate": {
+      // 出境相机
       "cj": {
+        // 是否启用该相机预览
         "enabled": false,
+        // 相机地址
         "host": "",
+        // 相机 RTSP 端口
         "port": 554,
+        // RTSP 用户名
         "username": "",
+        // RTSP 密码
         "password": "",
+        // 视频流通道号，101 或 102
         "stream_channel": 101
       },
+      // 入境相机 2
       "rj2": {
+        // 是否启用该相机预览
         "enabled": false,
+        // 相机地址
         "host": "",
+        // 相机 RTSP 端口
         "port": 554,
+        // RTSP 用户名
         "username": "",
+        // RTSP 密码
         "password": "",
+        // 视频流通道号，101 或 102
         "stream_channel": 101
       },
+      // 入境相机 3
       "rj3": {
+        // 是否启用该相机预览
         "enabled": false,
+        // 相机地址
         "host": "",
+        // 相机 RTSP 端口
         "port": 554,
+        // RTSP 用户名
         "username": "",
+        // RTSP 密码
         "password": "",
+        // 视频流通道号，101 或 102
         "stream_channel": 101
       }
     }
   },
+  // 日志配置
   "log": {
+    // 日志文件目录
     "dir": "HZCYKJTHardWareDLL_Logs",
+    // 日志级别，debug/info/warn/error
     "level": "info",
+    // 日志保留天数
     "retention_days": 30,
+    // 日志总大小上限 MB
     "max_total_size_mb": 2048,
+    // 磁盘剩余空间告警阈值 MB
     "disk_warning_free_mb": 2048,
+    // 日志批量刷盘间隔毫秒数
     "flush_interval_ms": 500,
+    // 日志批量刷盘条数
     "flush_batch_size": 50
   }
 }
