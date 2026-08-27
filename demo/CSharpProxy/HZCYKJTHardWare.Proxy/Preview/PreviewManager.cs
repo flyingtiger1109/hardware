@@ -90,6 +90,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const int VlcReleaseSettleMs = 500;
         private const int PreviewUrlValidationIntervalMs = 60000;
         private const int MaxMjpegRecoveryAttempts = 2;
+        private const int VlcRecoveryLowFrequencyDelayMs = 15000;
         private readonly ConcurrentDictionary<string, PreviewSession> _sessions = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, PreviewRestartInfo> _restartInfo = new ConcurrentDictionary<string, PreviewRestartInfo>();
         private readonly ConcurrentDictionary<string, MjpegPreviewController> _mjpegWorkers = new ConcurrentDictionary<string, MjpegPreviewController>();
@@ -574,7 +575,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             };
             _sessions[key] = session;
             _restartInfo[key] = PreviewRestartInfo.FromSession(session);
-            AttachMjpegFaultHandler(key, session, player);
+            AttachPlayerFaultHandler(key, session, player);
             totalSw.Stop();
             Logger.Debug($"预览启动明细：资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
                          $"hwnd={FormatHwnd(parentHwnd)}，耗时={totalSw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
@@ -654,7 +655,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
                 visible: true, timeoutMs: VlcPlayTimeoutMs,
-                directRenderTarget: directRenderTarget).ConfigureAwait(false);
+                directRenderTarget: directRenderTarget, requestId: requestId).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
                 Logger.Debug($"预览播放器选择：VLC，会话={key}，{TraceRequest(requestId)}");
 
@@ -678,6 +679,171 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 .ConfigureAwait(false);
             return completed == all && !_deferredMjpegDisposals.Keys.Any(
                 value => value.StartsWith(key + "#", StringComparison.Ordinal));
+        }
+
+        private void AttachPlayerFaultHandler(string key, PreviewSession session, IPreviewController player)
+        {
+            if (player is MjpegPreviewController mjpeg)
+            {
+                AttachMjpegFaultHandler(key, session, mjpeg);
+                return;
+            }
+            if (player is VlcPreviewController vlc)
+            {
+                vlc.SetStreamFaultHandler((faulted, reason) =>
+                    ScheduleVlcRecovery(key, faulted, reason));
+            }
+        }
+
+        private void ScheduleVlcRecovery(string key, VlcPreviewController faultedPlayer, string reason)
+        {
+            if (_disposed || Volatile.Read(ref _stopping) != 0 ||
+                _lifetimeCts.IsCancellationRequested)
+                return;
+
+            var recoveryKey = key + "#vlc";
+            if (!_activeRecoveries.TryAdd(recoveryKey, 0))
+                return;
+
+            Logger.Warn($"VLC预览流故障，启动受控恢复：会话={key}，错误={reason}");
+            if (_taskTracker != null)
+            {
+                var accepted = _taskTracker.TryRun(async () =>
+                {
+                    try
+                    {
+                        await RecoverVlcPreviewAsync(key, faultedPlayer, reason,
+                            _lifetimeCts.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _activeRecoveries.TryRemove(recoveryKey, out _);
+                    }
+                }, "preview_vlc_recovery_" + recoveryKey);
+                if (!accepted)
+                {
+                    _activeRecoveries.TryRemove(recoveryKey, out _);
+                    Logger.Warn($"VLC预览恢复未启动，后台任务容量已满：会话={key}");
+                }
+                return;
+            }
+
+            var task = Task.Run(() => RecoverVlcPreviewAsync(key, faultedPlayer, reason,
+                _lifetimeCts.Token));
+            _recoveryTasks[recoveryKey] = task;
+            task.ContinueWith(completedTask =>
+            {
+                _activeRecoveries.TryRemove(recoveryKey, out _);
+                _recoveryTasks.TryRemove(recoveryKey, out _);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        private async Task RecoverVlcPreviewAsync(string key, VlcPreviewController faultedPlayer,
+            string faultReason, CancellationToken cancellationToken)
+        {
+            int failedAttempts = 0;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!_sessions.TryGetValue(key, out var current))
+                        return;
+
+                    if (!ReferenceEquals(current.Player, faultedPlayer))
+                        return;
+                    if (!CanContinueRecovery(current))
+                        return;
+
+                    var recoveryHwnd = current.SessionType == PreviewSessionType.External
+                        ? current.TargetHwnd
+                        : current.HostHwnd;
+                    if (recoveryHwnd == IntPtr.Zero || !IsWindow(recoveryHwnd) ||
+                        (current.SessionType == PreviewSessionType.External && !IsExternalHostCurrent(current)))
+                    {
+                        Logger.Warn($"VLC预览恢复取消，目标HWND已失效：会话={key}，hwnd={FormatHwnd(recoveryHwnd)}");
+                        RemoveSessionIfCurrent(key, current);
+                        await ReleasePlayerAsync(key, faultedPlayer, preserveMjpegWorker: false).ConfigureAwait(false);
+                        return;
+                    }
+
+                    string previewUrl;
+                    if (!string.IsNullOrWhiteSpace(current.ExplicitPreviewUrl))
+                    {
+                        previewUrl = SelectRecoveryPreviewUrl(current.ExplicitPreviewUrl, null);
+                        Logger.Info($"VLC预览恢复复用显式URL：会话={key}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
+                    }
+                    else
+                    {
+                        ClearPreviewUrlCache(current.ResourceType, current.TerminalBaseUrl);
+                        previewUrl = SelectRecoveryPreviewUrl(null,
+                            await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
+                                forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
+                    }
+
+                    if (!CanContinueRecovery(current))
+                        return;
+
+                    if (!string.IsNullOrEmpty(previewUrl))
+                    {
+                        var (srcW, srcH, swap) = GetSourceDimensions(current.ResourceType);
+                        var isHttpPreview = IsHttpPreviewUrl(previewUrl);
+                        var description = BuildTraceDescription(
+                            $"{ResourceToName(current.ResourceType)} {SessionToName(current.SessionType)}", current.RequestId);
+                        var replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
+                            recoveryHwnd, srcW, srcH, swap, isHttpPreview,
+                            directRenderTarget: true, allowVlcFallback: false,
+                            current.RequestId).ConfigureAwait(false);
+                        if (replacement != null && replacement.IsRunning)
+                        {
+                            current.Generation = Interlocked.Increment(ref _sessionGeneration);
+                            current.Player = replacement;
+                            _sessions[key] = current;
+                            _restartInfo[key] = PreviewRestartInfo.FromSession(current);
+                            AttachPlayerFaultHandler(key, current, replacement);
+                            Logger.Info($"VLC预览已恢复：会话={key}，累计尝试次数={failedAttempts + 1}");
+                            return;
+                        }
+
+                        if (replacement != null)
+                            await ReleasePlayerAsync(key, replacement, preserveMjpegWorker: true).ConfigureAwait(false);
+                    }
+
+                    failedAttempts++;
+                    if (failedAttempts <= 3)
+                        Logger.Warn($"VLC预览恢复中：会话={key}，累计尝试次数={failedAttempts}，错误={faultReason}");
+                    else if (failedAttempts % 10 == 0)
+                        Logger.Warn($"VLC预览仍在等待网络恢复：会话={key}，累计尝试次数={failedAttempts}");
+                    await DelayVlcRecoveryAsync(failedAttempts, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    failedAttempts++;
+                    if (failedAttempts <= 3)
+                        Logger.Error($"VLC预览恢复异常：会话={key}，累计尝试次数={failedAttempts}，错误={ex.Message}", ex);
+                    await DelayVlcRecoveryAsync(failedAttempts, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 前 3 次快速重试（1s/2s/5s），之后降频为固定低频，直到网络恢复后重建成功。
+        /// </summary>
+        private static async Task DelayVlcRecoveryAsync(int failedAttempts, CancellationToken cancellationToken)
+        {
+            var delayMs = failedAttempts <= 3
+                ? GetRecoveryDelayMs(failedAttempts)
+                : VlcRecoveryLowFrequencyDelayMs;
+            try
+            {
+                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
 
         private void AttachMjpegFaultHandler(string key, PreviewSession session, IPreviewController player)

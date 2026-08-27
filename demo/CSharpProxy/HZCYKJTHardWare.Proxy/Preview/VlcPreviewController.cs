@@ -9,6 +9,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
     public sealed class VlcPreviewController : IPreviewController
     {
         internal const int LayoutRefreshIntervalMs = 250;
+        private const int VlcStallThresholdMs = 5000;
 
         private readonly TaskCompletionSource<bool> _startTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -26,12 +27,19 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly bool _swapDimensions;
         private readonly bool _visible;
         private readonly bool _directRenderTarget;
+        private readonly string _requestId;
 
         private volatile bool _abandoned;
         private volatile bool _running;
         private volatile bool _stopRequested;
         private int _disposeStarted;
         private VlcPreviewPlayer _player;
+        private ExternalOverlayWindow _overlay;
+        private Action<VlcPreviewController, string> _streamFaultHandler;
+        private string _streamFaultReason;
+        private int _streamFaulted;
+        private long _lastMediaTimeMs;
+        private DateTime _lastMediaUpdateUtc;
 
         private static int _createdThreadCount;
         private static int _liveThreadCount;
@@ -40,7 +48,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private VlcPreviewController(string description, string rtspUrl, IntPtr parentHwnd,
             int networkCachingMs, int liveCachingMs, string rtspTransport,
             int sourceWidth, int sourceHeight, bool swapDimensions, bool visible,
-            bool directRenderTarget)
+            bool directRenderTarget, string requestId)
         {
             _description = description;
             _rtspUrl = rtspUrl;
@@ -53,6 +61,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _swapDimensions = swapDimensions;
             _visible = visible;
             _directRenderTarget = directRenderTarget;
+            _requestId = requestId;
 
             _thread = new Thread(ThreadMain)
             {
@@ -68,14 +77,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal static int LiveThreadCount => Volatile.Read(ref _liveThreadCount);
         internal static int ExitTimeoutCount => Volatile.Read(ref _exitTimeoutCount);
 
+        internal string RequestId => _requestId;
+
+        internal void SetStreamFaultHandler(Action<VlcPreviewController, string> handler)
+        {
+            _streamFaultHandler = handler;
+        }
+
         public static async Task<VlcPreviewController> StartAsync(string description, string rtspUrl,
             IntPtr parentHwnd, int networkCachingMs, int liveCachingMs, string rtspTransport,
             int sourceWidth, int sourceHeight, bool swapDimensions, bool visible, int timeoutMs,
-            bool directRenderTarget = false)
+            bool directRenderTarget = false, string requestId = null)
         {
             var controller = new VlcPreviewController(description, rtspUrl, parentHwnd, networkCachingMs,
                 liveCachingMs, rtspTransport, sourceWidth, sourceHeight, swapDimensions, visible,
-                directRenderTarget);
+                directRenderTarget, requestId);
 
             Interlocked.Increment(ref _createdThreadCount);
             try
@@ -92,7 +108,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed != controller._startTcs.Task)
             {
                 controller._abandoned = true;
-                Logger.Error($"VLC预览启动超时：{description}，timeout={timeoutMs}ms，url={VlcPreviewPlayer.SanitizeUrlForLog(rtspUrl)}。本次预览已放弃，终端切换继续完成。");
+                Logger.Error($"VLC预览启动超时：{description}，超时={timeoutMs}ms，地址={VlcPreviewPlayer.SanitizeUrlForLog(rtspUrl)}。本次预览已放弃，终端切换继续完成。");
                 await controller.DisposeAsync(Math.Min(1000, Math.Max(1, timeoutMs))).ConfigureAwait(false);
                 return null;
             }
@@ -135,8 +151,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed != _exitTcs.Task && firstRequest)
             {
                 var timeoutCount = Interlocked.Increment(ref _exitTimeoutCount);
-                Logger.Warn($"VLC预览线程退出超时：{_description}，timeout={timeoutMs}ms，" +
-                    $"live={LiveThreadCount}，exitTimeouts={timeoutCount}。后台线程将继续尝试释放资源。");
+                Logger.Warn($"VLC预览线程退出超时：{_description}，超时={timeoutMs}ms，" +
+                    $"存活线程数={LiveThreadCount}，退出超时次数={timeoutCount}。后台线程将继续尝试释放资源。");
             }
         }
 
@@ -148,13 +164,27 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void ThreadMain()
         {
             var liveCount = Interlocked.Increment(ref _liveThreadCount);
-            Logger.Debug($"VLC预览线程已启动：{_description}，live={liveCount}，created={CreatedThreadCount}");
+            Logger.Debug($"VLC预览线程已启动：{_description}，存活线程数={liveCount}，已创建线程数={CreatedThreadCount}");
             try
             {
-                _player = new VlcPreviewPlayer();
-                var ok = _player.Play(_rtspUrl, _parentHwnd, _networkCachingMs, _liveCachingMs,
+                // 外部跨进程预览使用本进程覆盖容器渲染，VLC 只挂到覆盖容器，避免跨进程子窗口操作。
+                IntPtr renderHost = _parentHwnd;
+                if (_directRenderTarget)
+                {
+                    _overlay = new ExternalOverlayWindow();
+                    if (!_overlay.Create(_parentHwnd))
+                    {
+                        Logger.Error($"VLC覆盖容器创建失败：{_description}，锚点HWND={PreviewManager.FormatHwnd(_parentHwnd)}");
+                        _startTcs.TrySetResult(false);
+                        return;
+                    }
+                    renderHost = _overlay.Hwnd;
+                }
+
+                _player = new VlcPreviewPlayer(_description);
+                var ok = _player.Play(_rtspUrl, renderHost, _networkCachingMs, _liveCachingMs,
                     _rtspTransport, _sourceWidth, _sourceHeight, _swapDimensions, _visible,
-                    _directRenderTarget);
+                    directRenderTarget: false);
 
                 _running = ok && _player.IsRunning;
                 _startTcs.TrySetResult(ok);
@@ -162,15 +192,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (!ok || _abandoned)
                     return;
 
+                _lastMediaTimeMs = _player.MediaTimeMs;
+                _lastMediaUpdateUtc = DateTime.UtcNow;
+
                 var nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
+                    if (_directRenderTarget && _overlay != null)
+                        _overlay.Follow();
                     if (DateTime.UtcNow >= nextLayoutRefreshUtc)
                     {
                         _player.ApplyCoverLayout();
                         nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
                     }
+                    DetectStreamFault();
                     Thread.Sleep(20);
                 }
             }
@@ -190,9 +226,68 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     liveCount = Interlocked.Decrement(ref _liveThreadCount);
                     _exitTcs.TrySetResult(true);
-                    Logger.Debug($"VLC预览线程已退出：{_description}，live={liveCount}，" +
-                        $"created={CreatedThreadCount}，exitTimeouts={ExitTimeoutCount}");
+                    Logger.Debug($"VLC预览线程已退出：{_description}，存活线程数={liveCount}，" +
+                        $"已创建线程数={CreatedThreadCount}，退出超时次数={ExitTimeoutCount}");
                 }
+            }
+        }
+
+        private void DetectStreamFault()
+        {
+            var player = _player;
+            if (player == null)
+                return;
+
+            try
+            {
+                var state = player.MediaState;
+                if (state == LibvlcError || state == LibvlcEnded)
+                {
+                    SignalStreamFault("VLC状态为错误或已结束");
+                    return;
+                }
+
+                if (state != LibvlcPlaying)
+                    return;
+
+                var mediaTimeMs = player.MediaTimeMs;
+                var nowUtc = DateTime.UtcNow;
+                if (mediaTimeMs != _lastMediaTimeMs)
+                {
+                    _lastMediaTimeMs = mediaTimeMs;
+                    _lastMediaUpdateUtc = nowUtc;
+                }
+                else if ((nowUtc - _lastMediaUpdateUtc).TotalMilliseconds >= VlcStallThresholdMs)
+                {
+                    SignalStreamFault("VLC视频流停滞");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"VLC流故障检测异常：{_description}，错误={ex.Message}", ex);
+            }
+        }
+
+        private void SignalStreamFault(string reason)
+        {
+            if (Interlocked.Exchange(ref _streamFaulted, 1) != 0)
+                return;
+
+            _streamFaultReason = reason;
+            Logger.Warn($"VLC预览流故障：{_description}，原因={reason}");
+            _stopRequested = true;
+
+            var handler = _streamFaultHandler;
+            if (handler == null)
+                return;
+
+            try
+            {
+                handler(this, string.IsNullOrWhiteSpace(_streamFaultReason) ? "VLC流故障" : _streamFaultReason);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"VLC流故障回调失败：{_description}，错误={ex.Message}", ex);
             }
         }
 
@@ -210,6 +305,24 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 _player = null;
             }
+
+            try
+            {
+                _overlay?.Destroy();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"VLC覆盖容器释放异常：{_description}，错误={ex.Message}");
+            }
+            finally
+            {
+                _overlay = null;
+            }
         }
+
+        // libvlc_state_t
+        private const int LibvlcPlaying = 3;
+        private const int LibvlcEnded = 6;
+        private const int LibvlcError = 7;
     }
 }
