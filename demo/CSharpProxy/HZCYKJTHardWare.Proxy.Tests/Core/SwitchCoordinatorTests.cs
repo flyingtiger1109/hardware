@@ -53,15 +53,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     _ => { });
 
                 Assert.IsTrue(coordinator.TryCaptureRoute(out var oldEpoch));
-                Assert.AreEqual(1, oldEpoch.Route.TerminalIndex);
                 Assert.IsFalse(oldEpoch.IsCancellationRequested);
+                var oldIndex = oldEpoch.Route.TerminalIndex;
+                var newIndex = oldIndex == 1 ? 2 : 1;
 
-                Assert.IsTrue(await coordinator.SwitchToAsync(2));
+                Assert.IsTrue(await coordinator.SwitchToAsync(newIndex));
 
                 Assert.IsTrue(oldEpoch.IsCancellationRequested,
                     "switch must cancel operations admitted on the old route");
                 Assert.IsTrue(coordinator.TryCaptureRoute(out var newEpoch));
-                Assert.AreEqual(2, newEpoch.Route.TerminalIndex);
+                Assert.AreEqual(newIndex, newEpoch.Route.TerminalIndex);
                 Assert.IsTrue(newEpoch.Generation > oldEpoch.Generation);
                 Assert.IsFalse(newEpoch.IsCancellationRequested);
             }

@@ -24,6 +24,12 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public DeviceMode DeviceMode { get; set; } = DeviceMode.Full;
         public string DeviceModeName { get; set; } = "完整设备模式";
 
+        /// <summary>
+        /// 是否将终端 IC 卡结果继续回调给第三方。
+        /// 该配置仅在 Proxy 启动时读取，缺失或无效时保持旧版默认行为：启用。
+        /// </summary>
+        public bool EnableIcCardCallback { get; internal set; } = true;
+
         // DLL 通信服务
         public string DllServerHost { get; set; } = "127.0.0.1";
         public int DllServerPort { get; set; } = 18080;
@@ -100,6 +106,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 Logger.Warn("DeviceMode配置项所在配置文件不存在，回退到DeviceMode=1");
                 Logger.Warn($"未找到配置文件：{ConfigFile}，将使用默认配置");
+                LogIcCardCallbackConfiguration(config);
                 return config;
             }
 
@@ -113,6 +120,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     json = normalizedJson;
                 }
                 var obj = JObject.Parse(json);
+
+                // 新配置采用统一 JSON 的 snake_case 命名；同时兼容现场可能使用的 PascalCase 键。
+                config.EnableIcCardCallback = ResolveEnableIcCardCallback(
+                    obj["enable_ic_card_callback"] ?? obj["EnableIcCardCallback"],
+                    message => Logger.Warn(message));
 
                 config.DeviceMode = ResolveDeviceMode(obj["device_mode"],
                     message => Logger.Warn(message));
@@ -238,12 +250,15 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     config.LogFlushIntervalMs, config.LogFlushBatchSize);
                 Logger.SetMinLevel(config.LogLevel);
                 LogTerminalConfiguration(config);
+                LogIcCardCallbackConfiguration(config);
                 Logger.Info($"配置文件已加载：{jsonPath}");
             }
             catch (Exception ex)
             {
                 config.DeviceMode = DeviceMode.Full;
+                config.EnableIcCardCallback = true;
                 Logger.Error($"加载配置失败：{ex.Message}；回退到 DeviceMode=1");
+                LogIcCardCallbackConfiguration(config);
             }
 
             return config;
@@ -273,6 +288,42 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 Logger.Info("[终端配置] 当前仅配置了一个方向；切换到未配置方向时将拒绝切换并返回 terminal_not_configured");
             }
+        }
+
+        private static void LogIcCardCallbackConfiguration(AppConfig config)
+        {
+            Logger.Info($"[IC卡] 第三方回调功能：{(config.EnableIcCardCallback ? "启用" : "关闭")}");
+        }
+
+        /// <summary>
+        /// 读取 IC 卡第三方回调开关。
+        /// 缺失、null、空字符串或非法类型均回退为 true，避免新增配置影响旧环境启动和回调行为。
+        /// </summary>
+        internal static bool ResolveEnableIcCardCallback(JToken token,
+            Action<string> warn)
+        {
+            if (token == null || token.Type == JTokenType.Null)
+                return true;
+
+            if (token.Type == JTokenType.Boolean)
+                return token.Value<bool>();
+
+            if (token.Type == JTokenType.String)
+            {
+                var text = token.Value<string>();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    warn?.Invoke("enable_ic_card_callback 配置为空，回退为 true");
+                    return true;
+                }
+
+                bool parsed;
+                if (bool.TryParse(text.Trim(), out parsed))
+                    return parsed;
+            }
+
+            warn?.Invoke("enable_ic_card_callback 配置无效，仅支持 true/false，回退为 true");
+            return true;
         }
 
         internal static DeviceMode ResolveDeviceMode(JToken token, Action<string> warn)

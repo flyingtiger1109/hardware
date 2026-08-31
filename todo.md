@@ -1599,3 +1599,47 @@
 兼容性：仅修改日志文案，不修改 DLL ABI、JSON/HTTP 协议字段、错误码、回调内容或设备行为。回退本节涉及的 C# 日志字符串与文档差异即可。
 
 - [x] 日志分类名称按现场习惯调整：`[能力检查]` 改为 `[硬件检测]`，`[切换协调]` 改为 `[终端切换]`。
+
+## IC 卡第三方回调配置开关（2026-08-31）
+
+### 本次修改内容
+
+1. 统一 JSON 新增 `enable_ic_card_callback`，默认值为 `true`；同时兼容现场可能使用的 `EnableIcCardCallback` 键。
+2. 配置仅在 Proxy 启动时读取，缺失、`null`、空字符串、非法类型或配置文件读取失败时回退为 `true`，不因该配置导致 Proxy 启动失败。
+3. 沿现有链路 `ProxyServer.HandleTerminalCallback` → `TerminalCallbackHandler.HandleAsync` → `HandleNfcCardAsync` 审查后，在 IC 卡第三方回调出口、`DllCallbackSender.SendNfcResult` 之前增加判断。
+4. 关闭时仍保留终端数据接收、解析、路由和内部日志；一次性请求标记完成，流程型事件只保留现有去重消费记录，不建立待补发队列。
+5. 增加启动状态日志；关闭期间的 IC 卡跳过日志按 5 秒限频，避免终端高频读卡刷屏。
+
+### 涉及文件
+
+- `HZCYKJTHardWare.json`：新增配置示例。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/AppConfig.cs`：读取、默认回退和启动日志。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`：第三方回调出口拦截、请求收尾和限频日志。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/IcCardCallbackConfigurationTests.cs`：配置值边界测试。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/TerminalCallbackRoutingTests.cs`：关闭不发送、重新启用不补发历史请求的回归测试；同时移除测试对默认终端序号的硬编码依赖。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/SwitchCoordinatorTests.cs`：移除测试对默认终端序号的硬编码依赖。
+
+### 兼容性与生效逻辑
+
+- `enable_ic_card_callback=true` 或配置缺失/异常：保持原有 IC 卡第三方回调行为。
+- `enable_ic_card_callback=false`：Proxy 继续接收并处理终端 IC 卡数据，但不调用第三方 IC 卡回调，不修改 DLL ABI，也不影响 OCR、授权、人脸、指纹、预览和终端切换。
+- 当前配置模型不支持运行时热更新；修改配置后重启 Proxy 生效，进程内不保存关闭期间的历史数据用于补发。
+
+### 验证状态
+
+- [x] Proxy + Tests `Release|x86` 编译：0 错误；仅有 NuGet 漏洞源不可达的 `NU1900` 环境警告。
+- [x] IC 卡配置与回调定向测试：6/6 通过。
+- [x] x86 非 Integration 回归：136/137 通过。
+- [ ] 剩余版本号测试 `ProductVersion_IsEmbeddedAndVisibleInMainWindow` 待单独处理：测试期望 `1.3.1.0`，当前程序集为 `1.3.5.0`，与本次修改无关。
+- [ ] 真实终端刷卡、第三方 DLL 回调和高频读卡现场验证待执行。
+
+## C# Demo 兼容带注释统一 JSON（2026-08-31）
+
+- [x] 确认 C# Demo 使用 `JavaScriptSerializer`，严格 JSON 解析不接受统一配置中的 `//` 注释。
+- [x] `LoadDeviceModeSettings` 增加安全注释扫描，支持 `//` 和 `/* */`，不会误删字符串中的 `http://` 等内容。
+- [x] 不新增 JSON 库或 DLL 运行时依赖，DLL 调用接口和车牌镜头参数 `1=CJ`、`2=RJ2`、`3=RJ3` 不变。
+- [x] C# Demo `Release|x86` 编译：0 警告、0 错误。
+- [x] 使用 x86 .NET Framework 宿主解析实际输出配置：`device_mode=1`、`enable_ic_card_callback=false`，注释剥离后可正常读取。
+- [ ] Windows 界面实际启动和现场 DLL 联调待验证。
+
+兼容性：仅修复 C# Demo 对 JSONC 配置的读取，不修改统一配置字段含义、Native DLL ABI、Proxy 行为或第三方调用方式。

@@ -25,6 +25,11 @@ public:
                                      const std::string& base64,
                                      std::string& outPath);
 
+    // 将完整 JPEG 原样保存到调用方指定的精确路径。
+    // 先写同目录临时文件，再原子替换目标文件，避免第三方读到半文件。
+    static int SaveJpegFileAtomic(const std::string& exactPath,
+                                  const std::vector<unsigned char>& jpegData);
+
     // 保存 JSON 文本到文件
     static int SaveJsonFile(const std::string& saveDir,
                             const std::string& fileName,

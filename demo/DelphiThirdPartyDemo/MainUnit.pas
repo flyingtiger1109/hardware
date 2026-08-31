@@ -12,6 +12,10 @@ const
   WM_DLL_EVENT_JSON = WM_USER + 101;
   WM_PREVIEW_DLL_RESULT = WM_USER + 102;
 
+  HZCYKJTHardWare_PLATE_CAMERA_CJ = 1;
+  HZCYKJTHardWare_PLATE_CAMERA_RJ2 = 2;
+  HZCYKJTHardWare_PLATE_CAMERA_RJ3 = 3;
+
 type
   THZCYKJTHardWareEventCallback = procedure(EventJson: PAnsiChar); stdcall;
 
@@ -48,6 +52,11 @@ type
     EdtAuthXB: TEdit;
     EdtAuthCSRQ: TEdit;
     EdtAuthKADM: TEdit;
+    LblPlateSavePath: TLabel;
+    EdtPlateSavePath: TEdit;
+    BtnSavePlateCJ: TButton;
+    BtnSavePlateRJ2: TButton;
+    BtnSavePlateRJ3: TButton;
     PanelCamera: TPanel;
     PanelFingerprint: TPanel;
     PanelIris: TPanel;
@@ -70,12 +79,16 @@ type
     procedure BtnNFCClick(Sender: TObject);
     procedure BtnIrisCaptureClick(Sender: TObject);
     procedure BtnAuthorizeClick(Sender: TObject);
+    procedure BtnSavePlateCJClick(Sender: TObject);
+    procedure BtnSavePlateRJ2Click(Sender: TObject);
+    procedure BtnSavePlateRJ3Click(Sender: TObject);
   private
     FInitialized: Boolean;
     procedure Log(const S: string);
     procedure LogRet(const Name: string; Ret: Integer);
     procedure OnEventJson(const Json: string);
     procedure RunPreviewDllCallAsync(const Name: string; TargetHwnd: HWND; IsCamera: Boolean);
+    procedure SaveLatestPlateFrame(const CameraName: string; CameraType: Integer);
 
     procedure WMDllEventJson(var Msg: TMessage); message WM_DLL_EVENT_JSON;
     procedure WMPreviewDllResult(var Msg: TMessage); message WM_PREVIEW_DLL_RESULT;
@@ -109,6 +122,7 @@ function HZCYKJTHardWare_CaptureIrisImage(SaveDir: PAnsiChar): Integer; stdcall;
 function HZCYKJTHardWare_RequestOCR(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestNfcCard(SaveDir: PAnsiChar): Integer; stdcall; external DLL_NAME;
 function HZCYKJTHardWare_RequestAuthorize(ZJHM, ZJLB, GJDQDM, XM, XB, CSRQ, KADM: PAnsiChar): Integer; stdcall; external DLL_NAME;
+function HZCYKJTHardWare_SaveLatestPlateFrame(SavePath: PAnsiChar; CameraType: Integer): Integer; stdcall; external DLL_NAME;
 
 type
   PStringData = ^string;
@@ -512,6 +526,35 @@ begin
     PAnsiChar(KADM)
   );
   LogRet('RequestAuthorize', Ret);
+end;
+
+procedure TFormMain.SaveLatestPlateFrame(const CameraName: string; CameraType: Integer);
+var
+  SavePath: AnsiString;
+  Ret: Integer;
+begin
+  SavePath := AnsiString(EdtPlateSavePath.Text);
+  Ret := HZCYKJTHardWare_SaveLatestPlateFrame(PAnsiChar(SavePath), CameraType);
+  LogRet('SaveLatestPlateFrame(' + CameraName + ')', Ret);
+  if Ret = 1 then
+    Log('  saved: ' + EdtPlateSavePath.Text)
+  else
+    Log('  failed; negative return codes are returned directly by the new API');
+end;
+
+procedure TFormMain.BtnSavePlateCJClick(Sender: TObject);
+begin
+  SaveLatestPlateFrame('CJ', HZCYKJTHardWare_PLATE_CAMERA_CJ);
+end;
+
+procedure TFormMain.BtnSavePlateRJ2Click(Sender: TObject);
+begin
+  SaveLatestPlateFrame('RJ2', HZCYKJTHardWare_PLATE_CAMERA_RJ2);
+end;
+
+procedure TFormMain.BtnSavePlateRJ3Click(Sender: TObject);
+begin
+  SaveLatestPlateFrame('RJ3', HZCYKJTHardWare_PLATE_CAMERA_RJ3);
 end;
 
 end.

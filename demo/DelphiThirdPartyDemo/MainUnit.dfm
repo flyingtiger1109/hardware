@@ -230,6 +230,48 @@ object FormMain: TFormMain
       TabOrder = 16
       OnClick = BtnAuthorizeClick
     end
+    object LblPlateSavePath: TLabel
+      Left = 670
+      Top = 42
+      Width = 88
+      Height = 14
+      Caption = 'Plate JPEG path'
+    end
+    object EdtPlateSavePath: TEdit
+      Left = 670
+      Top = 62
+      Width = 278
+      Height = 22
+      TabOrder = 24
+      Text = '.\captures\plate.jpg'
+    end
+    object BtnSavePlateCJ: TButton
+      Left = 670
+      Top = 112
+      Width = 88
+      Height = 25
+      Caption = 'Save CJ'
+      TabOrder = 25
+      OnClick = BtnSavePlateCJClick
+    end
+    object BtnSavePlateRJ2: TButton
+      Left = 764
+      Top = 112
+      Width = 88
+      Height = 25
+      Caption = 'Save RJ2'
+      TabOrder = 26
+      OnClick = BtnSavePlateRJ2Click
+    end
+    object BtnSavePlateRJ3: TButton
+      Left = 858
+      Top = 112
+      Width = 90
+      Height = 25
+      Caption = 'Save RJ3'
+      TabOrder = 27
+      OnClick = BtnSavePlateRJ3Click
+    end
     object EdtAuthZJHM: TEdit
       Left = 8
       Top = 180

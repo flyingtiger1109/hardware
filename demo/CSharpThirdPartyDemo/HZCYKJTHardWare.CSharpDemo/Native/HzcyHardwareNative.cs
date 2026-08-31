@@ -7,6 +7,10 @@ namespace HZCYKJTHardWare.CSharpDemo.Native
     {
         private const string DllName = "HZCYKJTHardWare.dll";
 
+        internal const int PlateCameraCj = 1;
+        internal const int PlateCameraRj2 = 2;
+        internal const int PlateCameraRj3 = 3;
+
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         internal delegate void EventCallbackDelegate(IntPtr eventJson);
 
@@ -63,6 +67,10 @@ namespace HZCYKJTHardWare.CSharpDemo.Native
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
         internal static extern int HZCYKJTHardWare_StopPlatePreviewRJ3();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
+        internal static extern int HZCYKJTHardWare_SaveLatestPlateFrame(
+            IntPtr savePath, int cameraType);
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, ExactSpelling = true)]
         internal static extern int HZCYKJTHardWare_CaptureCameraImage(IntPtr saveDir);

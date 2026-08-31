@@ -5,7 +5,11 @@
 extern "C" {
 #endif
 
-/* 内部错误码，仅写入日志，不向调用方暴露；公共 API 返回 1 或 0。 */
+/*
+ * 既有公共 API 仍保持 1 表示成功、0 表示失败；以下错误码原本主要用于
+ * DLL 内部日志。新增的 SaveLatestPlateFrame 接口会直接返回对应的错误码，
+ * 以便 Delphi7 等第三方调用方定位失败原因。已有错误码的数值保持不变。
+ */
 #define HZCYKJTHardWare_RET_OK                         1
 #define HZCYKJTHardWare_RET_FAILED                    -1
 #define HZCYKJTHardWare_RET_NOT_INITIALIZED           -2
@@ -37,6 +41,18 @@ extern "C" {
 #define HZCYKJTHardWare_RET_CONFIG_NOT_FOUND         -28
 #define HZCYKJTHardWare_RET_CONFIG_INVALID           -29
 #define HZCYKJTHardWare_RET_CONFIG_FIELD_MISSING     -30
+
+/* SaveLatestPlateFrame 专用返回码。 */
+#define HZCYKJTHardWare_FRAME_NOT_READY               -31
+#define HZCYKJTHardWare_FRAME_INVALID_CAMERA         -32
+#define HZCYKJTHardWare_FRAME_DATA_INVALID           -33
+#define HZCYKJTHardWare_FRAME_TOO_LARGE              -34
+#define HZCYKJTHardWare_FRAME_STALE                  -35
+
+/* 车牌镜头类型；作为 int 传入以保持 C ABI 稳定。 */
+#define HZCYKJTHardWare_PLATE_CAMERA_CJ              1
+#define HZCYKJTHardWare_PLATE_CAMERA_RJ2             2
+#define HZCYKJTHardWare_PLATE_CAMERA_RJ3             3
 
 /* 事件类型 */
 #define HZCYKJTHardWare_EVENT_TERMINAL_ONLINE              1001

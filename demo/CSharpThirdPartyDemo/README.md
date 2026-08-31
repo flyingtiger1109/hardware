@@ -16,9 +16,20 @@
 - NFC/IC 请求
 - 虹膜抓拍
 - 授权模拟
+- 最新车牌帧保存：填写完整图片路径后，分别保存 CJ、RJ2、RJ3 最新 JPEG
 - 日志窗口显示 DLL callback 事件名称、状态、资源、请求 ID 和错误码
 
-Demo 已覆盖当前 `.def` 中全部 24 个 DLL 导出。车牌部分仅调用现有 CJ、RJ2、RJ3 预览接口；当前 DLL 没有车牌抓拍导出，因此 Demo 不提供车牌抓拍按钮。
+`Native/HzcyHardwareNative.cs` 已声明当前 `.def` 中全部 25 个 DLL 导出。车牌部分调用 CJ、RJ2、RJ3 预览接口，并提供最新车牌帧保存接口的原生声明；主窗体提供完整保存路径输入框和三个镜头保存按钮。最新帧接口要求对应预览已经启动，保存调用示例和 Delphi7 按钮见 `demo/DelphiThirdPartyDemo`。
+
+最新车牌帧保存接口只需要传入保存路径和镜头类型；C# 调用时沿用本 Demo 其他 `char*` 参数的 `IntPtr`/UTF-8 约定：
+
+```csharp
+using (var path = new Utf8NativeString(@"D:\Images\cj.jpg"))
+{
+    var ret = HzcyHardwareNative.HZCYKJTHardWare_SaveLatestPlateFrame(
+        path.Pointer, HzcyHardwareNative.PlateCameraCj);
+}
+```
 
 ## DeviceMode
 
@@ -34,7 +45,7 @@ Demo 与 Proxy 读取运行目录中的同一份 `HZCYKJTHardWare.json`：
 
 ## 部署
 
-运行目录需要和 DLL、C# Proxy 后端放在一起：
+Demo 可以独立编译生成 EXE；编译阶段不依赖 Native DLL。运行并调用 DLL 接口时，仍需要将 Native DLL、C# Proxy 后端及其依赖放在运行目录：
 
 ```text
 HZCYKJTHardWare.CSharpDemo.exe

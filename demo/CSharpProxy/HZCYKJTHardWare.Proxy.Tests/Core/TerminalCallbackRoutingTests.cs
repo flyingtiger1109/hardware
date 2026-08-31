@@ -31,8 +31,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                         requestRegistry, processRegistry, _ => { });
                     var routeA = terminalManager.CurrentRoute;
                     var sourceA = IPAddress.Parse(new System.Uri(routeA.BaseUrl).Host);
+                    var terminalA = routeA.TerminalIndex;
+                    var terminalB = terminalA == 1 ? 2 : 1;
 
-                    var processA = processRegistry.Prepare(1,
+                    var processA = processRegistry.Prepare(terminalA,
                         routeA.BaseUrl, "PROCESS_A",
                         @"C:\capture-a", 0);
                     Assert.IsTrue(processRegistry.Commit(processA));
@@ -42,9 +44,9 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                         sourceA);
                     Assert.AreEqual(1, captureHandler.Count);
 
-                    Assert.IsTrue(terminalManager.SwitchTo(2));
+                    Assert.IsTrue(terminalManager.SwitchTo(terminalB));
                     var routeB = terminalManager.CurrentRoute;
-                    var processB = processRegistry.Prepare(2,
+                    var processB = processRegistry.Prepare(terminalB,
                         routeB.BaseUrl, "PROCESS_B",
                         @"C:\capture-b", 1);
                     Assert.IsTrue(processRegistry.Commit(processB));
@@ -55,7 +57,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     Assert.AreEqual(1, captureHandler.Count,
                         "inactive terminal callback must not cross routes");
 
-                    Assert.IsTrue(terminalManager.SwitchTo(1));
+                    Assert.IsTrue(terminalManager.SwitchTo(terminalA));
                     await callbackHandler.HandleAsync(
                         NfcBody("PROCESS_A", "CARD-A-2"),
                         sourceA);
@@ -65,6 +67,56 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                     Assert.AreEqual(2, requestIds.Count);
                     Assert.AreNotEqual(requestIds[0], requestIds[1],
                         "each process event needs a unique DLL delivery id");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task DisabledIcCardCallback_DoesNotSendAndDoesNotReplay()
+        {
+            var terminalManager = new TerminalManager();
+            using (var terminalClient = new TerminalClient())
+            using (var requestRegistry = new RequestRegistry())
+            using (var processRegistry = new TerminalProcessRegistry())
+            {
+                var captureHandler = new CapturingHandler();
+                using (var httpClient = new HttpClient(captureHandler))
+                using (var callbackSender = new DllCallbackSender(httpClient,
+                    "http://127.0.0.1:39091"))
+                {
+                    var callbackEnabled = false;
+                    var callbackHandler = new TerminalCallbackHandler(
+                        terminalClient, terminalManager, callbackSender,
+                        requestRegistry, processRegistry, _ => { },
+                        () => callbackEnabled);
+
+                    var request = requestRegistry.Register(
+                        "NFC_DISABLED", ProxyResourceTypes.NfcCard,
+                        @"C:\capture", "http://127.0.0.1:39091/nfc-card", 0);
+                    Assert.IsNotNull(request);
+
+                    await callbackHandler.HandleAsync(
+                        NfcBody("NFC_DISABLED", "CARD-DISABLED"), null);
+
+                    Assert.AreEqual(0, captureHandler.Count,
+                        "关闭开关时不得向 DLL 回调出口发送 IC 卡数据");
+                    Assert.AreEqual(0, requestRegistry.ActiveCount,
+                        "被拦截的一次性请求必须完成收尾");
+
+                    callbackEnabled = true;
+                    await callbackHandler.HandleAsync(
+                        NfcBody("NFC_DISABLED", "CARD-REPLAY"), null);
+                    Assert.AreEqual(0, captureHandler.Count,
+                        "重新启用后不得补发关闭期间已消费的历史请求");
+
+                    var newRequest = requestRegistry.Register(
+                        "NFC_ENABLED", ProxyResourceTypes.NfcCard,
+                        @"C:\capture", "http://127.0.0.1:39091/nfc-card", 0);
+                    Assert.IsNotNull(newRequest);
+                    await callbackHandler.HandleAsync(
+                        NfcBody("NFC_ENABLED", "CARD-NEW"), null);
+                    Assert.AreEqual(1, captureHandler.Count,
+                        "重新启用后新收到的 IC 卡数据应正常回调");
                 }
             }
         }

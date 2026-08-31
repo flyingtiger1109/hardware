@@ -179,7 +179,8 @@ namespace HZCYKJTHardWare.CSharpDemo
                 btnIrisCapture, btnAuthorize, lblAuthSample, lblAuthZJHM,
                 lblAuthZJLB, lblAuthGJDQDM, lblAuthXM, lblAuthXB,
                 lblAuthCSRQ, lblAuthKADM, txtAuthZJHM, txtAuthZJLB,
-                txtAuthGJDQDM, txtAuthXM, txtAuthXB, txtAuthCSRQ, txtAuthKADM
+                txtAuthGJDQDM, txtAuthXM, txtAuthXB, txtAuthCSRQ, txtAuthKADM,
+                btnSavePlateCJ
             };
 
             foreach (var control in unsupportedControls)
@@ -340,6 +341,49 @@ namespace HZCYKJTHardWare.CSharpDemo
 
             ExecuteDllCall("停止" + option.Name + "预览",
                 () => LogRet("停止" + option.Name + "预览", option.Stop()));
+        }
+
+        private void btnSavePlateCJ_Click(object sender, EventArgs e)
+        {
+            SaveLatestPlateFrame("CJ", HzcyHardwareNative.PlateCameraCj);
+        }
+
+        private void btnSavePlateRJ2_Click(object sender, EventArgs e)
+        {
+            SaveLatestPlateFrame("RJ2", HzcyHardwareNative.PlateCameraRj2);
+        }
+
+        private void btnSavePlateRJ3_Click(object sender, EventArgs e)
+        {
+            SaveLatestPlateFrame("RJ3", HzcyHardwareNative.PlateCameraRj3);
+        }
+
+        private void SaveLatestPlateFrame(string cameraName, int cameraType)
+        {
+            var savePath = (txtPlateSavePath.Text ?? string.Empty).Trim();
+            if (savePath.Length == 0)
+            {
+                Log("保存" + cameraName + "最新车牌帧失败：请填写完整图片保存路径。返回码(-3)");
+                return;
+            }
+
+            ExecuteDllCall("保存" + cameraName + "最新车牌帧", () =>
+            {
+                using (var path = new Utf8NativeString(savePath))
+                {
+                    var ret = HzcyHardwareNative.HZCYKJTHardWare_SaveLatestPlateFrame(
+                        path.Pointer, cameraType);
+                    LogRet("保存" + cameraName + "最新车牌帧", ret);
+                    if (ret == 1)
+                    {
+                        Log("  保存路径：" + savePath);
+                    }
+                    else
+                    {
+                        Log("  失败提示：请确认对应预览已启动、最新帧未过期，并检查目标目录权限。");
+                    }
+                }
+            });
         }
 
         private void btnFaceCapture_Click(object sender, EventArgs e)
@@ -626,7 +670,19 @@ namespace HZCYKJTHardWare.CSharpDemo
             {
                 case 1: return "成功(1)";
                 case 0: return "失败(0)";
+                case -2: return "SDK未初始化(-2)";
+                case -3: return "参数无效(-3)";
+                case -6: return "Proxy通信失败(-6)";
+                case -7: return "请求超时(-7)";
+                case -10: return "对应预览未启动(-10)";
+                case -14: return "保存文件失败(-14)";
+                case -15: return "设备忙(-15)";
                 case -18: return "当前设备模式不支持(-18)";
+                case -31: return "最新帧尚未就绪(-31)";
+                case -32: return "车牌镜头类型无效(-32)";
+                case -33: return "JPEG数据无效(-33)";
+                case -34: return "JPEG数据过大(-34)";
+                case -35: return "最新帧已过期(-35)";
                 default: return "返回码(" + code + ")";
             }
         }
@@ -690,7 +746,10 @@ namespace HZCYKJTHardWare.CSharpDemo
                     return settings;
                 }
 
-                var json = File.ReadAllText(configPath, Encoding.UTF8);
+                // 统一配置文件允许使用 // 注释（JSONC），而 JavaScriptSerializer
+                // 只接受严格 JSON，因此先安全移除注释再解析；字符串中的 // 不会被移除。
+                var json = StripJsonComments(
+                    File.ReadAllText(configPath, Encoding.UTF8));
                 var root = new JavaScriptSerializer().DeserializeObject(json)
                     as IDictionary<string, object>;
                 if (root == null)
@@ -738,6 +797,101 @@ namespace HZCYKJTHardWare.CSharpDemo
             }
 
             return settings;
+        }
+
+        /// <summary>
+        /// 移除 JSONC 中的 // 和 /* */ 注释，同时保留字符串字面量中的内容。
+        /// C# Demo 不额外引入 JSON 库，仅用现有 JavaScriptSerializer 读取统一配置。
+        /// </summary>
+        private static string StripJsonComments(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return json;
+            }
+
+            var builder = new StringBuilder(json.Length);
+            var inString = false;
+            var escaped = false;
+            var inLineComment = false;
+            var inBlockComment = false;
+
+            for (var i = 0; i < json.Length; i++)
+            {
+                var current = json[i];
+
+                if (inLineComment)
+                {
+                    if (current == '\r' || current == '\n')
+                    {
+                        inLineComment = false;
+                        builder.Append(current);
+                    }
+                    continue;
+                }
+
+                if (inBlockComment)
+                {
+                    if (current == '*' && i + 1 < json.Length &&
+                        json[i + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        i++;
+                    }
+                    else if (current == '\r' || current == '\n')
+                    {
+                        // 保留换行，便于 JSON 异常仍能定位原始行号。
+                        builder.Append(current);
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    builder.Append(current);
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (current == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (current == '"')
+                    {
+                        inString = false;
+                    }
+                    continue;
+                }
+
+                if (current == '"')
+                {
+                    inString = true;
+                    builder.Append(current);
+                    continue;
+                }
+
+                if (current == '/' && i + 1 < json.Length)
+                {
+                    var next = json[i + 1];
+                    if (next == '/')
+                    {
+                        inLineComment = true;
+                        i++;
+                        continue;
+                    }
+                    if (next == '*')
+                    {
+                        inBlockComment = true;
+                        i++;
+                        continue;
+                    }
+                }
+
+                builder.Append(current);
+            }
+
+            return builder.ToString();
         }
 
         private static string ExtractJsonString(string json, string key)

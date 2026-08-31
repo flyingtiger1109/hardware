@@ -30,6 +30,13 @@ static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
     return -1;
 }
 
+static bool HasJpegSignature(const std::vector<unsigned char>& jpegData) {
+    return jpegData.size() >= 4 &&
+        jpegData[0] == 0xFF && jpegData[1] == 0xD8 &&
+        jpegData[jpegData.size() - 2] == 0xFF &&
+        jpegData[jpegData.size() - 1] == 0xD9;
+}
+
 int ImageSaver::SaveBase64Image(const std::string& saveDir,
                                  const std::string& fileName,
                                  const std::string& base64,
@@ -211,6 +218,105 @@ int ImageSaver::SaveBase64ImageAsJpeg(const std::string& saveDir,
     Gdiplus::GdiplusShutdown(gdiplusToken);
     stream->Release();
     return ret;
+}
+
+int ImageSaver::SaveJpegFileAtomic(
+    const std::string& exactPath,
+    const std::vector<unsigned char>& jpegData) {
+    constexpr size_t kMaxJpegBytes = 8U * 1024U * 1024U;
+    if (exactPath.empty()) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：目标路径为空");
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+    if (PathHelper::GetFileName(exactPath).empty()) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：目标路径不包含文件名，path=%s",
+                  exactPath.c_str());
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+    if (jpegData.empty() || !HasJpegSignature(jpegData)) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：JPEG数据无效，path=%s，bytes=%zu",
+                  exactPath.c_str(), jpegData.size());
+        return HZCYKJTHardWare_FRAME_DATA_INVALID;
+    }
+    if (jpegData.size() > kMaxJpegBytes) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：数据超过大小限制，path=%s，bytes=%zu，limit=%zu",
+                  exactPath.c_str(), jpegData.size(), kMaxJpegBytes);
+        return HZCYKJTHardWare_FRAME_TOO_LARGE;
+    }
+
+    const std::string parentDir = PathHelper::GetParentDir(exactPath);
+    if (!parentDir.empty() && !PathHelper::CreateDirectoryRecursive(parentDir)) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：创建父目录失败，dir=%s",
+                  parentDir.c_str());
+        return HZCYKJTHardWare_RET_SAVE_FILE_FAILED;
+    }
+
+    const std::wstring targetPath = PathHelper::Utf8ToWide(exactPath);
+    if (targetPath.empty()) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：路径转换失败，path=%s",
+                  exactPath.c_str());
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    }
+
+    HANDLE tempHandle = INVALID_HANDLE_VALUE;
+    std::wstring tempPath;
+    for (unsigned int attempt = 0; attempt < 10; ++attempt) {
+        tempPath = targetPath + L".tmp." +
+            std::to_wstring(GetCurrentProcessId()) + L"." +
+            std::to_wstring(GetCurrentThreadId()) + L"." +
+            std::to_wstring(attempt);
+        tempHandle = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                                 CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (tempHandle != INVALID_HANDLE_VALUE) break;
+        if (GetLastError() != ERROR_FILE_EXISTS &&
+            GetLastError() != ERROR_ALREADY_EXISTS) {
+            break;
+        }
+    }
+
+    if (tempHandle == INVALID_HANDLE_VALUE) {
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：创建临时文件失败，path=%s，错误码=%lu",
+                  exactPath.c_str(), GetLastError());
+        return HZCYKJTHardWare_RET_SAVE_FILE_FAILED;
+    }
+
+    bool writeOk = true;
+    size_t offset = 0;
+    while (offset < jpegData.size()) {
+        const DWORD chunkSize = static_cast<DWORD>(
+            (std::min)(jpegData.size() - offset,
+                       static_cast<size_t>(0x7ffff000U)));
+        DWORD written = 0;
+        if (!WriteFile(tempHandle, jpegData.data() + offset, chunkSize,
+                       &written, nullptr) || written != chunkSize) {
+            writeOk = false;
+            break;
+        }
+        offset += written;
+    }
+    if (writeOk && !FlushFileBuffers(tempHandle)) writeOk = false;
+    CloseHandle(tempHandle);
+
+    if (!writeOk) {
+        const DWORD error = GetLastError();
+        DeleteFileW(tempPath.c_str());
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：写入临时文件失败，path=%s，错误码=%lu",
+                  exactPath.c_str(), error);
+        return HZCYKJTHardWare_RET_SAVE_FILE_FAILED;
+    }
+
+    if (!MoveFileExW(tempPath.c_str(), targetPath.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const DWORD error = GetLastError();
+        DeleteFileW(tempPath.c_str());
+        LOG_ERROR("ImageSaver", "保存最新车牌JPEG失败：原子替换目标文件失败，path=%s，错误码=%lu",
+                  exactPath.c_str(), error);
+        return HZCYKJTHardWare_RET_SAVE_FILE_FAILED;
+    }
+
+    LOG_DEBUG("ImageSaver", "最新车牌JPEG已保存：path=%s，bytes=%zu",
+              exactPath.c_str(), jpegData.size());
+    return HZCYKJTHardWare_RET_OK;
 }
 
 std::string ImageSaver::GetExtensionFromMimeType(const std::string& mimeType) {

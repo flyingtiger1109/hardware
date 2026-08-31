@@ -31,7 +31,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\..\Release\HZCYKJTHardWare.dll" Link="HZCYKJTHardWare.dll" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\HZCYKJTHardWare.json" Link="HZCYKJTHardWare.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

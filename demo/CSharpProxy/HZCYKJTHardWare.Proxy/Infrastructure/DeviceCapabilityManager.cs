@@ -90,10 +90,13 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             switch ((path ?? "").Split('?')[0].ToLowerInvariant())
             {
                 case "/preview/plate/rj2/start": case "/preview/plate/rj2/stop":
+                case "/preview/plate/rj2/latest-frame":
                     capability = DeviceCapability.PlateRJ2; return true;
                 case "/preview/plate/rj3/start": case "/preview/plate/rj3/stop":
+                case "/preview/plate/rj3/latest-frame":
                     capability = DeviceCapability.PlateRJ3; return true;
                 case "/preview/plate/cj/start": case "/preview/plate/cj/stop":
+                case "/preview/plate/cj/latest-frame":
                     capability = DeviceCapability.PlateCJ; return true;
                 case "/capture/face": case "/preview/camera/start":
                 case "/preview/camera/stop": case "/preview/camera/url":

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Core;
@@ -34,6 +35,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ProcessEndCoordinator _processEndCoordinator;
         private readonly Action<bool> _onProcessStateChanged;
         private readonly DeviceCapabilityManager _capabilities;
+        private readonly SemaphoreSlim _latestFrameResponseGate =
+            new SemaphoreSlim(4, 4);
         private readonly string _proxyInstanceId = CreateProxyInstanceId();
         private const string TerminalSwitchingResult =
             "{\"error\":true,\"code\":\"terminal_switching\"}";
@@ -209,6 +212,118 @@ namespace HZCYKJTHardWare.Proxy.Server
                 default:
                     return "{\"error\":true,\"code\":\"not_found\"}";
             }
+        }
+
+        internal static bool IsLatestPlateFramePath(string path)
+        {
+            return TryGetLatestPlateFrameRoute(path,
+                out _, out _);
+        }
+
+        private static bool TryGetLatestPlateFrameRoute(string path,
+            out PreviewResourceType resourceType, out string plateCode)
+        {
+            resourceType = default(PreviewResourceType);
+            plateCode = null;
+            var normalizedPath = (path ?? string.Empty).Split('?')[0];
+            switch (normalizedPath.ToLowerInvariant())
+            {
+                case "/preview/plate/cj/latest-frame":
+                    resourceType = PreviewResourceType.PlateCJ;
+                    plateCode = "cj";
+                    return true;
+                case "/preview/plate/rj2/latest-frame":
+                    resourceType = PreviewResourceType.PlateRJ2;
+                    plateCode = "rj2";
+                    return true;
+                case "/preview/plate/rj3/latest-frame":
+                    resourceType = PreviewResourceType.PlateRJ3;
+                    plateCode = "rj3";
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// 处理只返回 JPEG 二进制的最新车牌帧请求。
+        /// 成功响应持有一个并发租约，调用方必须在 HTTP 响应写完后 Dispose。
+        /// </summary>
+        internal Task<DllBinaryResponse> HandleLatestPlateFrameAsync(
+            string method, string path, string bodyUtf8)
+        {
+            return Task.FromResult(HandleLatestPlateFrame(method, path, bodyUtf8));
+        }
+
+        private DllBinaryResponse HandleLatestPlateFrame(string method,
+            string path, string bodyUtf8)
+        {
+            if (!TryGetLatestPlateFrameRoute(path,
+                out var resourceType, out var plateCode))
+            {
+                return BuildLatestPlateFrameError("not_found", "未知车牌最新帧路由");
+            }
+
+            if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+                return BuildLatestPlateFrameError("invalid_method", "最新车牌帧接口只支持POST");
+
+            if (_capabilities.TryGetRequiredCapability(path, out var required) &&
+                !_capabilities.IsSupported(required))
+            {
+                return DllBinaryResponse.Json(
+                    _capabilities.BuildNotSupportedResult(path, required));
+            }
+
+            var request = ParsedJsonBody.Parse(bodyUtf8);
+            var requestId = request.GetString("request_id");
+            if (string.IsNullOrWhiteSpace(requestId))
+                return BuildLatestPlateFrameError("invalid_request_id", "request_id为空");
+
+            if (!_latestFrameResponseGate.Wait(0))
+                return BuildLatestPlateFrameError("frame_busy", "最新车牌帧响应并发数已达上限");
+
+            var leaseOwned = true;
+            try
+            {
+                if (!_previewManager.TryGetLatestPlateFrame(resourceType, requestId,
+                    out var snapshot, out var errorCode, out var errorMessage))
+                {
+                    return BuildLatestPlateFrameError(errorCode, errorMessage);
+                }
+
+                if (snapshot == null || snapshot.Jpeg == null || snapshot.Jpeg.Length == 0)
+                    return BuildLatestPlateFrameError("frame_data_invalid", "最新车牌帧数据为空");
+
+                var response = DllBinaryResponse.Binary(snapshot.Jpeg, "image/jpeg",
+                    () => _latestFrameResponseGate.Release());
+                _log(Logger.FormatModuleMessage(LogModules.Preview, "调试",
+                    $"车牌最新帧已准备：资源={FormatPreviewResource(resourceType)}，" +
+                    $"request_id={FormatRequestId(requestId)}，尺寸={snapshot.Width}x{snapshot.Height}，" +
+                    $"序列号={snapshot.Sequence}，字节数={snapshot.Jpeg.Length}"));
+                leaseOwned = false;
+                return response;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"车牌最新帧处理异常：资源={FormatPreviewResource(resourceType)}，" +
+                    $"request_id={FormatRequestId(requestId)}", ex);
+                return BuildLatestPlateFrameError("frame_data_invalid", "获取最新车牌帧异常");
+            }
+            finally
+            {
+                if (leaseOwned)
+                    _latestFrameResponseGate.Release();
+            }
+        }
+
+        private static DllBinaryResponse BuildLatestPlateFrameError(string code,
+            string message)
+        {
+            var safeCode = string.IsNullOrWhiteSpace(code) ? "frame_data_invalid" : code;
+            var safeMessage = string.IsNullOrWhiteSpace(message) ? "获取最新车牌帧失败" : message;
+            return DllBinaryResponse.Json(
+                "{\"error\":true,\"code\":\"" + JsonHelper.EscapeString(safeCode) +
+                "\",\"message\":\"" + JsonHelper.EscapeString(safeMessage) + "\"}");
         }
 
         /// <summary>

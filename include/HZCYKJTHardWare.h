@@ -10,7 +10,9 @@ extern "C" {
 /*
  * 面向第三方集成的公共 API。
  *
- * 返回值：1 表示成功或已受理，0 表示失败；详细原因参见 DLL 日志。
+ * 既有接口返回值：1 表示成功或已受理，0 表示失败；详细原因参见 DLL 日志。
+ * HZCYKJTHardWare_SaveLatestPlateFrame 是新增的同步例外，成功返回 1，
+ * 失败直接返回负数错误码。
  *
  *   [同步] 1 表示操作完成，0 表示操作失败。
  *   [异步] 1 表示请求已提交，最终结果通过回调事件返回。
@@ -48,6 +50,15 @@ extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ2(
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ2(void);
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StartPlatePreviewRJ3(void* hwnd);
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_StopPlatePreviewRJ3(void);
+
+/* 获取已经运行的车牌预览链路中的最新完整 JPEG，并原子保存到指定文件。［同步］
+ * 返回值：成功返回 HZCYKJTHardWare_RET_OK；失败直接返回负数错误码。
+ * cameraType 使用 HZCYKJTHardWare_PLATE_CAMERA_CJ/RJ2/RJ3。
+ * 调用方不需要申请或释放图片 Buffer；对应车牌预览必须已先启动。 */
+extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_SaveLatestPlateFrame(
+    const char* savePath,
+    int cameraType
+);
 
 /* 图像采集［人脸/指纹：同步；虹膜：异步］ */
 extern __declspec(dllexport) int __stdcall HZCYKJTHardWare_CaptureCameraImage(const char* saveDir);

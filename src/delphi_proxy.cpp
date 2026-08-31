@@ -108,6 +108,38 @@ bool HasErrorResponse(const std::string& response, std::string& code, std::strin
     return true;
 }
 
+int MapLatestPlateFrameErrorCode(const std::string& code) {
+    if (code == "preview_not_running")
+        return HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING;
+    if (code == "frame_not_ready")
+        return HZCYKJTHardWare_FRAME_NOT_READY;
+    if (code == "frame_stale")
+        return HZCYKJTHardWare_FRAME_STALE;
+    if (code == "invalid_camera" || code == "frame_invalid_camera")
+        return HZCYKJTHardWare_FRAME_INVALID_CAMERA;
+    if (code == "frame_data_invalid")
+        return HZCYKJTHardWare_FRAME_DATA_INVALID;
+    if (code == "frame_too_large")
+        return HZCYKJTHardWare_FRAME_TOO_LARGE;
+    if (code == "frame_busy" || code == "service_busy" || code == "busy")
+        return HZCYKJTHardWare_RET_DEVICE_BUSY;
+    if (code == "timeout")
+        return HZCYKJTHardWare_RET_TIMEOUT;
+    if (code == "not_supported")
+        return HZCYKJTHardWare_RET_UNSUPPORTED;
+    if (code == "invalid_request_id")
+        return HZCYKJTHardWare_RET_INVALID_PARAM;
+    return HZCYKJTHardWare_RET_HTTP_FAILED;
+}
+
+bool HasJpegSignature(const std::string& data) {
+    return data.size() >= 4 &&
+        static_cast<unsigned char>(data[0]) == 0xFF &&
+        static_cast<unsigned char>(data[1]) == 0xD8 &&
+        static_cast<unsigned char>(data[data.size() - 2]) == 0xFF &&
+        static_cast<unsigned char>(data[data.size() - 1]) == 0xD9;
+}
+
 } // 匿名命名空间结束
 
 DelphiProxy::DelphiProxy(const std::string& baseUrl)
@@ -307,6 +339,100 @@ bool DelphiProxy::StopPlatePreview(const std::string& plateCode,
     std::string response;
     return PostJson("/preview/plate/" + plateCode + "/stop", body, response, timeoutMs) &&
         IsOkResponse(response);
+}
+
+bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
+                                      const std::string& requestId,
+                                      std::vector<unsigned char>& outJpeg,
+                                      int timeoutMs) {
+    constexpr size_t kMaxJpegBytes = 8U * 1024U * 1024U;
+    outJpeg.clear();
+    lastResultCode_ = HZCYKJTHardWare_RET_OK;
+
+    if (plateCode != "cj" && plateCode != "rj2" && plateCode != "rj3") {
+        lastResultCode_ = HZCYKJTHardWare_FRAME_INVALID_CAMERA;
+        return false;
+    }
+    if (requestId.empty()) {
+        lastResultCode_ = HZCYKJTHardWare_RET_INVALID_PARAM;
+        LOG_ERROR("代理服务", "获取最新车牌帧失败：request_id为空，车牌=%s",
+                  plateCode.c_str());
+        return false;
+    }
+    if (baseUrl_.empty()) {
+        lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
+        LOG_ERROR("代理服务", "获取最新车牌帧失败：基础地址为空，车牌=%s，request_id=%s",
+                  plateCode.c_str(), requestId.c_str());
+        return false;
+    }
+
+    auto& ctx = HzsjkjtContext::Instance();
+    auto* http = ctx.http_client;
+    if (!http) {
+        lastResultCode_ = HZCYKJTHardWare_RET_NOT_INITIALIZED;
+        LOG_ERROR("代理服务", "获取最新车牌帧失败：HTTP客户端未初始化，车牌=%s，request_id=%s",
+                  plateCode.c_str(), requestId.c_str());
+        return false;
+    }
+
+    int connectTimeout = ctx.http_connect_timeout_ms;
+    int requestTimeout = ctx.http_request_timeout_ms;
+    if (timeoutMs > 0) {
+        connectTimeout = (std::min)(connectTimeout, timeoutMs);
+        requestTimeout = timeoutMs;
+    }
+
+    const std::string path = "/preview/plate/" + plateCode + "/latest-frame";
+    const std::string body = "{" + JsonStringField("request_id", requestId) + "}";
+    const std::string url = BuildUrl(path);
+    std::string response;
+    int statusCode = 0;
+    LOG_DEBUG("代理服务", "获取最新车牌帧：车牌=%s，地址=%s，request_id=%s",
+              plateCode.c_str(), url.c_str(), requestId.c_str());
+
+    const bool posted = http->PostBinary(url, body, connectTimeout, requestTimeout,
+                                         kMaxJpegBytes, response, statusCode);
+    if (!posted) {
+        if (statusCode == -1)
+            lastResultCode_ = HZCYKJTHardWare_FRAME_TOO_LARGE;
+        else if (statusCode == -2)
+            lastResultCode_ = HZCYKJTHardWare_RET_TIMEOUT;
+        else
+            lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
+        LOG_ERROR("代理服务", "获取最新车牌帧失败：二进制HTTP请求失败，车牌=%s，"
+                  "状态=%d，request_id=%s，返回码=%d",
+                  plateCode.c_str(), statusCode, requestId.c_str(), lastResultCode_);
+        return false;
+    }
+
+    std::string errorCode;
+    std::string errorMessage;
+    const bool jsonLike = !response.empty() && response[0] == '{';
+    if (statusCode < 200 || statusCode >= 300 ||
+        (jsonLike && HasErrorResponse(response, errorCode, errorMessage))) {
+        lastResultCode_ = MapLatestPlateFrameErrorCode(errorCode);
+        LOG_ERROR("代理服务", "获取最新车牌帧被Proxy拒绝：车牌=%s，状态=%d，"
+                  "request_id=%s，错误码=%s，消息=%s，返回码=%d",
+                  plateCode.c_str(), statusCode, requestId.c_str(),
+                  errorCode.empty() ? "unknown" : errorCode.c_str(),
+                  errorMessage.empty() ? "" : errorMessage.c_str(),
+                  lastResultCode_);
+        return false;
+    }
+
+    if (response.size() > kMaxJpegBytes || !HasJpegSignature(response)) {
+        lastResultCode_ = response.size() > kMaxJpegBytes
+            ? HZCYKJTHardWare_FRAME_TOO_LARGE
+            : HZCYKJTHardWare_FRAME_DATA_INVALID;
+        LOG_ERROR("代理服务", "获取最新车牌帧失败：响应不是有效JPEG，车牌=%s，"
+                  "request_id=%s，bytes=%zu，返回码=%d",
+                  plateCode.c_str(), requestId.c_str(), response.size(),
+                  lastResultCode_);
+        return false;
+    }
+
+    outJpeg.assign(response.begin(), response.end());
+    return true;
 }
 
 bool DelphiProxy::RequestAuthorize(const std::string& requestId,

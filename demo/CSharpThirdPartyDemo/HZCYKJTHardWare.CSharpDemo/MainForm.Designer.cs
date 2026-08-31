@@ -29,6 +29,11 @@ namespace HZCYKJTHardWare.CSharpDemo
         private Button btnNfc;
         private Button btnIrisCapture;
         private Button btnAuthorize;
+        private Label lblPlateSavePath;
+        private TextBox txtPlateSavePath;
+        private Button btnSavePlateCJ;
+        private Button btnSavePlateRJ2;
+        private Button btnSavePlateRJ3;
         private Label lblAuthSample;
         private Label lblAuthZJHM;
         private Label lblAuthZJLB;
@@ -86,6 +91,11 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.btnNfc = new Button();
             this.btnIrisCapture = new Button();
             this.btnAuthorize = new Button();
+            this.lblPlateSavePath = new Label();
+            this.txtPlateSavePath = new TextBox();
+            this.btnSavePlateCJ = new Button();
+            this.btnSavePlateRJ2 = new Button();
+            this.btnSavePlateRJ3 = new Button();
             this.lblAuthSample = new Label();
             this.lblAuthZJHM = new Label();
             this.lblAuthZJLB = new Label();
@@ -136,6 +146,11 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.panelTop.Controls.Add(this.btnNfc);
             this.panelTop.Controls.Add(this.btnIrisCapture);
             this.panelTop.Controls.Add(this.btnAuthorize);
+            this.panelTop.Controls.Add(this.lblPlateSavePath);
+            this.panelTop.Controls.Add(this.txtPlateSavePath);
+            this.panelTop.Controls.Add(this.btnSavePlateCJ);
+            this.panelTop.Controls.Add(this.btnSavePlateRJ2);
+            this.panelTop.Controls.Add(this.btnSavePlateRJ3);
             this.panelTop.Controls.Add(this.lblAuthSample);
             this.panelTop.Controls.Add(this.lblAuthZJHM);
             this.panelTop.Controls.Add(this.lblAuthZJLB);
@@ -154,7 +169,7 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.panelTop.Dock = DockStyle.Top;
             this.panelTop.Location = new Point(0, 0);
             this.panelTop.Name = "panelTop";
-            this.panelTop.Size = new Size(964, 208);
+            this.panelTop.Size = new Size(964, 246);
             this.panelTop.TabIndex = 0;
             //
             // btnInit
@@ -351,6 +366,53 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.btnAuthorize.UseVisualStyleBackColor = true;
             this.btnAuthorize.Click += this.btnAuthorize_Click;
             //
+            // lblPlateSavePath
+            //
+            this.lblPlateSavePath.AutoSize = true;
+            this.lblPlateSavePath.Location = new Point(8, 217);
+            this.lblPlateSavePath.Name = "lblPlateSavePath";
+            this.lblPlateSavePath.Size = new Size(78, 14);
+            this.lblPlateSavePath.TabIndex = 24;
+            this.lblPlateSavePath.Text = "车牌图片路径";
+            //
+            // txtPlateSavePath
+            //
+            this.txtPlateSavePath.Location = new Point(90, 212);
+            this.txtPlateSavePath.Name = "txtPlateSavePath";
+            this.txtPlateSavePath.Size = new Size(390, 22);
+            this.txtPlateSavePath.TabIndex = 25;
+            this.txtPlateSavePath.Text = @".\captures\plate.jpg";
+            //
+            // btnSavePlateCJ
+            //
+            this.btnSavePlateCJ.Location = new Point(490, 210);
+            this.btnSavePlateCJ.Name = "btnSavePlateCJ";
+            this.btnSavePlateCJ.Size = new Size(110, 25);
+            this.btnSavePlateCJ.TabIndex = 26;
+            this.btnSavePlateCJ.Text = "保存 CJ";
+            this.btnSavePlateCJ.UseVisualStyleBackColor = true;
+            this.btnSavePlateCJ.Click += this.btnSavePlateCJ_Click;
+            //
+            // btnSavePlateRJ2
+            //
+            this.btnSavePlateRJ2.Location = new Point(606, 210);
+            this.btnSavePlateRJ2.Name = "btnSavePlateRJ2";
+            this.btnSavePlateRJ2.Size = new Size(110, 25);
+            this.btnSavePlateRJ2.TabIndex = 27;
+            this.btnSavePlateRJ2.Text = "保存 RJ2";
+            this.btnSavePlateRJ2.UseVisualStyleBackColor = true;
+            this.btnSavePlateRJ2.Click += this.btnSavePlateRJ2_Click;
+            //
+            // btnSavePlateRJ3
+            //
+            this.btnSavePlateRJ3.Location = new Point(722, 210);
+            this.btnSavePlateRJ3.Name = "btnSavePlateRJ3";
+            this.btnSavePlateRJ3.Size = new Size(110, 25);
+            this.btnSavePlateRJ3.TabIndex = 28;
+            this.btnSavePlateRJ3.Text = "保存 RJ3";
+            this.btnSavePlateRJ3.UseVisualStyleBackColor = true;
+            this.btnSavePlateRJ3.Click += this.btnSavePlateRJ3_Click;
+            //
             // labels and auth inputs
             //
             this.lblAuthSample.AutoSize = true;
@@ -419,7 +481,7 @@ namespace HZCYKJTHardWare.CSharpDemo
             this.previewLayout.Controls.Add(this.panelPlateRJ2, 1, 1);
             this.previewLayout.Controls.Add(this.panelPlateRJ3, 2, 1);
             this.previewLayout.Dock = DockStyle.Fill;
-            this.previewLayout.Location = new Point(0, 208);
+            this.previewLayout.Location = new Point(0, 246);
             this.previewLayout.Name = "previewLayout";
             this.previewLayout.RowCount = 2;
             this.previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));

@@ -24,6 +24,17 @@ public:
                   std::string& responseBody,
                   int& responseStatusCode);
 
+    // 发送 JSON 请求并接收二进制响应（用于最新车牌 JPEG）。
+    // maxResponseBytes > 0 时，超过上限会返回 false，并将状态码置为 -1；
+    // WinHTTP 超时会将状态码置为内部值 -2。
+    bool PostBinary(const std::string& url,
+                    const std::string& body,
+                    int connectTimeoutMs,
+                    int requestTimeoutMs,
+                    size_t maxResponseBytes,
+                    std::string& responseBody,
+                    int& responseStatusCode);
+
     // 发送 GET 请求（用于终端状态检测）
     bool Get(const std::string& url,
              int connectTimeoutMs,

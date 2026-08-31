@@ -13,12 +13,16 @@ namespace HZCYKJTHardWare.Proxy.Server
 {
     public class TerminalCallbackHandler
     {
+        private static readonly long IcCardCallbackSuppressedLogIntervalTicks =
+            TimeSpan.FromSeconds(5).Ticks;
         private readonly TerminalClient _terminalClient;
         private readonly TerminalManager _terminalManager;
         private readonly DllCallbackSender _dllCallback;
         private readonly RequestRegistry _requestRegistry;
         private readonly TerminalProcessRegistry _processRegistry;
         private readonly Action<string> _log;
+        private readonly Func<bool> _isIcCardCallbackEnabled;
+        private long _lastIcCardCallbackSuppressedLogUtcTicks;
 
         internal TerminalCallbackHandler(
             TerminalClient terminalClient,
@@ -27,6 +31,19 @@ namespace HZCYKJTHardWare.Proxy.Server
             RequestRegistry requestRegistry,
             TerminalProcessRegistry processRegistry,
             Action<string> log)
+            : this(terminalClient, terminalManager, dllCallback, requestRegistry,
+                processRegistry, log, null)
+        {
+        }
+
+        internal TerminalCallbackHandler(
+            TerminalClient terminalClient,
+            TerminalManager terminalManager,
+            DllCallbackSender dllCallback,
+            RequestRegistry requestRegistry,
+            TerminalProcessRegistry processRegistry,
+            Action<string> log,
+            Func<bool> isIcCardCallbackEnabled)
         {
             _terminalClient = terminalClient;
             _terminalManager = terminalManager;
@@ -34,6 +51,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             _requestRegistry = requestRegistry;
             _processRegistry = processRegistry;
             _log = log;
+            _isIcCardCallbackEnabled = isIcCardCallbackEnabled ??
+                (() => AppConfig.Instance.EnableIcCardCallback);
         }
 
         public async Task<string> HandleAsync(string bodyUtf8,
@@ -239,6 +258,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
 
             _log($"[IC卡回调] 卡片文本={result.CardText}");
+
+            if (!_isIcCardCallbackEnabled())
+            {
+                LogIcCardCallbackSuppressed(route);
+                CompleteWithoutDelivery(route);
+                return;
+            }
 
             if (!CanDeliver(route, "NFC")) return;
             var delivery = await _dllCallback.SendNfcResult(route.DeliveryRequestId,
@@ -689,6 +715,35 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!route.Persistent)
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             return false;
+        }
+
+        private void LogIcCardCallbackSuppressed(CallbackRoute route)
+        {
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var lastTicks = Interlocked.Read(
+                ref _lastIcCardCallbackSuppressedLogUtcTicks);
+            if (lastTicks != 0 &&
+                nowTicks - lastTicks < IcCardCallbackSuppressedLogIntervalTicks)
+                return;
+
+            if (Interlocked.CompareExchange(
+                    ref _lastIcCardCallbackSuppressedLogUtcTicks,
+                    nowTicks, lastTicks) != lastTicks)
+                return;
+
+            _log?.Invoke("[IC卡回调] 已收到终端IC卡数据，第三方回调已关闭，本次不推送：" +
+                $"request_id={route.SourceRequestId}");
+        }
+
+        private void CompleteWithoutDelivery(CallbackRoute route)
+        {
+            if (route == null || route.Persistent)
+                return;
+
+            // 一次性请求必须收尾，避免关闭回调期间一直占用活动请求；
+            // 流程型事件已由 TerminalProcessRegistry 记录去重，不建立待补发队列。
+            _requestRegistry.Complete(route.SourceRequestId,
+                route.ResourceType);
         }
 
         private void FinishDelivery(CallbackRoute route,

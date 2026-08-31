@@ -113,6 +113,28 @@ namespace HZCYKJTHardWare.Proxy.Server
         }
 
         /// <summary>
+        /// 向 NetworkStream 写入二进制响应，例如最新车牌 JPEG。
+        /// </summary>
+        public static async Task WriteHttpResponseAsync(NetworkStream stream,
+            int statusCode, string contentType, byte[] body,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var statusText = statusCode == 200 ? "OK" : statusCode == 202 ? "Accepted" : "Error";
+            var bodyBytes = body ?? new byte[0];
+            var responseContentType = string.IsNullOrWhiteSpace(contentType)
+                ? "application/octet-stream"
+                : contentType;
+            var header = $"HTTP/1.1 {statusCode} {statusText}\r\nContent-Type: {responseContentType}\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n";
+            var headerBytes = Encoding.UTF8.GetBytes(header);
+
+            await stream.WriteAsync(headerBytes, 0, headerBytes.Length,
+                cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(bodyBytes, 0, bodyBytes.Length,
+                cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// 向 TcpClient 写入 503 Service Busy 响应并关闭连接。
         /// 实现与原 ProxyServer.RejectBusyClient 保持一致。
         /// </summary>

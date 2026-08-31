@@ -78,6 +78,12 @@ public:
                           const std::string& requestId,
                           int timeoutMs = -1);
 
+    // 获取 Proxy 已缓存的最新完整 JPEG。图片数据仅在 DLL 内部使用，调用方不接触 Buffer。
+    bool GetLatestPlateFrame(const std::string& plateCode,
+                             const std::string& requestId,
+                             std::vector<unsigned char>& outJpeg,
+                             int timeoutMs = 5000);
+
     bool RequestAuthorize(const std::string& requestId,
                           const std::string& ZJHM,
                           const std::string& ZJLB,

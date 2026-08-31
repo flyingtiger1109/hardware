@@ -55,10 +55,11 @@ InitSdk
   → ReleaseSdk
 ```
 
-- 所有接口返回 `1` 表示成功或请求已受理；返回非 `1` 表示失败，具体错误码见 `include/HZCYKJTHardWare_types.h`。
+- 既有接口仍返回 `1` 表示成功或请求已受理、`0` 表示失败；新增的 `HZCYKJTHardWare_SaveLatestPlateFrame` 为同步例外，成功返回 `1`，失败直接返回负数错误码，具体错误码见 `include/HZCYKJTHardWare_types.h`。
 - 人脸、指纹抓拍为同步接口。
 - 虹膜、OCR、NFC 和授权为异步接口，最终结果通过已注册事件回调返回。
 - 预览启动请求被受理后，运行结果也通过事件回调通知。
+- 最新车牌帧保存要求对应的 CJ、RJ2 或 RJ3 预览已经启动，调用方只需提供完整保存路径和镜头类型。
 
 ## 导出接口
 
@@ -70,6 +71,7 @@ InitSdk
 | 事件回调 | `HZCYKJTHardWare_RegisterEventCallback` |
 | 终端和流程 | `HZCYKJTHardWare_SwitchTerminal`、`HZCYKJTHardWare_StartProcess`、`HZCYKJTHardWare_EndProcess` |
 | 预览 | `Start/StopCameraPreview`、`Start/StopFingerprintPreview`、`Start/StopIrisPreview`、`Start/StopPlatePreviewCJ`、`Start/StopPlatePreviewRJ2`、`Start/StopPlatePreviewRJ3` |
+| 最新车牌帧 | `HZCYKJTHardWare_SaveLatestPlateFrame(savePath, cameraType)` |
 | 图像采集 | `HZCYKJTHardWare_CaptureCameraImage`、`HZCYKJTHardWare_CaptureFingerprintImage`、`HZCYKJTHardWare_CaptureIrisImage` |
 | 异步识别 | `HZCYKJTHardWare_RequestOCR`、`HZCYKJTHardWare_RequestNfcCard`、`HZCYKJTHardWare_RequestAuthorize` |
 
@@ -84,6 +86,7 @@ InitSdk
 ```csharp
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 internal static class Native
 {
@@ -101,10 +104,37 @@ internal static class Native
 
     [DllImport("HZCYKJTHardWare.dll", CallingConvention = CallingConvention.StdCall)]
     internal static extern int HZCYKJTHardWare_ReleaseSdk();
+
+    [DllImport("HZCYKJTHardWare.dll", CallingConvention = CallingConvention.StdCall,
+        ExactSpelling = true)]
+    internal static extern int HZCYKJTHardWare_SaveLatestPlateFrame(
+        IntPtr savePath, int cameraType);
 }
 ```
 
 请将回调委托保存在长期有效的字段中，避免被 GC 回收。回调线程不是 UI 线程；WinForms/WPF 更新界面时必须切回 UI 线程。
+
+保存 CJ 最新车牌帧的 C# 调用示例（RJ2/RJ3 分别将镜头类型改为 `2`/`3`）：
+
+```csharp
+const int PlateCameraCj = 1;
+var pathBytes = Encoding.UTF8.GetBytes(@"D:\Images\cj.jpg");
+var pathPtr = Marshal.AllocHGlobal(pathBytes.Length + 1);
+try
+{
+    Marshal.Copy(pathBytes, 0, pathPtr, pathBytes.Length);
+    Marshal.WriteByte(pathPtr, pathBytes.Length, 0);
+    int ret = Native.HZCYKJTHardWare_SaveLatestPlateFrame(
+        pathPtr, PlateCameraCj);
+    // ret == 1 表示保存成功；负数表示失败，详见接口文档。
+}
+finally
+{
+    Marshal.FreeHGlobal(pathPtr);
+}
+```
+
+`savePath` 是完整文件路径，接口不会自动追加文件名；调用前必须先启动对应车牌预览。目录不存在时 DLL 会自动创建，并通过临时文件 + 原子替换保证目标文件不会留下半张 JPEG。
 
 ## 配置要点
 

@@ -388,6 +388,29 @@ namespace HZCYKJTHardWare.Proxy.Server
                             $"request_id={requestLogId}，正文长度={(body ?? "").Length}"));
                     }
 
+                    if (DllCommandHandler.IsLatestPlateFramePath(requestPath))
+                    {
+                        var binaryResponse = await _commandHandler
+                            .HandleLatestPlateFrameAsync(method, path, body)
+                            .ConfigureAwait(false);
+                        try
+                        {
+                            await WriteBinaryHttpResponseWithDeadlineAsync(client, stream,
+                                binaryResponse.StatusCode, binaryResponse.ContentType,
+                                binaryResponse.Body, 5000).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            binaryResponse.Dispose();
+                        }
+
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
+                            $"来源=DLL，EXE完成HTTP请求：路径={requestPath}，request_id={requestLogId}，" +
+                            $"状态={binaryResponse.StatusCode}，耗时={requestSw.ElapsedMilliseconds}毫秒，" +
+                            $"响应长度={binaryResponse.Body.Length}"));
+                        return;
+                    }
+
                     var result = await _commandHandler.HandleAsync(method, path, body);
                     await WriteHttpResponseWithDeadlineAsync(client, stream, 200,
                         result, 2000).ConfigureAwait(false);
@@ -575,6 +598,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 await HttpProtocolHandler.WriteHttpResponseAsync(stream, statusCode,
                     body, cancellation.Token).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task WriteBinaryHttpResponseWithDeadlineAsync(TcpClient client,
+            NetworkStream stream, int statusCode, string contentType, byte[] body,
+            int timeoutMs)
+        {
+            using (var cancellation = new CancellationTokenSource(timeoutMs))
+            using (cancellation.Token.Register(() => CloseClient(client)))
+            {
+                await HttpProtocolHandler.WriteHttpResponseAsync(stream, statusCode,
+                    contentType, body, cancellation.Token).ConfigureAwait(false);
             }
         }
 

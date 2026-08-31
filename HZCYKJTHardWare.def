@@ -18,6 +18,7 @@ EXPORTS
     HZCYKJTHardWare_StopPlatePreviewRJ2
     HZCYKJTHardWare_StartPlatePreviewRJ3
     HZCYKJTHardWare_StopPlatePreviewRJ3
+    HZCYKJTHardWare_SaveLatestPlateFrame
     HZCYKJTHardWare_CaptureCameraImage
     HZCYKJTHardWare_CaptureFingerprintImage
     HZCYKJTHardWare_CaptureIrisImage

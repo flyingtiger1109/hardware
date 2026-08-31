@@ -43,3 +43,22 @@ DelphiThirdPartyDemo
 - 预览画面视觉上按传入窗口区域居中裁切铺满；Delphi 服务端使用本进程覆盖容器承载 VLC，并随第三方窗口位置及自然遮挡关系更新。
 - 本示例的摄像头和指纹启动按钮通过后台线程调用 DLL，结果通过窗口消息回到 UI 线程，避免第三方界面线程在预览启动期间被同步阻塞。
 - Delphi 服务端自身的预览与本示例发起的第三方预览为独立会话；终端支持并发流时可同时显示同一种资源。
+
+## 最新车牌帧保存接口
+
+对应 CJ、RJ2 或 RJ3 预览已经启动后，第三方只需传入完整保存路径和镜头类型：
+
+```pascal
+function HZCYKJTHardWare_SaveLatestPlateFrame(
+  SavePath: PAnsiChar; CameraType: Integer): Integer; stdcall; external DLL_NAME;
+
+const
+  PLATE_CAMERA_CJ  = 1;
+  PLATE_CAMERA_RJ2 = 2;
+  PLATE_CAMERA_RJ3 = 3;
+
+Ret := HZCYKJTHardWare_SaveLatestPlateFrame(
+  PAnsiChar(AnsiString('D:\Images\cj.jpg')), PLATE_CAMERA_CJ);
+```
+
+成功返回 `1`；失败返回负数错误码。DLL 会自动创建父目录，并通过同目录临时文件和原子替换保存完整 JPEG；失败时不会覆盖原目标文件。既有 DLL 接口的 `1/0` 行为不变。

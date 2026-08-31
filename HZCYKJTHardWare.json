@@ -7,6 +7,8 @@
   },
   // 第三方调用方输入字符编码，auto=自动识别，也可指定 gbk 或 utf8
   "third_party_input_encoding": "auto",
+  // 是否将终端 IC 卡结果继续回调给第三方；缺失或无效时默认启用
+  "enable_ic_card_callback": false,
   // 代理服务连接配置
   "delphi_server": {
     // 代理服务地址

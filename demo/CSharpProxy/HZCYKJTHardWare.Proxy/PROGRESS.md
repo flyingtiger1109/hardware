@@ -4504,3 +4504,66 @@ C# Proxy 外部预览窗口时序修复验证阶段。
 ## 回退方式
 
 恢复 `Preview/PreviewManager.cs`、`PreviewRecoveryPolicyTests.cs` 和本节进度记录即可；不涉及 DLL ABI 或第三方调用代码。
+
+# CJ / RJ2 / RJ3 最新车牌帧精确路径保存接口（2026-08-30）
+
+## 当前阶段
+
+- [x] 已增加 DLL 高层同步接口：第三方只需传入完整保存路径和镜头类型。
+- [x] 已完成 C# Proxy 最新 JPEG 缓存、二进制 HTTP 响应和帧新鲜度检查。
+- [x] 已完成 Native DLL 的 ANSI/GBK 路径处理、自动创建父目录和原子覆盖保存。
+- [x] 已更新 Delphi7 Demo，并同步更新 C# 第三方 Demo 的原生声明、完整路径输入框、CJ/RJ2/RJ3 保存按钮和调用示例。
+- [x] C# 第三方 Demo 已移除 Native DLL 的编译期复制依赖，可独立编译生成 EXE；Native DLL 仅作为运行时调用依赖。
+- [x] 第三方接口文档已补充 Delphi 7 调用示例，并明确 `cameraType=1/2/3` 的 CJ/RJ2/RJ3 映射。
+
+## 本次修改内容
+
+1. 新增 `HZCYKJTHardWare_SaveLatestPlateFrame(const char*, int)`；成功返回 `1`，失败直接返回负数错误码。既有 DLL 接口继续保持原来的 `1/0` 行为。
+2. 新增 CJ、RJ2、RJ3 镜头常量以及 `FRAME_NOT_READY`、`FRAME_INVALID_CAMERA`、`FRAME_DATA_INVALID`、`FRAME_TOO_LARGE`、`FRAME_STALE` 错误码。
+3. C# Proxy 复用现有车牌 VLC 播放会话，每 200ms 获取一张最新 JPEG；缓存只保留单帧，设置 8MB 上限，按 JPEG SOF 解析实际尺寸，并拒绝过期或断流帧。
+4. 增加 `/preview/plate/{cj|rj2|rj3}/latest-frame` 内部 POST 接口；成功响应为 `image/jpeg` 二进制，失败响应为 JSON，限制并发响应数量避免内存无界增长。
+5. Native DLL 直接复制 JPEG 二进制到第三方指定的完整路径，先写同目录临时文件并使用 `MoveFileExW` 原子替换；写入失败清理临时文件并保留原目标文件。
+6. Delphi7 Demo 增加保存路径输入框和 CJ、RJ2、RJ3 保存按钮；C# 第三方 Demo 增加新导出声明、UTF-8 `IntPtr` 调用、完整路径输入框、三个镜头保存按钮和负数错误码提示，并取消 Native DLL 的编译期文件引用。
+
+## 涉及文件
+
+- Native：`include/HZCYKJTHardWare.h`、`include/HZCYKJTHardWare_types.h`、`HZCYKJTHardWare.def`、`src/exports.cpp`、`src/delphi_proxy.cpp`、`src/delphi_proxy.h`、`src/http_client.cpp`、`src/http_client.h`、`src/image_saver.cpp`、`src/image_saver.h`。
+- C# Proxy：`Preview/LatestPlateFrame.cs`、`Preview/VlcPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Preview/PreviewManager.cs`、`Infrastructure/DeviceCapabilityManager.cs`、`Server/DllBinaryResponse.cs`、`Server/DllCommandHandler.cs`、`Server/HttpProtocolHandler.cs`、`Server/ProxyServer.cs`。
+- Demo/文档/测试：`demo/DelphiThirdPartyDemo/MainUnit.pas`、`demo/DelphiThirdPartyDemo/MainUnit.dfm`、`demo/DelphiThirdPartyDemo/README.md`、`demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/HZCYKJTHardWare.CSharpDemo.csproj`、`demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/Native/HzcyHardwareNative.cs`、`demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.cs`、`demo/CSharpThirdPartyDemo/HZCYKJTHardWare.CSharpDemo/MainForm.Designer.cs`、`demo/CSharpThirdPartyDemo/README.md`、`第三方接口调用说明.md`、`README.md`、`Preview/LatestPlateFrameTests.cs`。
+
+## 兼容性说明
+
+- 新接口为新增导出，使用 `extern "C"`、`__stdcall`、`const char*`、`int`；既有导出函数名、参数顺序、调用约定、结构体和回调签名未改变。
+- 对外路径继续使用 `char*`，Native 按配置支持 ANSI/GBK 输入并转换为 Unicode 文件路径；不自动追加文件名或扩展名。
+- C# Proxy 继续使用现有 `.NET Framework 4.6`、x86 运行方式；Native 已验证 Win32 Release 构建。
+- C# 第三方 Demo 编译阶段不再要求 Native DLL；实际运行并调用导出接口时，仍需按部署说明提供匹配位数的 Native DLL。
+- 保存接口不自动启动、重连预览，也不新增 RTSP 连接或 VLC 播放器实例；调用前必须先启动对应车牌预览。
+
+## 风险与注意事项
+
+1. 当前接口只保存内部判定为新鲜的最新帧，不返回时间戳或序列号；尚无真实设备现场验证。
+2. 如果视频源经过不支持的 HTTP MJPEG 播放分支而不是 VLC 车牌会话，需结合实际终端地址确认该会话是否能产生最新帧缓存。
+3. 连续 1000 次、多线程同一路径覆盖、目录权限/磁盘不足和 24 小时稳定性仍需现场验证。
+
+## 验证状态
+
+- [x] C# Proxy `Release|x86`：编译成功，0 警告、0 错误。
+- [x] C# 第三方 Demo `Release|x86`：编译成功，0 警告、0 错误。
+- [x] C# 第三方 Demo 独立输出验证：不提供 Native DLL 时仍生成 EXE，0 警告、0 错误。
+- [x] C# Tests `Release|x86`：编译成功；有 NuGet 漏洞审计源不可访问的 `NU1900` 环境警告。
+- [x] 最新帧定向测试：`LatestPlateFrameTests` 3/3 通过。
+- [x] Native DLL `Release|Win32`：Rebuild 成功，0 警告、0 错误。
+- [x] `dumpbin /exports`：确认 `HZCYKJTHardWare_SaveLatestPlateFrame = _HZCYKJTHardWare_SaveLatestPlateFrame@8`。
+- [x] Delphi7 Demo：`dcc32` 编译成功。
+- [ ] C# Tests 全量：142 个中 129 个通过、13 个失败；失败为既有版本号断言、net46 测试宿主不支持 `HttpListener` 以及既有异步断言，未归因于本功能。
+- [ ] 真实设备：CJ/RJ2/RJ3 实际取帧、中文路径、原子覆盖、并发压力和长稳测试待现场验证。
+
+## 下一步计划
+
+- [ ] 在 x86 Release 部署目录放置 Proxy、Native DLL、VLC 依赖后，分别启动 CJ/RJ2/RJ3 预览并验证保存结果可由标准 JPEG 解码器打开。
+- [ ] 执行 1000 次连续调用、不同路径并发调用和同一路径并发覆盖测试，检查文件完整性、临时文件清理、句柄和私有内存增长。
+- [ ] 断开 RTSP、等待缓存过期，确认返回 `FRAME_STALE` 且不覆盖原目标文件。
+
+## 回退方式
+
+仅回退本节列出的新增最新帧相关 Native、C# Proxy、Demo 和测试改动；不删除、不替换既有 DLL ABI 和原有预览接口。

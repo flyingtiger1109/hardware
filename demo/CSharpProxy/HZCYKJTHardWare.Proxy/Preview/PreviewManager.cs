@@ -248,9 +248,93 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 case PreviewResourceType.PlateCJ:
                 case PreviewResourceType.PlateRJ2:
                 case PreviewResourceType.PlateRJ3:
-                    return (1920, 1080, false);
+                    // 车牌流的实际尺寸由 VLC 解码结果/JPEG SOF 提取，不能写死。
+                    return (0, 0, false);
                 default: return (640, 480, false);
             }
+        }
+
+        private static bool IsPlateResource(PreviewResourceType resType)
+        {
+            return resType == PreviewResourceType.PlateCJ ||
+                   resType == PreviewResourceType.PlateRJ2 ||
+                   resType == PreviewResourceType.PlateRJ3;
+        }
+
+        /// <summary>
+        /// 读取 DLL 对应的外部车牌预览会话中的最新完整 JPEG。
+        /// 该方法只读取已缓存帧，不启动、重连或创建新的播放器。
+        /// </summary>
+        internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
+            string requestId, out LatestPlateFrameSnapshot snapshot,
+            out string errorCode, out string errorMessage)
+        {
+            snapshot = null;
+            errorCode = "frame_not_ready";
+            errorMessage = "车牌视频尚未产生可用帧";
+
+            if (!IsPlateResource(resType))
+            {
+                errorCode = "invalid_camera";
+                errorMessage = "不是车牌镜头资源";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(requestId))
+            {
+                errorCode = "invalid_request_id";
+                errorMessage = "request_id为空";
+                return false;
+            }
+
+            var key = SessionKey(resType, PreviewSessionType.External);
+            if (!_sessions.TryGetValue(key, out var session) || session == null)
+            {
+                errorCode = "preview_not_running";
+                errorMessage = "对应车牌预览未运行";
+                return false;
+            }
+            if (!string.Equals(session.RequestId, requestId, StringComparison.Ordinal))
+            {
+                errorCode = "preview_not_running";
+                errorMessage = "车牌预览请求已变更或已停止";
+                return false;
+            }
+
+            var vlc = session.Player as VlcPreviewController;
+            if (vlc == null || !vlc.TryGetLatestFrame(out snapshot))
+            {
+                if (vlc != null && vlc.LatestFrameFailure ==
+                    VlcPreviewController.LatestFrameFailureTooLarge)
+                {
+                    errorCode = "frame_too_large";
+                    errorMessage = "车牌视频JPEG超过8MB限制";
+                }
+                else if (vlc != null && vlc.LatestFrameFailure ==
+                    VlcPreviewController.LatestFrameFailureDataInvalid)
+                {
+                    errorCode = "frame_data_invalid";
+                    errorMessage = "车牌视频未产生有效JPEG帧";
+                }
+                else
+                {
+                    errorCode = "frame_not_ready";
+                    errorMessage = "车牌视频尚未产生完整JPEG帧";
+                }
+                snapshot = null;
+                return false;
+            }
+
+            var ageMs = (DateTime.UtcNow - snapshot.CapturedUtc).TotalMilliseconds;
+            if (!session.IsRunning || !vlc.IsLatestFrameSourceRunning || ageMs < 0 ||
+                ageMs > VlcPreviewController.LatestPlateFrameMaxAgeMs)
+            {
+                errorCode = "frame_stale";
+                errorMessage = "车牌视频帧已过期或视频已断开";
+                snapshot = null;
+                return false;
+            }
+
+            return true;
         }
 
         private static string PreviewUrlCacheKey(PreviewResourceType resType, string terminalBaseUrl)
@@ -497,7 +581,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var playTick = totalSw.ElapsedMilliseconds;
             var description = BuildTraceDescription($"{ResourceToName(resType)} {SessionToName(sessionType)}", requestId);
             player = await StartPreviewPlayerAsync(key, description, rtspUrl, parentHwnd, srcW, srcH, swap,
-                isHttpPreview, effectiveDirectRenderTarget, allowVlcFallback, requestId)
+                isHttpPreview, effectiveDirectRenderTarget, allowVlcFallback, requestId,
+                captureLatestFrame: IsPlateResource(resType))
                 .ConfigureAwait(false);
             var playElapsed = totalSw.ElapsedMilliseconds - playTick;
             var ok2 = player != null && player.IsRunning;
@@ -526,7 +611,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         await WarmupPreviewStreamIfNeeded(resType, rtspUrl, parentHwnd, srcW, srcH, swap, requestId).ConfigureAwait(false);
                     playTick = totalSw.ElapsedMilliseconds;
                     player = await StartPreviewPlayerAsync(key, description, rtspUrl, parentHwnd, srcW, srcH, swap,
-                        isHttpPreview, effectiveDirectRenderTarget, allowVlcFallback, requestId)
+                        isHttpPreview, effectiveDirectRenderTarget, allowVlcFallback, requestId,
+                        captureLatestFrame: IsPlateResource(resType))
                         .ConfigureAwait(false);
                     playElapsed = totalSw.ElapsedMilliseconds - playTick;
                     ok2 = player != null && player.IsRunning;
@@ -601,7 +687,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private async Task<IPreviewController> StartPreviewPlayerAsync(string key, string description, string previewUrl,
             IntPtr parentHwnd, int srcW, int srcH, bool swap, bool isHttpPreview,
-            bool directRenderTarget = false, bool allowVlcFallback = true, string requestId = null)
+            bool directRenderTarget = false, bool allowVlcFallback = true, string requestId = null,
+            bool captureLatestFrame = false)
         {
             if (isHttpPreview && !await WaitForMjpegWorkerCleanupAsync(key, VlcPlayTimeoutMs)
                     .ConfigureAwait(false))
@@ -655,7 +742,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var vlcPlayer = await VlcPreviewController.StartAsync(description, previewUrl, parentHwnd,
                 _networkCachingMs, _liveCachingMs, _rtspTransport, srcW, srcH, swap,
                 visible: true, timeoutMs: VlcPlayTimeoutMs,
-                directRenderTarget: directRenderTarget, requestId: requestId).ConfigureAwait(false);
+                directRenderTarget: directRenderTarget, requestId: requestId,
+                captureLatestFrame: captureLatestFrame).ConfigureAwait(false);
             if (vlcPlayer != null && vlcPlayer.IsRunning)
                 Logger.Debug($"预览播放器选择：VLC，会话={key}，{TraceRequest(requestId)}");
 
@@ -792,7 +880,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         var replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
                             recoveryHwnd, srcW, srcH, swap, isHttpPreview,
                             directRenderTarget: true, allowVlcFallback: false,
-                            current.RequestId).ConfigureAwait(false);
+                            current.RequestId,
+                            captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
                         if (replacement != null && replacement.IsRunning)
                         {
                             current.Generation = Interlocked.Increment(ref _sessionGeneration);
@@ -993,7 +1082,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         var allowVlcFallback = !terminalMjpegResource;
                         var replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
                             recoveryHwnd, srcW, srcH, swap, isHttpPreview,
-                            effectiveDirectRenderTarget, allowVlcFallback, current.RequestId).ConfigureAwait(false);
+                            effectiveDirectRenderTarget, allowVlcFallback, current.RequestId,
+                            captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
                         if (replacement != null && replacement.IsRunning)
                         {
                             // 替换操作创建新的生命周期代次。新实例立即失败时，不得因当前代次任务结束而抑制其恢复。

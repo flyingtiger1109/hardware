@@ -10,7 +10,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
 {
     public class VlcPreviewPlayer : IDisposable
     {
-        private readonly string _traceDescription;
         private IntPtr _libVlcCoreHandle;
         private IntPtr _libVlcHandle;
         private IntPtr _vlcInstance;
@@ -26,15 +25,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const ushort ImageFileMachineAmd64 = 0x8664;
         private static readonly object RiskyPluginCheckLock = new object();
         private static readonly HashSet<string> RiskyPluginCheckedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        public VlcPreviewPlayer(string traceDescription = null)
-        {
-            _traceDescription = traceDescription ?? "";
-        }
-
-        private string TraceSuffix => string.IsNullOrWhiteSpace(_traceDescription)
-            ? ""
-            : $"，追踪={_traceDescription}";
 
         // Cover 布局使用的源图像尺寸
         private int _sourceWidth;
@@ -57,6 +47,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private delegate void LibvlcMediaPlayerStop(IntPtr player);
         private delegate int LibvlcMediaPlayerGetState(IntPtr player);
         private delegate long LibvlcMediaPlayerGetTime(IntPtr player);
+        private delegate int LibvlcVideoTakeSnapshot(IntPtr player, uint num,
+            IntPtr path, uint width, uint height);
+        private delegate int LibvlcVideoGetSize(IntPtr player, uint num,
+            out uint width, out uint height);
         private delegate void LibvlcVideoSetAspectRatio(IntPtr player, IntPtr ratio);
         private delegate void LibvlcVideoSetScale(IntPtr player, float factor);
         private delegate void LibvlcVideoSetInput(IntPtr player, uint enabled);
@@ -73,6 +67,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private LibvlcMediaPlayerStop _fnPlayerStop;
         private LibvlcMediaPlayerGetState _fnPlayerGetState;
         private LibvlcMediaPlayerGetTime _fnPlayerGetTime;
+        private LibvlcVideoTakeSnapshot _fnVideoTakeSnapshot;
+        private LibvlcVideoGetSize _fnVideoGetSize;
         private LibvlcVideoSetAspectRatio _fnVideoSetAspectRatio;
         private LibvlcVideoSetScale _fnVideoSetScale;
         private LibvlcVideoSetInput _fnVideoSetMouseInput;
@@ -93,6 +89,65 @@ namespace HZCYKJTHardWare.Proxy.Preview
             ? 0 : _fnPlayerGetTime(_mediaPlayer);
 
         /// <summary>
+        /// 使用现有 VLC 播放器输出一张原始尺寸快照，不创建新的播放会话。
+        /// 必须由所属 VLC 预览线程调用，避免与播放器释放发生并发。
+        /// </summary>
+        internal bool TryTakeSnapshot(string path, int width = 0, int height = 0)
+        {
+            if (string.IsNullOrWhiteSpace(path) || _mediaPlayer == IntPtr.Zero ||
+                _fnVideoTakeSnapshot == null)
+                return false;
+            if (width < 0 || height < 0)
+                return false;
+
+            IntPtr pathPtr = IntPtr.Zero;
+            try
+            {
+                pathPtr = Marshal.StringToHGlobalAnsi(path);
+                return _fnVideoTakeSnapshot(_mediaPlayer, 0, pathPtr,
+                    (uint)width, (uint)height) == 0;
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug($"VLC快照调用异常: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                if (pathPtr != IntPtr.Zero)
+                    Marshal.FreeHGlobal(pathPtr);
+            }
+        }
+
+        /// <summary>读取 VLC 当前视频轨道的实际尺寸，读取不到时由调用方回退。</summary>
+        internal bool TryGetVideoSize(out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            if (_mediaPlayer == IntPtr.Zero || _fnVideoGetSize == null)
+                return false;
+
+            try
+            {
+                uint nativeWidth;
+                uint nativeHeight;
+                if (_fnVideoGetSize(_mediaPlayer, 0, out nativeWidth, out nativeHeight) != 0 ||
+                    nativeWidth == 0 || nativeHeight == 0 ||
+                    nativeWidth > int.MaxValue || nativeHeight > int.MaxValue)
+                    return false;
+
+                width = (int)nativeWidth;
+                height = (int)nativeHeight;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug($"VLC视频尺寸读取异常: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 预加载 VLC 库并创建短生命周期实例以预热 VLC 引擎，降低首次播放延迟。
         /// 行为与 Delphi TVlcWarmupThread 保持一致。
         /// </summary>
@@ -103,7 +158,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (!LoadVlc())
                 {
-                    Logger.Warn("VLC预热失败：无法加载VLC库");
+                    Logger.Warn("VLC预热失败: 无法加载VLC库");
                     return;
                 }
 
@@ -129,11 +184,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _fnRelease(instance);
                 }
                 WarmupMs = (int)sw.ElapsedMilliseconds;
-                Logger.Info($"VLC预热完成：耗时={WarmupMs}ms");
+                Logger.Info($"VLC预热完成: {WarmupMs}ms");
             }
             catch (Exception ex)
             {
-                Logger.Warn($"VLC预热失败：{ex.Message}");
+                Logger.Warn($"VLC预热失败: {ex.Message}");
             }
         }
 
@@ -171,7 +226,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (TryLoadFromDir(dir)) return true;
             }
 
-                Logger.Error("未找到 VLC");
+            Logger.Error("VLC not found");
             return false;
         }
 
@@ -192,9 +247,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     !IsPeMachineCompatible(libPath, is64BitProcess, out libMachine))
                 {
                     Logger.Warn(
-                        $"跳过架构不兼容的VLC目录：目录={dir}，" +
-                        $"进程架构={(is64BitProcess ? "x64" : "x86")}，" +
-                        $"libvlccore={FormatPeMachine(coreMachine)}，libvlc={FormatPeMachine(libMachine)}");
+                        $"Skipping incompatible VLC directory: dir={dir}, " +
+                        $"process={(is64BitProcess ? "x64" : "x86")}, " +
+                        $"libvlccore={FormatPeMachine(coreMachine)}, libvlc={FormatPeMachine(libMachine)}");
                     return false;
                 }
 
@@ -203,7 +258,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     LoadWithAlteredSearchPath);
                 if (_libVlcCoreHandle == IntPtr.Zero)
                 {
-                    Logger.Warn($"加载libvlccore.dll失败：路径={corePath}，错误={Marshal.GetLastWin32Error()}");
+                    Logger.Warn($"加载libvlccore.dll失败: path={corePath}, error={Marshal.GetLastWin32Error()}");
                     return false;
                 }
 
@@ -214,7 +269,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var error = Marshal.GetLastWin32Error();
                     FreeLibrary(_libVlcCoreHandle);
                     _libVlcCoreHandle = IntPtr.Zero;
-                    Logger.Warn($"加载libvlc.dll失败：路径={libPath}，错误={error}");
+                    Logger.Warn($"加载libvlc.dll失败: path={libPath}, error={error}");
                     return false;
                 }
 
@@ -230,6 +285,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnPlayerStop = GetDelegate<LibvlcMediaPlayerStop>("libvlc_media_player_stop");
                 _fnPlayerGetState = GetDelegate<LibvlcMediaPlayerGetState>("libvlc_media_player_get_state");
                 _fnPlayerGetTime = GetDelegate<LibvlcMediaPlayerGetTime>("libvlc_media_player_get_time");
+                _fnVideoTakeSnapshot = GetDelegate<LibvlcVideoTakeSnapshot>("libvlc_video_take_snapshot");
+                _fnVideoGetSize = GetDelegate<LibvlcVideoGetSize>("libvlc_video_get_size");
                 _fnVideoSetAspectRatio = GetDelegate<LibvlcVideoSetAspectRatio>("libvlc_video_set_aspect_ratio");
                 _fnVideoSetScale = GetDelegate<LibvlcVideoSetScale>("libvlc_video_set_scale");
                 _fnVideoSetMouseInput = GetDelegate<LibvlcVideoSetInput>("libvlc_video_set_mouse_input");
@@ -243,12 +300,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 _vlcDir = dir;
-                Logger.Debug($"VLC已加载：目录={dir}");
+                Logger.Debug($"VLC已加载: {dir}");
                 return true;
             }
             catch (Exception ex)
             {
-                Logger.Warn($"加载VLC异常：目录={dir}，错误={ex.Message}");
+                Logger.Warn($"加载VLC异常: dir={dir}, error={ex.Message}");
                 Unload();
                 return false;
             }
@@ -292,7 +349,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
 
                 var safeUrl = SanitizeUrlForLog(rtspUrl);
-                Logger.Info($"VLC启动步骤：创建实例，地址={safeUrl}{TraceSuffix}");
+                Logger.Info($"VLC启动步骤：创建实例，url={safeUrl}");
                 _vlcInstance = _fnNew(args.Count, argvPtr);
 
                 for (int i = 0; i < args.Count; i++)
@@ -301,20 +358,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_vlcInstance == IntPtr.Zero)
                 {
-                    Logger.Error($"创建 VLC 实例失败{TraceSuffix}");
+                    Logger.Error("Failed to create VLC instance");
                     CleanupPartial();
                     return false;
                 }
 
                 // 2）创建媒体对象并设置选项
-                Logger.Info($"VLC启动步骤：创建媒体，地址={safeUrl}{TraceSuffix}");
+                Logger.Info($"VLC启动步骤：创建媒体，url={safeUrl}");
                 var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
                 var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
                 Marshal.FreeHGlobal(mrlPtr);
 
                 if (media == IntPtr.Zero)
                 {
-                    Logger.Error($"创建 VLC 媒体失败{TraceSuffix}");
+                    Logger.Error("Failed to create VLC media");
                     CleanupPartial();
                     return false;
                 }
@@ -348,13 +405,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 3）创建播放器
-                Logger.Info($"VLC启动步骤：创建播放器，地址={safeUrl}{TraceSuffix}");
+                Logger.Info($"VLC启动步骤：创建播放器，url={safeUrl}");
                 _mediaPlayer = _fnPlayerNewFromMedia(media);
                 _fnMediaRelease(media);
 
                 if (_mediaPlayer == IntPtr.Zero)
                 {
-                    Logger.Error($"创建 VLC 媒体播放器失败{TraceSuffix}");
+                    Logger.Error("Failed to create VLC media player");
                     CleanupPartial();
                     return false;
                 }
@@ -363,15 +420,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 // 本地或调试会话继续使用 Proxy 持有的子窗口，使绘制生命周期隔离在 Proxy 进程内。
                 if (directRenderTarget)
                 {
-                    Logger.Info($"VLC启动步骤：直接绑定目标窗口，地址={safeUrl}，" +
-                                $"目标HWND={PreviewManager.FormatHwnd(parentHwnd)}{TraceSuffix}");
+                    Logger.Info($"VLC启动步骤：直接绑定目标窗口，url={safeUrl}，target={parentHwnd}");
                     _videoHwnd = parentHwnd;
                     _ownsVideoHwnd = false;
                 }
                 else
                 {
-                    Logger.Info($"VLC启动步骤：创建视频窗口，地址={safeUrl}，" +
-                                $"父HWND={PreviewManager.FormatHwnd(parentHwnd)}{TraceSuffix}");
+                    Logger.Info($"VLC启动步骤：创建视频窗口，url={safeUrl}，parent={parentHwnd}");
                     var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
                     if (visible)
                         windowStyle |= WS_VISIBLE;
@@ -381,7 +436,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _ownsVideoHwnd = _videoHwnd != IntPtr.Zero;
                     if (_videoHwnd == IntPtr.Zero)
                     {
-                        Logger.Error($"创建视频子窗口失败{TraceSuffix}");
+                        Logger.Error("Failed to create video child window");
                         CleanupPartial();
                         return false;
                     }
@@ -393,11 +448,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnVideoSetKeyInput?.Invoke(_mediaPlayer, 0);
 
                 // 6）开始播放
-                Logger.Info($"VLC启动步骤：开始播放，地址={safeUrl}，" +
-                            $"视频HWND={PreviewManager.FormatHwnd(_videoHwnd)}{TraceSuffix}");
+                Logger.Info($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
-                    Logger.Error($"VLC 播放返回错误{TraceSuffix}");
+                    Logger.Error("VLC play returned error");
                     CleanupPartial();
                     return false;
                 }
@@ -409,20 +463,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 // 8）播放后应用 Cover 布局，调用顺序与 Delphi 一致
                 ApplyCoverLayout();
-                Logger.Info($"VLC播放参数：地址={safeUrl}，" +
-                            $"视频HWND={PreviewManager.FormatHwnd(_videoHwnd)}，" +
-                            $"父HWND={PreviewManager.FormatHwnd(parentHwnd)}，网络缓存={networkCachingMs}ms，" +
-                            $"实时缓存={liveCachingMs}ms，传输方式={rtspTransport}，可见={visible}，" +
-                            $"直绘={directRenderTarget}{TraceSuffix}");
+                Logger.Info($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
-                Logger.Info($"VLC播放成功：地址={safeUrl}，" +
-                            $"视频HWND={PreviewManager.FormatHwnd(_videoHwnd)}，" +
-                            $"父HWND={PreviewManager.FormatHwnd(parentHwnd)}{TraceSuffix}");
+                Logger.Info($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
                 return true;
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC播放异常：地址={SanitizeUrlForLog(rtspUrl)}，错误={ex.Message}{TraceSuffix}", ex);
+                Logger.Error($"VLC播放异常: url={SanitizeUrlForLog(rtspUrl)}, 错误={ex.Message}", ex);
                 CleanupPartial();
                 return false;
             }
@@ -497,7 +545,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"设置父窗口失败：{ex.Message}{TraceSuffix}");
+                Logger.Error($"SetParentWindow failed: {ex.Message}");
                 return false;
             }
         }
@@ -521,8 +569,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 int hostH = hostRect.Bottom - hostRect.Top;
                 if (hostW <= 0 || hostH <= 0) return;
 
-                int srcW = _sourceWidth > 0 ? _sourceWidth : hostW;
-                int srcH = _sourceHeight > 0 ? _sourceHeight : hostH;
+                int srcW = _sourceWidth;
+                int srcH = _sourceHeight;
+                if ((srcW <= 0 || srcH <= 0) && TryGetVideoSize(out var actualWidth, out var actualHeight))
+                {
+                    srcW = actualWidth;
+                    srcH = actualHeight;
+                }
+                if (srcW <= 0 || srcH <= 0)
+                {
+                    srcW = hostW;
+                    srcH = hostH;
+                }
                 if (srcW <= 0 || srcH <= 0) return;
 
                 // 竖向视频源需交换宽高，例如 480x640 相机画面
@@ -591,7 +649,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"应用铺满布局失败：{ex.Message}{TraceSuffix}");
+                Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
             }
         }
 
@@ -649,6 +707,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _fnNew = null; _fnRelease = null; _fnMediaNewLocation = null; _fnMediaAddOption = null;
             _fnMediaRelease = null; _fnPlayerNewFromMedia = null; _fnPlayerRelease = null;
             _fnPlayerGetState = null; _fnPlayerGetTime = null;
+            _fnVideoTakeSnapshot = null; _fnVideoGetSize = null;
             _fnPlayerSetHwnd = null; _fnPlayerPlay = null; _fnPlayerStop = null;
             _fnVideoSetAspectRatio = null; _fnVideoSetScale = null;
             _fnVideoSetMouseInput = null; _fnVideoSetKeyInput = null;
@@ -717,7 +776,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         {
             if (machine == ImageFileMachineI386) return "x86(0x014C)";
             if (machine == ImageFileMachineAmd64) return "x64(0x8664)";
-            return $"未知(0x{machine:X4})";
+            return $"unknown(0x{machine:X4})";
         }
 
         private static void DisableRiskySftpPlugin(string vlcDir)
@@ -745,7 +804,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!File.Exists(pluginPath))
                 return;
 
-            Logger.Warn($"检测到VLC SFTP插件：{pluginPath}。RTSP预览不需要该插件，现场已出现该插件导致的崩溃，正在尝试禁用。");
+            Logger.Warn($"检测到VLC SFTP插件: {pluginPath}。RTSP预览不需要该插件，现场已出现该插件导致的崩溃，正在尝试禁用。");
 
             var disabledPath = pluginPath + ".disabled";
             if (File.Exists(disabledPath))
@@ -754,11 +813,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 File.Move(pluginPath, disabledPath);
-                Logger.Warn($"已禁用VLC SFTP插件：{disabledPath}");
+                Logger.Warn($"已禁用VLC SFTP插件: {disabledPath}");
             }
             catch (Exception ex)
             {
-                Logger.Warn($"禁用VLC SFTP插件失败：{ex.Message}。请手动将该文件改名为 libsftp_plugin.dll.disabled 后再启动程序。");
+                Logger.Warn($"禁用VLC SFTP插件失败: {ex.Message}。请手动将该文件改名为 libsftp_plugin.dll.disabled 后再启动程序。");
             }
         }
 
