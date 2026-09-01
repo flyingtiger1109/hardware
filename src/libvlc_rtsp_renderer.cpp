@@ -19,20 +19,6 @@ private:
     CRITICAL_SECTION* m_cs;
 };
 
-std::string SanitizeUrlForLog(const std::string& url) {
-    const size_t schemeEnd = url.find("://");
-    if (schemeEnd == std::string::npos) return url;
-
-    const size_t authorityStart = schemeEnd + 3;
-    const size_t pathStart = url.find('/', authorityStart);
-    const size_t at = url.find('@', authorityStart);
-    if (at == std::string::npos ||
-        (pathStart != std::string::npos && at > pathStart)) {
-        return url;
-    }
-
-    return url.substr(0, authorityStart) + "***:***@" + url.substr(at + 1);
-}
 }
 
 static std::string FormatWindowsError(DWORD err) {

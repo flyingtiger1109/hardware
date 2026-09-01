@@ -256,9 +256,10 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
                 const std::string requestId = JsonHelper::GetString(body, "request_id");
                 const std::string resourceType = JsonHelper::GetString(body, "resource_type");
+                const std::string safePath = SanitizeUrlForLog(path);
                 LOG_DEBUG("回调服务",
                           "收到硬件控制程序回调：路径=%s，request_id=%s，资源=%s，来源=%s，正文长度=%zu",
-                          path.c_str(), requestId.empty() ? "<无>" : requestId.c_str(),
+                          safePath.c_str(), requestId.empty() ? "<无>" : requestId.c_str(),
                           resourceType.empty() ? "<无>" : resourceType.c_str(),
                           remoteIp, body.size());
                 CallbackData cbData;
@@ -268,7 +269,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
                 accepted = EventDispatcher::Instance().TryPostCallbackData(cbData);
             } else {
-                LOG_WARN("回调服务", "硬件控制程序回调请求解析失败：bytes=%zu", rawRequest.size());
+                LOG_WARN_RATE_LIMITED("CallbackServer|parse_failed", "回调服务",
+                    "硬件控制程序回调请求解析失败：bytes=%zu", rawRequest.size());
             }
 
             const char* statusLine = nullptr;

@@ -1,0 +1,125 @@
+using System;
+using System.Collections.Generic;
+
+namespace HZCYKJTHardWare.Proxy.Infrastructure
+{
+    internal sealed class LogRateLimitDecision
+    {
+        internal bool EmitCurrent { get; set; }
+        internal string WindowSummary { get; set; }
+    }
+
+    /// <summary>
+    /// 按设备、接口和错误类别对重复故障做窗口聚合。
+    /// 第一次故障立即输出；窗口结束后先输出汇总，再输出新的当前故障。
+    /// </summary>
+    internal sealed class LogRateLimiter
+    {
+        private sealed class Bucket
+        {
+            internal DateTime FirstUtc;
+            internal DateTime LastUtc;
+            internal long Count;
+            internal string LastError;
+        }
+
+        private readonly object _sync = new object();
+        private readonly Dictionary<string, Bucket> _buckets =
+            new Dictionary<string, Bucket>(StringComparer.Ordinal);
+        private readonly TimeSpan _window;
+
+        internal LogRateLimiter(TimeSpan window)
+        {
+            _window = window <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : window;
+        }
+
+        internal LogRateLimitDecision Record(string key, string error, DateTime utcNow)
+        {
+            var normalizedKey = Sanitize(key, 160);
+            if (string.IsNullOrEmpty(normalizedKey))
+                normalizedKey = "<unknown>";
+
+            var normalizedError = Sanitize(error, 256);
+            utcNow = utcNow.ToUniversalTime();
+            lock (_sync)
+            {
+                Bucket bucket;
+                if (!_buckets.TryGetValue(normalizedKey, out bucket) ||
+                    utcNow - bucket.FirstUtc >= _window)
+                {
+                    var summary = bucket == null || bucket.Count <= 0
+                        ? null
+                        : "RateLimitWindowEnd key=" + normalizedKey +
+                          " Count=" + bucket.Count +
+                          " FirstTime=" + FormatTime(bucket.FirstUtc) +
+                          " LastTime=" + FormatTime(bucket.LastUtc) +
+                          " LastError=" + bucket.LastError;
+
+                    _buckets[normalizedKey] = new Bucket
+                    {
+                        FirstUtc = utcNow,
+                        LastUtc = utcNow,
+                        Count = 1,
+                        LastError = normalizedError
+                    };
+                    TrimIfNeeded(normalizedKey);
+                    return new LogRateLimitDecision
+                    {
+                        EmitCurrent = true,
+                        WindowSummary = summary
+                    };
+                }
+
+                bucket.LastUtc = utcNow;
+                bucket.Count++;
+                bucket.LastError = normalizedError;
+                return new LogRateLimitDecision { EmitCurrent = false };
+            }
+        }
+
+        internal void Clear()
+        {
+            lock (_sync)
+                _buckets.Clear();
+        }
+
+        private void TrimIfNeeded(string currentKey)
+        {
+            if (_buckets.Count <= 1024)
+                return;
+
+            string oldestKey = null;
+            var oldest = DateTime.MaxValue;
+            foreach (var pair in _buckets)
+            {
+                if (pair.Key == currentKey || pair.Value.LastUtc >= oldest)
+                    continue;
+                oldest = pair.Value.LastUtc;
+                oldestKey = pair.Key;
+            }
+            if (oldestKey != null)
+                _buckets.Remove(oldestKey);
+        }
+
+        private static string FormatTime(DateTime value)
+        {
+            return value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff");
+        }
+
+        private static string Sanitize(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+            var builder = new System.Text.StringBuilder(Math.Min(value.Length, maxLength));
+            foreach (var ch in value)
+            {
+                builder.Append(char.IsControl(ch) ? ' ' : ch);
+                if (builder.Length >= maxLength)
+                    break;
+            }
+            if (value.Length > maxLength)
+                builder.Append("...");
+            return builder.ToString();
+        }
+    }
+}

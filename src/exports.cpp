@@ -555,7 +555,7 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
     }
     if (!cfg.GetDelphiAutoStart()) {
         LOG_ERROR("接口", "硬件控制程序/ping失败且自动启动未启用：服务地址=%s",
-                  delphiServerUrl.c_str());
+                  HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str());
         return false;
     }
 
@@ -575,7 +575,8 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
 
     if (!existingProcessIds.empty()) {
         LOG_WARN("接口", "硬件控制程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，服务地址=%s",
-                 executablePath.c_str(), existingProcessIds.front(), delphiServerUrl.c_str());
+                 executablePath.c_str(), existingProcessIds.front(),
+                 HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str());
         if (!TerminateDelphiServiceProcesses(executablePath, existingProcessIds)) {
             return false;
         }
@@ -592,7 +593,7 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
     }
 
     LOG_ERROR("接口", "启动硬件控制程序后等待/ping超时：服务地址=%s，path=%s，wait_ms=%d",
-              delphiServerUrl.c_str(), executablePath.c_str(), waitMs);
+              HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str(), executablePath.c_str(), waitMs);
     return false;
 }
 
@@ -1107,7 +1108,7 @@ static int InitSdkBody() {
         std::to_string(callbackPort) + cfg.GetCallbackBasePath();
 
     LOG_DEBUG("接口", "正在启动硬件控制程序回调接收服务：listen=%s:%d，回调地址=%s",
-             listenHost.c_str(), callbackPort, callbackUrl.c_str());
+             listenHost.c_str(), callbackPort, SanitizeUrlForLog(callbackUrl).c_str());
 
     {
         auto lock = WriteLock();
@@ -1130,7 +1131,7 @@ static int InitSdkBody() {
     EventDispatcher::Instance().Start();
 
     LOG_INFO("接口", "初始化DLL：正在检查硬件控制程序通信服务，服务地址=%s，自动启动=%s",
-             delphiServerUrl.c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
+             SanitizeUrlForLog(delphiServerUrl).c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
     {
         auto lock = WriteLock();
         delete ctx.http_client;
@@ -1138,7 +1139,8 @@ static int InitSdkBody() {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!EnsureDelphiServiceAvailable(proxy, cfg, ctx.dll_dir, delphiServerUrl)) {
-        LOG_ERROR("接口", "初始化DLL失败：硬件控制程序/ping不可用，服务地址=%s", delphiServerUrl.c_str());
+        LOG_ERROR("接口", "初始化DLL失败：硬件控制程序/ping不可用，服务地址=%s",
+                  SanitizeUrlForLog(delphiServerUrl).c_str());
         EventDispatcher::Instance().Stop();
         CallbackServer::Instance().Stop();
         {
@@ -1231,7 +1233,8 @@ static int SetTerminalBaseUrlBody(const char* baseUrl) {
     using namespace HZCYKJTHardWare;
     if (!baseUrl || !baseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
-    LOG_WARN("接口", "代理模式不支持DLL直连终端URL：地址=%s，实际终端由硬件控制程序管理", baseUrl);
+    LOG_WARN("接口", "代理模式不支持DLL直连终端URL：地址=%s，实际终端由硬件控制程序管理",
+             SanitizeUrlForLog(baseUrl ? baseUrl : "").c_str());
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
@@ -1345,7 +1348,8 @@ static int SwitchTerminalByUrlBody(const char* terminalBaseUrl) {
     using namespace HZCYKJTHardWare;
     if (!HzsjkjtContext::Instance().initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!terminalBaseUrl || !terminalBaseUrl[0]) return HZCYKJTHardWare_RET_INVALID_PARAM;
-    LOG_WARN("接口", "代理模式不支持DLL按URL切换终端：terminal_地址=%s，实际终端由硬件控制程序管理", terminalBaseUrl);
+    LOG_WARN("接口", "代理模式不支持DLL按URL切换终端：terminal_地址=%s，实际终端由硬件控制程序管理",
+             SanitizeUrlForLog(terminalBaseUrl ? terminalBaseUrl : "").c_str());
     return HZCYKJTHardWare_RET_UNSUPPORTED;
 }
 
@@ -1410,7 +1414,8 @@ static int StartProcessBody(const char* saveDir) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
-        LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s", ctx.delphi_server_url.c_str());
+        LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s",
+                  SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         return ProxyFailureCode(proxy);
     }
 
@@ -1431,7 +1436,7 @@ static int EndProcessBody() {
 
     if (!ok) {
         LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         return ProxyFailureCode(proxy);
     }
 
@@ -1494,7 +1499,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
         LOG_ERROR("接口", "启动摄像头预览失败：向硬件控制程序下发外部渲染请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), delphiServerUrl.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -1530,7 +1535,7 @@ static int StopCameraPreviewBody() {
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopCameraPreview(requestId)) {
         LOG_ERROR("接口", "停止摄像头预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), delphiServerUrl.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1636,7 +1641,7 @@ static int StopFingerprintPreviewBody() {
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopFingerprintPreview(requestId)) {
         LOG_ERROR("接口", "停止指纹预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), delphiServerUrl.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -2004,7 +2009,7 @@ static int CaptureCameraImageDirect(const char* saveDir) {
     if (!proxy.CaptureFace(requestId, saveRoot, savePath,
                            ctx.face_capture_timeout_ms)) {
         LOG_ERROR("接口", "人脸抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -2062,7 +2067,7 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     }
     if (!ok) {
         LOG_ERROR("接口", "指纹抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -2113,7 +2118,7 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("接口", "虹膜抓拍提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2181,7 +2186,7 @@ static int RequestOCRDirect(const char* saveDir) {
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("接口", "OCR请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2250,7 +2255,7 @@ static int RequestNfcCardDirect(const char* saveDir) {
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
         LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), ctx.delphi_server_url.c_str());
+                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2406,12 +2411,38 @@ static void LogActiveCallDrainTimeout(int waitMs) {
 // 导出函数；SEH 包装范围不得跨越 C++ 对象生命周期
 // ============================================================================
 
+static void LogExportBoundary(const char* operation, const char* phase,
+                              const char* result, int resultCode,
+                              ULONGLONG durationMs) {
+    try {
+        using namespace HZCYKJTHardWare;
+        LogContext context;
+        context.operation = operation ? operation : "unknown";
+        context.result = result ? result : "未知";
+        if (resultCode != HZCYKJTHardWare_RET_OK)
+            context.errorCode = std::to_string(resultCode);
+        context.durationMs = static_cast<long long>(durationMs);
+        const std::string fields = FormatLogContext(context);
+        Logger::Instance().Info("接口", operation ? operation : "unknown",
+                                "%s %s", phase ? phase : "边界", fields.c_str());
+    } catch (...) {
+        // 日志属于旁路能力，不能因格式化或落盘异常改变 DLL 导出行为。
+    }
+}
+
 #define HZCY_GUARDED_EXPORT(bodyCall)                                      \
     if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCall(__FUNCTION__)) return 0; \
+    const ULONGLONG guardedStartedAt = GetTickCount64();                   \
+    LogExportBoundary(__FUNCTION__, "入口", "开始",                       \
+                      HZCYKJTHardWare_RET_OK, 0);                           \
+    int guardedCallResult = HZCYKJTHardWare_RET_FAILED;                    \
     int guardedResult = 0;                                                 \
-    __try { guardedResult = ((bodyCall) == HZCYKJTHardWare_RET_OK) ? 1 : 0; } \
-    __except(EXCEPTION_EXECUTE_HANDLER) { guardedResult = 0; }             \
+    __try { guardedCallResult = (bodyCall);                                \
+            guardedResult = (guardedCallResult == HZCYKJTHardWare_RET_OK) ? 1 : 0; } \
+    __except(EXCEPTION_EXECUTE_HANDLER) { guardedCallResult = HZCYKJTHardWare_RET_FAILED; guardedResult = 0; } \
     HZCYKJTHardWare::SdkRuntime::Instance().LeaveCall();                   \
+    LogExportBoundary(__FUNCTION__, "出口", guardedResult ? "成功" : "失败", \
+                      guardedCallResult, GetTickCount64() - guardedStartedAt); \
     return guardedResult
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_InitSdk(void) {

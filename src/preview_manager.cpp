@@ -148,7 +148,9 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
 
     std::string body = "{\"request_id\":\"" + requestId + "\"}";
     std::string url = TerminalManager::Instance().BuildUrl(previewPath);
-    LOG_DEBUG("PreviewMgr", "正在请求预览地址：url=%s", url.c_str());
+    const std::string safeUrl = SanitizeUrlForLog(url);
+    LOG_DEBUG("PreviewMgr", "正在请求预览地址：url=%s，request_id=%s",
+              safeUrl.c_str(), requestId.c_str());
 
     HttpClient client;
     std::string responseBody;
@@ -164,7 +166,8 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
     }
 
     if (!client.PostJson(url, body, connectTimeout, requestTimeout, responseBody, statusCode)) {
-        LOG_ERROR("PreviewMgr", "请求终端预览地址失败：url=%s", url.c_str());
+        LOG_ERROR("PreviewMgr", "请求终端预览地址失败：url=%s，request_id=%s",
+                  safeUrl.c_str(), requestId.c_str());
 
         HZCYKJTHardWare_EVENT event;
         memset(&event, 0, sizeof(event));
@@ -178,7 +181,8 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
 
     std::string rtspUrl = ResultParser::ExtractPreviewUrl(responseBody);
     if (rtspUrl.empty()) {
-        LOG_ERROR("PreviewMgr", "终端预览响应缺少 RTSP 地址：response=%s", responseBody.c_str());
+        LOG_ERROR("PreviewMgr", "终端预览响应缺少 RTSP 地址：request_id=%s，%s",
+                  requestId.c_str(), SanitizeLargePayloadForLog(responseBody, requestId).c_str());
 
         HZCYKJTHardWare_EVENT event;
         memset(&event, 0, sizeof(event));
@@ -190,7 +194,8 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
     }
 
-    LOG_DEBUG("PreviewMgr", "已收到RTSP预览地址：url=%s", rtspUrl.c_str());
+    LOG_DEBUG("PreviewMgr", "已收到RTSP预览地址：url=%s，request_id=%s",
+              SanitizeUrlForLog(rtspUrl).c_str(), requestId.c_str());
 
     renderer = CreateLibVlcRtspRenderer();
     if (!renderer) {
@@ -212,7 +217,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         if (detail.empty()) {
             detail = "启动RTSP预览失败。";
         }
-        detail += " RTSP=" + rtspUrl;
+        detail += " RTSP=" + SanitizeUrlForLog(rtspUrl);
         LOG_ERROR("PreviewMgr", "启动 RTSP 预览失败：ret=%d，detail=%s", ret, detail.c_str());
 
         HZCYKJTHardWare_EVENT event;

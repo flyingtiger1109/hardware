@@ -35,7 +35,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         private static string FormatRequestId(string requestId)
         {
-            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : requestId;
+            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : JsonHelper.ToLogValue(requestId);
         }
 
         private static string ExtractRequestIdForLog(string bodyUtf8)
@@ -165,10 +165,15 @@ namespace HZCYKJTHardWare.Proxy.Server
             Logger.Debug($"[DLL回调] 预览就绪回调准备发送：路径=/preview-ready，request_id={requestTrace}，" +
                          $"资源={resourceType}，render_hwnd={FormatHwnd(renderHwnd)}，" +
                          $"delphi_host_hwnd={FormatHwnd(delphiHostHwnd)}");
+            var previewCallbackSw = System.Diagnostics.Stopwatch.StartNew();
             var result = await PostCallbackWithRetry("/preview-ready", body, _shutdown.Token)
                 .ConfigureAwait(false);
-            var completionMessage = $"[DLL回调] 预览就绪回调发送完成：路径=/preview-ready，request_id={requestTrace}，" +
-                $"资源={resourceType}，结果={FormatDeliveryResult(result)}";
+            previewCallbackSw.Stop();
+            var completionMessage = "[DLL回调] 预览就绪回调发送完成：" +
+                Logger.FormatContextMessage("POST /preview-ready", requestId: requestTrace,
+                    result: FormatDeliveryResult(result),
+                    errorCode: result == CallbackDeliveryResult.Failed ? "delivery_failed" : null,
+                    durationMs: previewCallbackSw.ElapsedMilliseconds) + $" 资源={resourceType}";
             if (result == CallbackDeliveryResult.Failed)
                 Logger.Error(completionMessage);
             else
@@ -210,7 +215,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
             if (!_baseUrlValid)
             {
-                Logger.Error($"[DLL回调] 回调基础URL无效：路径={path}，request_id={requestTrace}，基础地址={_baseUrl}");
+                Logger.Error($"[DLL回调] 回调基础URL无效：路径={path}，request_id={requestTrace}，" +
+                             $"基础地址={Logger.SanitizeUrlForLog(_baseUrl)}");
                 return CallbackDeliveryResult.Failed;
             }
 
@@ -222,8 +228,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                     .ConfigureAwait(false);
                 if (attemptResult == CallbackAttemptResult.Delivered)
                 {
-                    Logger.Debug($"[DLL回调] POST完成：路径={path}，request_id={requestTrace}，" +
-                                 $"结果=已发送，尝试次数={attempt + 1}，耗时={totalSw.ElapsedMilliseconds}ms");
+                    Logger.Info("[DLL回调] POST完成：" +
+                        Logger.FormatContextMessage("POST " + path, requestId: requestTrace,
+                            result: "成功", durationMs: totalSw.ElapsedMilliseconds,
+                            attempt: attempt + 1));
                     return CallbackDeliveryResult.Delivered;
                 }
                 if (attemptResult == CallbackAttemptResult.Cancelled)
@@ -234,14 +242,20 @@ namespace HZCYKJTHardWare.Proxy.Server
                 }
                 if (attemptResult == CallbackAttemptResult.PermanentFailure)
                 {
-                    Logger.Error($"[DLL回调] POST完成：路径={path}，request_id={requestTrace}，" +
-                                 $"结果=失败，尝试次数={attempt + 1}，耗时={totalSw.ElapsedMilliseconds}ms");
+                    Logger.Error("[DLL回调] POST完成：" +
+                        Logger.FormatContextMessage("POST " + path, requestId: requestTrace,
+                            result: "失败", errorCode: "permanent_failure",
+                            durationMs: totalSw.ElapsedMilliseconds,
+                            attempt: attempt + 1));
                     return CallbackDeliveryResult.Failed;
                 }
                 if (attempt >= RetryDelaysMs.Length)
                 {
-                    Logger.Error($"[DLL回调] POST重试耗尽，永久投递失败：路径={path}，request_id={requestTrace}，" +
-                                 $"耗时={totalSw.ElapsedMilliseconds}ms");
+                    Logger.Error("[DLL回调] POST重试耗尽，永久投递失败：" +
+                        Logger.FormatContextMessage("POST " + path, requestId: requestTrace,
+                            result: "失败", errorCode: "retry_exhausted",
+                            durationMs: totalSw.ElapsedMilliseconds,
+                            attempt: attempt + 1));
                     return CallbackDeliveryResult.Failed;
                 }
 
@@ -290,13 +304,21 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     if (response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
                     {
-                        Logger.Warn($"[DLL回调] POST服务忙：路径={path}，request_id={requestTrace}，" +
-                                    $"状态={statusCode}，耗时={sw.ElapsedMilliseconds}ms");
+                        var retryContext = Logger.FormatContextMessage(
+                            "POST " + path,
+                            requestId: requestTrace,
+                            result: "重试",
+                            errorCode: "http_" + statusCode,
+                            durationMs: sw.ElapsedMilliseconds);
+                        Logger.TryLogRateLimited(
+                            "callback|" + path + "|http_" + statusCode,
+                            LogModules.DllCallback, "警告",
+                            "POST服务忙：" + retryContext);
                         return CallbackAttemptResult.RetryableFailure;
                     }
 
-                    Logger.Warn($"[DLL回调] POST投递失败，不重试：路径={path}，request_id={requestTrace}，" +
-                                $"状态={statusCode}，耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Error($"[DLL回调] POST投递失败，不重试：路径={path}，request_id={requestTrace}，" +
+                                 $"状态={statusCode}，耗时={sw.ElapsedMilliseconds}ms");
                     return CallbackAttemptResult.PermanentFailure;
                 }
             }
@@ -312,8 +334,17 @@ namespace HZCYKJTHardWare.Proxy.Server
             catch (HttpRequestException ex)
             {
                 sw.Stop();
-                Logger.Warn($"[DLL回调] POST网络失败，可重试：路径={path}，request_id={requestTrace}，" +
-                            $"耗时={sw.ElapsedMilliseconds}ms，错误={ex.Message}");
+                var retryContext = Logger.FormatContextMessage(
+                    "POST " + path,
+                    requestId: requestTrace,
+                    result: "重试",
+                    errorCode: "network_error",
+                    durationMs: sw.ElapsedMilliseconds);
+                Logger.TryLogRateLimited(
+                    "callback|" + path + "|network_error",
+                    LogModules.DllCallback, "警告",
+                    "POST网络失败，可重试：" + retryContext +
+                    " Error=" + JsonHelper.ToLogValue(ex.Message));
                 return CallbackAttemptResult.RetryableFailure;
             }
             catch (Exception ex)

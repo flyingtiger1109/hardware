@@ -46,16 +46,18 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             aggregator.RecordFailure("连接失败", false, 120);
             Assert.AreEqual(1, messages.Count);
 
-            now = now.AddSeconds(10);
+            now = now.AddSeconds(60);
             aggregator.RecordFailure("连接失败", true, 130);
-            Assert.AreEqual(2, messages.Count);
-            StringAssert.Contains(messages[1], "[健康检查][错误]");
+            Assert.AreEqual(3, messages.Count);
+            StringAssert.Contains(messages[1], "请求次数=2");
+            StringAssert.Contains(messages[1], "失败次数=2");
+            StringAssert.Contains(messages[2], "[健康检查][错误]");
 
             now = now.AddMilliseconds(1);
             aggregator.RecordSuccess(30);
-            Assert.AreEqual(3, messages.Count);
-            StringAssert.Contains(messages[2], "/ping恢复");
-            StringAssert.Contains(messages[2], "当前状态=正常");
+            Assert.AreEqual(4, messages.Count);
+            StringAssert.Contains(messages[3], "/ping恢复");
+            StringAssert.Contains(messages[3], "当前状态=正常");
 
             aggregator.Dispose();
         }

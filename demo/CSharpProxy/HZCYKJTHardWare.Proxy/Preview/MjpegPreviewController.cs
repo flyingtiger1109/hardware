@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
+using HZCYKJTHardWare.Proxy.Parsing;
 
 namespace HZCYKJTHardWare.Proxy.Preview
 {
@@ -223,7 +224,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             await PauseAsync(Math.Min(1000, Math.Max(1, timeoutMs))).ConfigureAwait(false);
-            Logger.Warn($"HTTP MJPEG预览启动超时：{_description}，超时={timeoutMs}ms，地址={url}");
+            Logger.Warn($"HTTP MJPEG预览启动超时：{_description}，超时={timeoutMs}ms，地址={Logger.SanitizeUrlForLog(url)}");
             return false;
         }
 
@@ -510,13 +511,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         buffer.Clear();
                         if (failureCount >= SameUrlMaxFailures)
                         {
-                            Logger.Warn($"HTTP MJPEG同一地址恢复失败（{SameUrlMaxFailures}次）：{_description}，错误={failureReason}");
+                            Logger.TryLogRateLimited(
+                                "Mjpeg|same_url_failure|" + _description,
+                                LogModules.Preview, "错误",
+                                $"HTTP MJPEG同一地址恢复失败（{SameUrlMaxFailures}次）：" +
+                                $"{JsonHelper.ToLogValue(_description)}，错误={JsonHelper.ToLogValue(failureReason)}");
                             SignalStreamFault(generation, failureReason);
                             break;
                         }
 
-                        Logger.Warn($"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同一地址重连" +
-                                    $"（{failureCount}/{SameUrlMaxFailures}）：{_description}，错误={failureReason}");
+                        Logger.TryLogRateLimited(
+                            "Mjpeg|same_url_reconnect|" + _description,
+                            LogModules.Preview, "警告",
+                            $"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同一地址重连" +
+                            $"（{failureCount}/{SameUrlMaxFailures}）：{JsonHelper.ToLogValue(_description)}，" +
+                            $"错误={JsonHelper.ToLogValue(failureReason)}");
                         _streamChanged.WaitOne(ReconnectDelayMs);
                     }
                 }
@@ -741,9 +750,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var level = failures >= RenderFailureThreshold ? "错误" : "警告";
             var exceptionType = ex == null ? "未知异常" : ex.GetType().Name;
             var hresult = ex == null ? "<无>" : "0x" + ex.HResult.ToString("X8");
-            Logger.WriteMessage(Logger.FormatModuleMessage(LogModules.Preview, level,
-                $"HTTP MJPEG帧渲染失败：{_description}，阶段={stage}，帧长度={frameLength}字节，" +
-                $"异常类型={exceptionType}，HResult={hresult}，连续失败次数={failures}"));
+            Logger.TryLogRateLimited(
+                "Mjpeg|render|" + _description + "|" + stage + "|" + level,
+                LogModules.Preview, level,
+                $"HTTP MJPEG帧渲染失败：{JsonHelper.ToLogValue(_description)}，阶段={JsonHelper.ToLogValue(stage)}，" +
+                $"帧长度={frameLength}字节，异常类型={JsonHelper.ToLogValue(exceptionType)}，" +
+                $"HResult={hresult}，连续失败次数={failures}");
 
             if (failures < RenderFailureThreshold)
                 return;

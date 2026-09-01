@@ -349,7 +349,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Marshal.Copy(argPtrs, 0, argvPtr, args.Count);
 
                 var safeUrl = SanitizeUrlForLog(rtspUrl);
-                Logger.Info($"VLC启动步骤：创建实例，url={safeUrl}");
+                Logger.Debug($"VLC启动步骤：创建实例，url={safeUrl}");
                 _vlcInstance = _fnNew(args.Count, argvPtr);
 
                 for (int i = 0; i < args.Count; i++)
@@ -364,7 +364,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 2）创建媒体对象并设置选项
-                Logger.Info($"VLC启动步骤：创建媒体，url={safeUrl}");
+                Logger.Debug($"VLC启动步骤：创建媒体，url={safeUrl}");
                 var mrlPtr = Marshal.StringToHGlobalAnsi(rtspUrl);
                 var media = _fnMediaNewLocation(_vlcInstance, mrlPtr);
                 Marshal.FreeHGlobal(mrlPtr);
@@ -405,7 +405,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 // 3）创建播放器
-                Logger.Info($"VLC启动步骤：创建播放器，url={safeUrl}");
+                Logger.Debug($"VLC启动步骤：创建播放器，url={safeUrl}");
                 _mediaPlayer = _fnPlayerNewFromMedia(media);
                 _fnMediaRelease(media);
 
@@ -420,13 +420,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 // 本地或调试会话继续使用 Proxy 持有的子窗口，使绘制生命周期隔离在 Proxy 进程内。
                 if (directRenderTarget)
                 {
-                    Logger.Info($"VLC启动步骤：直接绑定目标窗口，url={safeUrl}，target={parentHwnd}");
+                    Logger.Debug($"VLC启动步骤：直接绑定目标窗口，url={safeUrl}，target={parentHwnd}");
                     _videoHwnd = parentHwnd;
                     _ownsVideoHwnd = false;
                 }
                 else
                 {
-                    Logger.Info($"VLC启动步骤：创建视频窗口，url={safeUrl}，parent={parentHwnd}");
+                    Logger.Debug($"VLC启动步骤：创建视频窗口，url={safeUrl}，parent={parentHwnd}");
                     var windowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED;
                     if (visible)
                         windowStyle |= WS_VISIBLE;
@@ -448,7 +448,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _fnVideoSetKeyInput?.Invoke(_mediaPlayer, 0);
 
                 // 6）开始播放
-                Logger.Info($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
+                Logger.Debug($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
                     Logger.Error("VLC play returned error");
@@ -463,7 +463,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 // 8）播放后应用 Cover 布局，调用顺序与 Delphi 一致
                 ApplyCoverLayout();
-                Logger.Info($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
+                Logger.Debug($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
                 Logger.Info($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
                 return true;
@@ -715,13 +715,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         internal static string SanitizeUrlForLog(string value)
         {
-            if (string.IsNullOrEmpty(value)) return value ?? "";
-            var schemeEnd = value.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd < 0) return value;
-            var authorityStart = schemeEnd + 3;
-            var at = value.IndexOf('@', authorityStart);
-            if (at <= authorityStart) return value;
-            return value.Substring(0, authorityStart) + "***:***@" + value.Substring(at + 1);
+            return Logger.SanitizeUrlForLog(value);
         }
 
         internal static string[] GetLocalVlcDirectoryNames(bool is64BitProcess)

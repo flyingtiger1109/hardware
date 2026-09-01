@@ -87,7 +87,8 @@ std::string RequestSessionManager::CreateSession(const std::string& resourceType
     }
 
     LOG_DEBUG("RequestSession", "创建异步请求会话：request_id=%s，timeout=%dms，terminal=%s",
-             requestId.c_str(), timeoutMs, session->terminal_base_url.c_str());
+             requestId.c_str(), timeoutMs,
+             SanitizeUrlForLog(session->terminal_base_url).c_str());
 
     return requestId;
 }

@@ -105,7 +105,7 @@ int TerminalManager::SwitchTerminalByUrl(const std::string& baseUrl) {
         return HZCYKJTHardWare_RET_INVALID_PARAM;
     }
 
-    LOG_INFO("TerminalMgr", "DLL切换当前终端：target=%s", baseUrl.c_str());
+    LOG_INFO("TerminalMgr", "DLL切换当前终端：target=%s", SanitizeUrlForLog(baseUrl).c_str());
 
     auto previewSnapshot = PreviewManager::Instance().CaptureActivePreviewSnapshot();
     PreviewManager::Instance().StopAllForTerminalSwitch();
@@ -150,7 +150,8 @@ int TerminalManager::SwitchTerminalByUrl(const std::string& baseUrl) {
 
     int previewRestoreRet = PreviewManager::Instance().RestorePreviewsForTerminalSwitch(previewSnapshot);
     if (previewRestoreRet != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("TerminalMgr", "终端已切换，但自动恢复预览失败：target=%s，ret=%d", baseUrl.c_str(), previewRestoreRet);
+        LOG_ERROR("TerminalMgr", "终端已切换，但自动恢复预览失败：target=%s，ret=%d",
+                  SanitizeUrlForLog(baseUrl).c_str(), previewRestoreRet);
         return previewRestoreRet;
     }
 
@@ -170,7 +171,8 @@ int TerminalManager::SwitchTerminalByUrl(const std::string& baseUrl) {
     }
 
     LOG_INFO("TerminalMgr", "当前终端已切换：terminal_index=%d，terminal=%s",
-             HzsjkjtContext::Instance().current_terminal_index, baseUrl.c_str());
+             HzsjkjtContext::Instance().current_terminal_index,
+             SanitizeUrlForLog(baseUrl).c_str());
 
     return HZCYKJTHardWare_RET_OK;
 }

@@ -15,7 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
         private static string FormatRequestId(string requestId)
         {
-            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : requestId;
+            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : JsonHelper.ToLogValue(requestId);
         }
 
         private static string ExtractRequestIdForLog(string bodyUtf8)
@@ -95,15 +95,30 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
                     if (response.IsSuccessStatusCode && expectedStatusCode > 0)
                     {
-                        Logger.Warn($"[终端请求] POST返回非预期状态码：路径={path}，request_id={requestTrace}，" +
-                            $"实际状态={statusCode}，预期状态={expectedStatusCode}，" +
-                            $"耗时={sw.ElapsedMilliseconds}ms，响应正文={Truncate(responseBody, 256)}");
+                        Logger.TryLogRateLimited(
+                            "terminal|POST|" + path + "|unexpected_status_" + statusCode,
+                            LogModules.TerminalCommunication, "警告",
+                            "POST返回非预期状态码：" +
+                            Logger.FormatContextMessage("POST " + path,
+                                requestId: requestTrace, result: "失败",
+                                errorCode: "unexpected_status_" + statusCode,
+                                durationMs: sw.ElapsedMilliseconds) +
+                            " ExpectedStatus=" + expectedStatusCode +
+                            " Response=" + Logger.SanitizeLargePayloadForLog(
+                                responseBody, requestTrace));
                         return (false, responseBody);
                     }
 
-                    Logger.Warn($"[终端请求] POST失败：路径={path}，request_id={requestTrace}，" +
-                                $"状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms，" +
-                                $"响应正文={Truncate(responseBody, 256)}");
+                    Logger.TryLogRateLimited(
+                        "terminal|POST|" + path + "|http_" + statusCode,
+                        LogModules.TerminalCommunication, "警告",
+                        "POST失败：" +
+                        Logger.FormatContextMessage("POST " + path,
+                            requestId: requestTrace, result: "失败",
+                            errorCode: "http_" + statusCode,
+                            durationMs: sw.ElapsedMilliseconds) +
+                        " Response=" + Logger.SanitizeLargePayloadForLog(
+                            responseBody, requestTrace));
                     return (false, responseBody);
                 }
             }
@@ -116,23 +131,38 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 else
                 {
                 var timeoutText = timeoutMs > 0 ? timeoutMs + "ms" : _httpClient.Timeout.TotalSeconds + "s";
-                Logger.Error($"[终端请求] POST超时：路径={path}，request_id={requestTrace}，" +
-                             $"超时时间={timeoutText}，耗时={sw.ElapsedMilliseconds}ms");
+                Logger.TryLogRateLimited(
+                    "terminal|POST|" + path + "|timeout",
+                    LogModules.TerminalCommunication, "错误",
+                    "POST超时：" + Logger.FormatContextMessage("POST " + path,
+                        requestId: requestTrace, result: "失败", errorCode: "timeout",
+                        durationMs: sw.ElapsedMilliseconds) +
+                    " Timeout=" + timeoutText);
                 }
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] POST网络错误：路径={path}，request_id={requestTrace}，" +
-                             $"耗时={sw.ElapsedMilliseconds}ms，错误={ex.Message}");
+                Logger.TryLogRateLimited(
+                    "terminal|POST|" + path + "|network_error",
+                    LogModules.TerminalCommunication, "错误",
+                    "POST网络错误：" + Logger.FormatContextMessage("POST " + path,
+                        requestId: requestTrace, result: "失败", errorCode: "network_error",
+                        durationMs: sw.ElapsedMilliseconds) +
+                    " Error=" + JsonHelper.ToLogValue(ex.Message));
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] POST异常：路径={path}，request_id={requestTrace}，" +
-                             $"耗时={sw.ElapsedMilliseconds}ms，错误={ex.Message}");
+                Logger.TryLogRateLimited(
+                    "terminal|POST|" + path + "|exception",
+                    LogModules.TerminalCommunication, "错误",
+                    "POST异常：" + Logger.FormatContextMessage("POST " + path,
+                        requestId: requestTrace, result: "失败", errorCode: "exception",
+                        durationMs: sw.ElapsedMilliseconds) +
+                    " Error=" + JsonHelper.ToLogValue(ex.Message));
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             finally
@@ -180,7 +210,13 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         return (true, responseBody);
                     }
 
-                    Logger.Warn($"[终端请求] GET {path} 失败：状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.TryLogRateLimited(
+                        "terminal|GET|" + path + "|http_" + (int)response.StatusCode,
+                        LogModules.TerminalCommunication, "警告",
+                        "GET失败：" + Logger.FormatContextMessage("GET " + path,
+                            result: "失败", errorCode: "http_" + (int)response.StatusCode,
+                            durationMs: sw.ElapsedMilliseconds) +
+                        " Response=" + Logger.SanitizeLargePayloadForLog(responseBody));
                     return (false, responseBody);
                 }
             }
@@ -190,19 +226,36 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 if (cancellationToken.IsCancellationRequested)
                     Logger.Warn($"[终端请求] GET {path} 因终端批次失效而取消，耗时={sw.ElapsedMilliseconds}ms");
                 else
-                    Logger.Error($"[终端请求] GET {path} 超时，耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.TryLogRateLimited(
+                        "terminal|GET|" + path + "|timeout",
+                        LogModules.TerminalCommunication, "错误",
+                        "GET超时：" + Logger.FormatContextMessage("GET " + path,
+                            result: "失败", errorCode: "timeout",
+                            durationMs: sw.ElapsedMilliseconds));
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] GET {path} 网络错误：{ex.Message}，耗时={sw.ElapsedMilliseconds}ms");
+                Logger.TryLogRateLimited(
+                    "terminal|GET|" + path + "|network_error",
+                    LogModules.TerminalCommunication, "错误",
+                    "GET网络错误：" + Logger.FormatContextMessage("GET " + path,
+                        result: "失败", errorCode: "network_error",
+                        durationMs: sw.ElapsedMilliseconds) +
+                    " Error=" + JsonHelper.ToLogValue(ex.Message));
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                Logger.Error($"[终端请求] GET {path} 异常：{ex.Message}，耗时={sw.ElapsedMilliseconds}ms");
+                Logger.TryLogRateLimited(
+                    "terminal|GET|" + path + "|exception",
+                    LogModules.TerminalCommunication, "错误",
+                    "GET异常：" + Logger.FormatContextMessage("GET " + path,
+                        result: "失败", errorCode: "exception",
+                        durationMs: sw.ElapsedMilliseconds) +
+                    " Error=" + JsonHelper.ToLogValue(ex.Message));
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             finally
@@ -210,12 +263,6 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 linkedCancellation?.Dispose();
                 timeoutCancellation?.Dispose();
             }
-        }
-
-        private static string Truncate(string s, int maxLen)
-        {
-            if (string.IsNullOrEmpty(s)) return "";
-            return s.Length <= maxLen ? s : s.Substring(0, maxLen) + "...";
         }
 
         public void Dispose()

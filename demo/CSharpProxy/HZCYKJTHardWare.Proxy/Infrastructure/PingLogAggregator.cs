@@ -10,7 +10,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
     internal sealed class PingLogAggregator : IDisposable
     {
         private static readonly TimeSpan SummaryInterval = TimeSpan.FromMinutes(1);
-        private static readonly TimeSpan RepeatedFailureNoticeInterval = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan RepeatedFailureNoticeInterval = TimeSpan.FromMinutes(1);
 
         private readonly object _sync = new object();
         private readonly Action<string> _emit;

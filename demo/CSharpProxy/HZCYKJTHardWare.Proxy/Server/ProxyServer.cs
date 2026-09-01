@@ -50,6 +50,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly ProxyRuntime _runtime;
         private readonly Action<string> _log;
         private readonly PingLogAggregator _pingLogAggregator;
+        private readonly LogRateLimiter _callbackIngressRateLimiter =
+            new LogRateLimiter(TimeSpan.FromMinutes(1));
         private readonly Action<bool> _onProcessStateChanged;
         private readonly Action<int> _onTerminalChanged;
         private static long _nextHttpTraceSequence;
@@ -383,9 +385,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var requestModule = GetDllRequestLogModule(requestPath);
                     if (!isPing)
                     {
-                        _log(Logger.FormatModuleMessage(requestModule, "调试",
-                            $"来源=DLL，EXE收到HTTP请求：方法={method}，路径={requestPath}，" +
-                            $"request_id={requestLogId}，正文长度={(body ?? "").Length}"));
+                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                            "来源=DLL，" + Logger.FormatContextMessage(
+                                method + " " + requestPath,
+                                requestId: requestLogId, result: "收到") +
+                            $" BodyChars={(body ?? "").Length}"));
                     }
 
                     if (DllCommandHandler.IsLatestPlateFramePath(requestPath))
@@ -404,10 +408,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                             binaryResponse.Dispose();
                         }
 
-                        _log(Logger.FormatModuleMessage(requestModule, "调试",
-                            $"来源=DLL，EXE完成HTTP请求：路径={requestPath}，request_id={requestLogId}，" +
-                            $"状态={binaryResponse.StatusCode}，耗时={requestSw.ElapsedMilliseconds}毫秒，" +
-                            $"响应长度={binaryResponse.Body.Length}"));
+                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                            "来源=DLL，" + Logger.FormatContextMessage(
+                                method + " " + requestPath,
+                                requestId: requestLogId,
+                                result: binaryResponse.StatusCode >= 200 &&
+                                        binaryResponse.StatusCode < 300 ? "成功" : "失败",
+                                errorCode: binaryResponse.StatusCode >= 200 &&
+                                           binaryResponse.StatusCode < 300 ? null :
+                                           "http_" + binaryResponse.StatusCode,
+                                durationMs: requestSw.ElapsedMilliseconds) +
+                            $" HttpStatus={binaryResponse.StatusCode} ResponseBytes={binaryResponse.Body.Length}"));
                         return;
                     }
 
@@ -426,9 +437,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                     }
                     else
                     {
-                        _log(Logger.FormatModuleMessage(requestModule, "调试",
-                            $"来源=DLL，EXE完成HTTP请求：路径={requestPath}，request_id={requestLogId}，" +
-                            $"状态=200，耗时={requestSw.ElapsedMilliseconds}毫秒，响应长度={(result ?? "").Length}"));
+                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                            "来源=DLL，" + Logger.FormatContextMessage(
+                                method + " " + requestPath,
+                                requestId: requestLogId,
+                                result: IsSuccessfulBusinessResult(result) ? "成功" : "失败",
+                                errorCode: IsSuccessfulBusinessResult(result) ? null : "business_error",
+                                durationMs: requestSw.ElapsedMilliseconds) +
+                            $" HttpStatus=200 ResponseChars={(result ?? "").Length}"));
                     }
                 }
             }
@@ -453,6 +469,13 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             return string.Equals(JsonHelper.ExtractString(result, "status"),
                 "ok", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSuccessfulBusinessResult(string result)
+        {
+            var error = JsonHelper.ExtractString(result ?? string.Empty, "error");
+            return !string.Equals(error, "true", StringComparison.OrdinalIgnoreCase) &&
+                   !string.Equals(error, "1", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetDllRequestLogModule(string path)
@@ -499,15 +522,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                     callbackPath = (path ?? "").Split('?')[0];
 
                     _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "调试",
-                        $"EXE收到HTTP回调：路径={callbackPath}，request_id={callbackLogId}，" +
-                        $"资源={resourceType}，正文长度={(body ?? "").Length}"));
+                        $"EXE收到HTTP回调：路径={JsonHelper.ToLogValue(callbackPath)}，request_id={callbackLogId}，" +
+                        $"资源={JsonHelper.ToLogValue(resourceType)}，正文长度={(body ?? "").Length}"));
 
                     if (string.Equals(callbackPath, "/iris-image", StringComparison.OrdinalIgnoreCase) &&
                         (string.IsNullOrEmpty(rawRequestId) || resourceType != "iris_image"))
                     {
-                        _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
-                            $"EXE拒绝回调：路径={callbackPath}，request_id={callbackLogId}，" +
-                            $"资源={resourceType}，原因=invalid_iris_callback"));
+                        LogCallbackIngressRateLimited(
+                            "callback|invalid|" + callbackPath + "|" + resourceType,
+                            $"EXE拒绝回调：路径={JsonHelper.ToLogValue(callbackPath)}，" +
+                            $"request_id={callbackLogId}，资源={JsonHelper.ToLogValue(resourceType)}，" +
+                            "原因=invalid_iris_callback");
                         await WriteHttpResponseWithDeadlineAsync(client, stream, 400,
                             "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                             "\",\"status\":\"rejected\",\"message\":\"invalid iris callback\"," +
@@ -527,9 +552,11 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     if (!accepted)
                     {
-                        _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
-                            $"EXE未受理回调：路径={callbackPath}，request_id={callbackLogId}，" +
-                            $"资源={resourceType}，耗时={callbackSw.ElapsedMilliseconds}ms，原因=service_busy"));
+                        LogCallbackIngressRateLimited(
+                            "callback|busy|" + callbackPath + "|" + resourceType,
+                            $"EXE未受理回调：路径={JsonHelper.ToLogValue(callbackPath)}，" +
+                            $"request_id={callbackLogId}，资源={JsonHelper.ToLogValue(resourceType)}，" +
+                            $"耗时={callbackSw.ElapsedMilliseconds}ms，原因=service_busy");
                         await WriteHttpResponseWithDeadlineAsync(client, stream, 503,
                             "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                             "\",\"status\":\"rejected\",\"message\":\"service busy\"," +
@@ -537,9 +564,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                         return;
                     }
 
-                    _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "信息",
-                        $"EXE已受理回调：路径={callbackPath}，request_id={callbackLogId}，" +
-                        $"资源={resourceType}，耗时={callbackSw.ElapsedMilliseconds}ms"));
+                    _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "调试",
+                        $"EXE已受理回调：路径={JsonHelper.ToLogValue(callbackPath)}，request_id={callbackLogId}，" +
+                        $"资源={JsonHelper.ToLogValue(resourceType)}，耗时={callbackSw.ElapsedMilliseconds}ms"));
                     await WriteHttpResponseWithDeadlineAsync(client, stream, 202,
                         "{\"request_id\":\"" + JsonHelper.EscapeString(rawRequestId) +
                         "\",\"status\":\"accepted\"}", 30000).ConfigureAwait(false);
@@ -568,8 +595,19 @@ namespace HZCYKJTHardWare.Proxy.Server
         private static string FormatRequestIdForLog(string requestId, string traceId)
         {
             if (!string.IsNullOrWhiteSpace(requestId))
-                return requestId;
-            return "<无>，日志追踪ID=" + traceId;
+                return JsonHelper.ToLogValue(requestId);
+            return "<无>，日志追踪ID=" + JsonHelper.ToLogValue(traceId);
+        }
+
+        private void LogCallbackIngressRateLimited(string key, string message)
+        {
+            var decision = _callbackIngressRateLimiter.Record(key, message, DateTime.UtcNow);
+            if (!string.IsNullOrEmpty(decision.WindowSummary))
+                _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
+                    decision.WindowSummary));
+            if (decision.EmitCurrent)
+                _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
+                    message));
         }
 
         private void LogException(string context, Exception ex)

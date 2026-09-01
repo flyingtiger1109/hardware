@@ -100,5 +100,70 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
                 Logger.SetMinLevel("info");
             }
         }
+
+        [TestMethod]
+        public void SanitizeLargePayload_OnlyKeepsAllowedScalarsAndNeverWritesRawBody()
+        {
+            var payload = "{\"request_id\":\"REQ-LOG-1\",\"status\":\"ok\"," +
+                          "\"message\":\"完成\",\"image_base64\":\"BASE64_SECRET\"," +
+                          "\"nested\":{\"raw\":\"RAW_SECRET\"}}";
+
+            var sanitized = Logger.SanitizeLargePayloadForLog(payload);
+
+            StringAssert.Contains(sanitized, "RequestId=REQ-LOG-1");
+            StringAssert.Contains(sanitized, "status=ok");
+            StringAssert.Contains(sanitized, "message=完成");
+            StringAssert.Contains(sanitized, "omitted chars=");
+            Assert.IsFalse(sanitized.Contains("BASE64_SECRET"));
+            Assert.IsFalse(sanitized.Contains("RAW_SECRET"));
+            Assert.IsFalse(sanitized.Contains(payload));
+        }
+
+        [TestMethod]
+        public void SanitizeLargePayload_InvalidJsonFallsBackToLengthAndRequestIdOnly()
+        {
+            var sanitized = Logger.SanitizeLargePayloadForLog(
+                "{invalid-body-with-secret=DO_NOT_LOG", "REQ-LOG-2");
+
+            StringAssert.Contains(sanitized, "RequestId=REQ-LOG-2");
+            StringAssert.Contains(sanitized, "omitted chars=");
+            Assert.IsFalse(sanitized.Contains("DO_NOT_LOG"));
+        }
+
+        [TestMethod]
+        public void SanitizeUrlForLog_MasksAuthorityAndCredentialQueryValues()
+        {
+            var sanitized = Logger.SanitizeUrlForLog(
+                "rtsp://user:password@example.test/live?token=abc123&channel=1");
+            var pathSanitized = Logger.SanitizeUrlForLog("/preview?auth=secret&channel=1");
+
+            StringAssert.Contains(sanitized, "***:***@example.test");
+            StringAssert.Contains(sanitized, "token=***");
+            StringAssert.Contains(sanitized, "channel=1");
+            Assert.IsFalse(sanitized.Contains("password"));
+            Assert.IsFalse(sanitized.Contains("abc123"));
+            StringAssert.Contains(pathSanitized, "auth=***");
+            Assert.IsFalse(pathSanitized.Contains("secret"));
+        }
+
+        [TestMethod]
+        public void RateLimiter_EmitsFirstAndWindowEndSummaryOnly()
+        {
+            var limiter = new LogRateLimiter(TimeSpan.FromMinutes(1));
+            var now = new DateTime(2026, 8, 25, 10, 0, 0, DateTimeKind.Utc);
+
+            var first = limiter.Record("T1|/ocr|12029", "连接超时", now);
+            var repeated = limiter.Record("T1|/ocr|12029", "连接超时", now.AddSeconds(1));
+            var nextWindow = limiter.Record("T1|/ocr|12029", "连接被拒绝", now.AddSeconds(61));
+
+            Assert.IsTrue(first.EmitCurrent);
+            Assert.IsNull(first.WindowSummary);
+            Assert.IsFalse(repeated.EmitCurrent);
+            Assert.IsTrue(nextWindow.EmitCurrent);
+            StringAssert.Contains(nextWindow.WindowSummary, "Count=2");
+            StringAssert.Contains(nextWindow.WindowSummary, "FirstTime=");
+            StringAssert.Contains(nextWindow.WindowSummary, "LastTime=");
+            StringAssert.Contains(nextWindow.WindowSummary, "LastError=连接超时");
+        }
     }
 }

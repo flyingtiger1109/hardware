@@ -22,6 +22,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private readonly TerminalProcessRegistry _processRegistry;
         private readonly Action<string> _log;
         private readonly Func<bool> _isIcCardCallbackEnabled;
+        private readonly LogRateLimiter _callbackRateLimiter =
+            new LogRateLimiter(TimeSpan.FromMinutes(1));
         private long _lastIcCardCallbackSuppressedLogUtcTicks;
 
         internal TerminalCallbackHandler(
@@ -115,9 +117,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                             .ConfigureAwait(false);
                         break;
                     default:
-                        // 记录正文片段，用于定位未知回调类型
-                        var snippet = bodyUtf8?.Length > 200 ? bodyUtf8.Substring(0, 200) : (bodyUtf8 ?? "");
-                        _log($"[终端回调][警告] 未知资源类型：路径={callbackPath}，正文={snippet}");
+                        // 未知回调只记录长度和允许的标量摘要，不回写正文片段。
+                        _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
+                            "未知资源类型：路径=" + JsonHelper.ToLogValue(callbackPath) + "，" +
+                            Logger.SanitizeLargePayloadForLog(bodyUtf8)));
                         break;
                 }
             }
@@ -622,6 +625,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _processRegistry.GetCurrentSaveDir(terminalIndex));
         }
 
+        private void LogCallbackRateLimited(string key, string level, string message)
+        {
+            var decision = _callbackRateLimiter.Record(key, message, DateTime.UtcNow);
+            if (!decision.EmitCurrent || _log == null)
+                return;
+            if (!string.IsNullOrEmpty(decision.WindowSummary))
+                _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, level,
+                    decision.WindowSummary));
+            _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, level,
+                message));
+        }
+
         private async Task<CallbackRoute> ResolveCallbackAsync(string requestId,
             string resourceType, string operation, string callbackBody,
             IPAddress sourceAddress)
@@ -636,7 +651,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                          operation, requestId)))
                 {
                     _requestRegistry.Fail(requestId, resourceType);
-                    Logger.Warn($"[{operation}回调] 回调终端与请求路由不一致，已跳过：request_id={requestId}，请求终端={context.TerminalIndex}，当前终端={current.TerminalIndex}");
+                    LogCallbackRateLimited(
+                        operation + "|route_mismatch|" + context.TerminalIndex,
+                        "警告",
+                        $"回调终端与请求路由不一致，已跳过：request_id={JsonHelper.ToLogValue(requestId)}，" +
+                        $"请求终端={context.TerminalIndex}，当前终端={current.TerminalIndex}");
                     return null;
                 }
 
@@ -648,7 +667,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (!_processRegistry.TryGetByRequestId(requestId, out var session))
             {
-                Logger.Warn($"[{operation}回调] 请求重复、已过期或未登记，已跳过：request_id={requestId}");
+                LogCallbackRateLimited(operation + "|unknown_request", "警告",
+                    $"请求重复、已过期或未登记，已跳过：request_id={JsonHelper.ToLogValue(requestId)}");
                 return null;
             }
 
@@ -657,14 +677,19 @@ namespace HZCYKJTHardWare.Proxy.Server
                 !SourceMatchesTerminal(sourceAddress, session.TerminalIndex,
                     operation, requestId))
             {
-                Logger.Warn($"[{operation}回调] 来自非当前终端的流程回调已跳过：request_id={requestId}，回调终端={session.TerminalIndex}，当前终端={activeRoute.TerminalIndex}");
+                LogCallbackRateLimited(
+                    operation + "|wrong_terminal|" + session.TerminalIndex,
+                    "警告",
+                    $"来自非当前终端的流程回调已跳过：request_id={JsonHelper.ToLogValue(requestId)}，" +
+                    $"回调终端={session.TerminalIndex}，当前终端={activeRoute.TerminalIndex}");
                 return null;
             }
 
             if (!_processRegistry.TryReserveEvent(session, resourceType,
                 callbackBody, out var deliveryRequestId))
             {
-                Logger.Warn($"[{operation}回调] 流程事件重复或会话已失效，已跳过：request_id={requestId}");
+                LogCallbackRateLimited(operation + "|duplicate_event", "警告",
+                    $"流程事件重复或会话已失效，已跳过：request_id={JsonHelper.ToLogValue(requestId)}");
                 return null;
             }
 
@@ -680,21 +705,30 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (sourceAddress == null)
             {
-                Logger.Warn($"[{operation}回调] 缺少来源IP，已拒绝：request_id={requestId}，期望终端={expectedTerminalIndex}");
+                LogCallbackRateLimited(operation + "|missing_source|" + expectedTerminalIndex,
+                    "警告",
+                    $"缺少来源IP，已拒绝：request_id={JsonHelper.ToLogValue(requestId)}，" +
+                    $"期望终端={expectedTerminalIndex}");
                 return false;
             }
 
             if (!_terminalManager.TryResolveTerminalIndex(sourceAddress,
                 out var sourceTerminalIndex))
             {
-                Logger.Warn($"[{operation}回调] 来源IP不属于已配置终端，已拒绝：request_id={requestId}，来源={sourceAddress}，期望终端={expectedTerminalIndex}");
+                LogCallbackRateLimited(operation + "|unknown_source|" + expectedTerminalIndex,
+                    "警告",
+                    $"来源IP不属于已配置终端，已拒绝：request_id={JsonHelper.ToLogValue(requestId)}，" +
+                    $"来源={sourceAddress}，期望终端={expectedTerminalIndex}");
                 return false;
             }
 
             if (sourceTerminalIndex == expectedTerminalIndex)
                 return true;
 
-            Logger.Warn($"[{operation}回调] 来源IP与回调会话不一致：request_id={requestId}，来源={sourceAddress}，来源终端={sourceTerminalIndex}，期望终端={expectedTerminalIndex}");
+            LogCallbackRateLimited(operation + "|source_mismatch|" + expectedTerminalIndex,
+                "警告",
+                $"来源IP与回调会话不一致：request_id={JsonHelper.ToLogValue(requestId)}，" +
+                $"来源={sourceAddress}，来源终端={sourceTerminalIndex}，期望终端={expectedTerminalIndex}");
             return false;
         }
 
@@ -711,7 +745,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 current.RouteEpoch == route.RouteEpoch)
                 return true;
 
-            Logger.Warn($"[{operation}回调] 处理期间终端路由已变更，取消投递：request_id={route.SourceRequestId}，回调终端={route.TerminalIndex}，当前终端={current.TerminalIndex}");
+            LogCallbackRateLimited(operation + "|route_changed|" + route.TerminalIndex,
+                "警告",
+                $"处理期间终端路由已变更，取消投递：request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
+                $"回调终端={route.TerminalIndex}，当前终端={current.TerminalIndex}");
             if (!route.Persistent)
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             return false;
@@ -752,7 +789,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (route == null || route.Persistent)
             {
                 if (route != null && delivery == CallbackDeliveryResult.Failed)
-                    Logger.Warn($"[DLL回调] 流程事件投递失败，本次不重试且会话保持有效：process_request_id={route.SourceRequestId}，delivery_request_id={route.DeliveryRequestId}，资源={route.ResourceType}");
+                    LogCallbackRateLimited("dll_callback|persistent_delivery_failed|" + route.ResourceType,
+                        "警告",
+                        $"流程事件投递失败，本次不重试且会话保持有效：process_request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
+                        $"delivery_request_id={JsonHelper.ToLogValue(route.DeliveryRequestId)}，资源={route.ResourceType}");
                 return;
             }
 
@@ -765,7 +805,10 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             if (delivery == CallbackDeliveryResult.Failed)
             {
-                Logger.Warn($"[DLL回调] 结果投递失败，请求立即结束且不重试：request_id={route.SourceRequestId}，资源={route.ResourceType}");
+                LogCallbackRateLimited("dll_callback|delivery_failed|" + route.ResourceType,
+                    "错误",
+                    $"结果投递失败，请求立即结束且不重试：request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
+                    $"资源={route.ResourceType}");
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             }
         }

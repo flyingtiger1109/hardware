@@ -193,7 +193,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         internal static string FormatRequestId(string requestId)
         {
-            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : requestId;
+            return string.IsNullOrWhiteSpace(requestId) ? "<无>" : JsonHelper.ToLogValue(requestId);
         }
 
         internal static string FormatHwnd(IntPtr hwnd)
@@ -382,7 +382,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!ok)
             {
                 Logger.Warn($"预览URL请求失败：资源={ResourceToName(resType)}，request_id={FormatRequestId(terminalRequestId)}，" +
-                            $"终端={terminalBaseUrl}，耗时={sw.ElapsedMilliseconds}ms");
+                            $"终端={Logger.SanitizeUrlForLog(terminalBaseUrl)}，耗时={sw.ElapsedMilliseconds}ms");
                 return null;
             }
 
@@ -453,21 +453,32 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var latestUrl = await FetchPreviewUrl(cached.ResourceType, cached.TerminalBaseUrl).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(latestUrl))
                     {
-                        Logger.Warn($"预览URL校验失败，保留旧缓存：资源={ResourceToName(cached.ResourceType)}，终端={cached.TerminalBaseUrl}");
+                        Logger.TryLogRateLimited(
+                            "PreviewUrlValidation|failed|" + cached.TerminalBaseUrl + "|" +
+                            ResourceToName(cached.ResourceType),
+                            LogModules.Preview, "警告",
+                            $"预览URL校验失败，保留旧缓存：资源={ResourceToName(cached.ResourceType)}，" +
+                            $"终端={Logger.SanitizeUrlForLog(cached.TerminalBaseUrl)}");
                         continue;
                     }
 
                     cached.LastValidatedUtc = DateTime.UtcNow;
                     if (!string.Equals(cached.Url, latestUrl, StringComparison.Ordinal))
                     {
-                        Logger.Warn($"检测到预览URL变更，正在更新缓存：资源={ResourceToName(cached.ResourceType)}，终端={cached.TerminalBaseUrl}");
+                        Logger.TryLogRateLimited(
+                            "PreviewUrlValidation|changed|" + cached.TerminalBaseUrl + "|" +
+                            ResourceToName(cached.ResourceType),
+                            LogModules.Preview, "信息",
+                            $"检测到预览URL变更，正在更新缓存：资源={ResourceToName(cached.ResourceType)}，" +
+                            $"终端={Logger.SanitizeUrlForLog(cached.TerminalBaseUrl)}");
                         UpdatePreviewUrlCache(cached.ResourceType, cached.TerminalBaseUrl, latestUrl);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"预览URL校验异常：{ex.Message}");
+                Logger.TryLogRateLimited("PreviewUrlValidation|exception", LogModules.Preview,
+                    "警告", "预览URL校验异常：" + JsonHelper.ToLogValue(ex.Message));
             }
             finally
             {
@@ -735,7 +746,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             else if (!allowVlcFallback)
             {
-                Logger.Error($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={previewUrl}，{TraceRequest(requestId)}");
+                Logger.Error($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={Logger.SanitizeUrlForLog(previewUrl)}，{TraceRequest(requestId)}");
                 return null;
             }
 
@@ -858,7 +869,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!string.IsNullOrWhiteSpace(current.ExplicitPreviewUrl))
                     {
                         previewUrl = SelectRecoveryPreviewUrl(current.ExplicitPreviewUrl, null);
-                        Logger.Info($"VLC预览恢复复用显式URL：会话={key}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
+                        Logger.Debug($"VLC预览恢复复用显式URL：会话={JsonHelper.ToLogValue(key)}，" +
+                                     $"使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
                     }
                     else
                     {
@@ -899,9 +911,17 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     failedAttempts++;
                     if (failedAttempts <= 3)
-                        Logger.Warn($"VLC预览恢复中：会话={key}，累计尝试次数={failedAttempts}，错误={faultReason}");
+                        Logger.TryLogRateLimited(
+                            "VLC|recovery|" + key + "|retry",
+                            LogModules.Preview, "警告",
+                            $"VLC预览恢复中：会话={JsonHelper.ToLogValue(key)}，累计尝试次数={failedAttempts}，" +
+                            $"错误={JsonHelper.ToLogValue(faultReason)}");
                     else if (failedAttempts % 10 == 0)
-                        Logger.Warn($"VLC预览仍在等待网络恢复：会话={key}，累计尝试次数={failedAttempts}");
+                        Logger.TryLogRateLimited(
+                            "VLC|recovery|" + key + "|waiting",
+                            LogModules.Preview, "警告",
+                            $"VLC预览仍在等待网络恢复：会话={JsonHelper.ToLogValue(key)}，" +
+                            $"累计尝试次数={failedAttempts}");
                     await DelayVlcRecoveryAsync(failedAttempts, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -912,7 +932,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     failedAttempts++;
                     if (failedAttempts <= 3)
-                        Logger.Error($"VLC预览恢复异常：会话={key}，累计尝试次数={failedAttempts}，错误={ex.Message}", ex);
+                        Logger.TryLogRateLimited(
+                            "VLC|recovery|" + key + "|exception",
+                            LogModules.Preview, "错误",
+                            $"VLC预览恢复异常：会话={JsonHelper.ToLogValue(key)}，" +
+                            $"累计尝试次数={failedAttempts}，错误={JsonHelper.ToLogValue(ex.Message)}");
                     await DelayVlcRecoveryAsync(failedAttempts, cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -1051,13 +1075,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!string.IsNullOrWhiteSpace(current.ExplicitPreviewUrl))
                     {
                         previewUrl = SelectRecoveryPreviewUrl(current.ExplicitPreviewUrl, null);
-                        Logger.Info($"HTTP MJPEG恢复复用保存的显式URL：会话={key}，" +
-                                    $"尝试次数={attempt}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
+                        Logger.Debug($"HTTP MJPEG恢复复用保存的显式URL：会话={JsonHelper.ToLogValue(key)}，" +
+                                     $"尝试次数={attempt}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
                     }
                     else
                     {
                         ClearPreviewUrlCache(current.ResourceType, current.TerminalBaseUrl);
-                        Logger.Info($"HTTP MJPEG恢复申请新URL：会话={key}，尝试次数={attempt}");
+                        Logger.Debug($"HTTP MJPEG恢复申请新URL：会话={JsonHelper.ToLogValue(key)}，" +
+                                     $"尝试次数={attempt}");
                         previewUrl = SelectRecoveryPreviewUrl(null,
                             await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
                                 forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
@@ -1110,7 +1135,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     failedAttempts++;
                     faultReason = ex.Message;
-                    Logger.Error($"HTTP MJPEG恢复异常：会话={key}，尝试次数={failedAttempts}，错误={ex.Message}", ex);
+                    Logger.TryLogRateLimited(
+                        "MJPEG|recovery|" + key + "|exception",
+                        LogModules.Preview, "错误",
+                        $"HTTP MJPEG恢复异常：会话={JsonHelper.ToLogValue(key)}，" +
+                        $"尝试次数={failedAttempts}，错误={JsonHelper.ToLogValue(ex.Message)}");
                 }
                 finally
                 {
@@ -1127,7 +1156,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 var delayMs = GetRecoveryDelayMs(failedAttempts);
-                Logger.Warn($"HTTP MJPEG恢复未成功，{delayMs}ms后重试：会话={key}，尝试次数={failedAttempts}");
+                Logger.TryLogRateLimited(
+                    "MJPEG|recovery|" + key + "|retry",
+                    LogModules.Preview, "警告",
+                    $"HTTP MJPEG恢复未成功，{delayMs}ms后重试：会话={JsonHelper.ToLogValue(key)}，" +
+                    $"尝试次数={failedAttempts}");
                 try
                 {
                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);

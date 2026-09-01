@@ -149,14 +149,17 @@ DelphiProxy::DelphiProxy(const std::string& baseUrl)
 bool DelphiProxy::Ping() {
     std::string response;
     if (!Get("/ping", response)) {
-        LOG_ERROR("代理服务", "硬件控制程序连通性检查失败：地址=%s", baseUrl_.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序连通性检查失败：地址=%s",
+                  SanitizeUrlForLog(baseUrl_).c_str());
         return false;
     }
     if (!IsOkResponse(response)) {
-        LOG_ERROR("代理服务", "硬件控制程序连通性响应无效：response=%s", response.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序连通性响应无效：%s",
+                  SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
-    LOG_INFO("代理服务", "硬件控制程序连通性检查成功：地址=%s", baseUrl_.c_str());
+    LOG_INFO("代理服务", "硬件控制程序连通性检查成功：地址=%s",
+             SanitizeUrlForLog(baseUrl_).c_str());
     return true;
 }
 
@@ -385,10 +388,11 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
     const std::string path = "/preview/plate/" + plateCode + "/latest-frame";
     const std::string body = "{" + JsonStringField("request_id", requestId) + "}";
     const std::string url = BuildUrl(path);
+    const std::string safeUrl = SanitizeUrlForLog(url);
     std::string response;
     int statusCode = 0;
     LOG_DEBUG("代理服务", "获取最新车牌帧：车牌=%s，地址=%s，request_id=%s",
-              plateCode.c_str(), url.c_str(), requestId.c_str());
+              plateCode.c_str(), safeUrl.c_str(), requestId.c_str());
 
     const bool posted = http->PostBinary(url, body, connectTimeout, requestTimeout,
                                          kMaxJpegBytes, response, statusCode);
@@ -457,9 +461,10 @@ bool DelphiProxy::RequestAuthorize(const std::string& requestId,
         JsonStringField("callback_url", callbackUrl) +
         "}";
     std::string response;
+    const std::string safeAuthorizeUrl = SanitizeUrlForLog(BuildUrl("/authorize"));
     LOG_INFO("授权", "DLL转发授权请求至EXE：请求ID=%s，请求地址=%s，回调地址=%s",
-             requestId.c_str(), BuildUrl("/authorize").c_str(),
-             LogValue(callbackUrl).c_str());
+             requestId.c_str(), safeAuthorizeUrl.c_str(),
+             SanitizeUrlForLog(callbackUrl).c_str());
 
     bool posted = PostJson("/authorize", body, response, timeoutMs, false);
     std::string errorCode;
@@ -503,20 +508,22 @@ bool DelphiProxy::Get(const std::string& path, std::string& response,
         return false;
     }
     std::string url = BuildUrl(path);
+    const std::string safeUrl = SanitizeUrlForLog(url);
     bool ok = http->Get(url, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
         if (!quiet)
-            LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", url.c_str());
+            LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", safeUrl.c_str());
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
         if (!quiet)
-            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=GET，url=%s，status=%d，response=%s",
-                      url.c_str(), statusCode, response.c_str());
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：method=GET，url=%s，status=%d，%s",
+                      safeUrl.c_str(), statusCode,
+                      SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
     if (!quiet)
-        LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：method=GET，url=%s，status=%d", url.c_str(), statusCode);
+        LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：method=GET，url=%s，status=%d", safeUrl.c_str(), statusCode);
     return true;
 }
 
@@ -552,13 +559,14 @@ bool DelphiProxy::PostJson(const std::string& path,
         return false;
     }
     std::string url = BuildUrl(path);
+    const std::string safeUrl = SanitizeUrlForLog(url);
     LOG_DEBUG("代理服务", "DLL正在下发硬件控制程序：方法=POST，地址=%s，request_id=%s",
-              url.c_str(), requestIdForLog);
+              safeUrl.c_str(), requestIdForLog);
     bool ok = http->PostJson(url, body, connectTimeout, requestTimeout, response, statusCode);
     if (!ok) {
         lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
         LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：方法=POST，地址=%s，request_id=%s",
-                  url.c_str(), requestIdForLog);
+                  safeUrl.c_str(), requestIdForLog);
         return false;
     }
     if (statusCode < 200 || statusCode >= 300) {
@@ -567,11 +575,12 @@ bool DelphiProxy::PostJson(const std::string& path,
         if (responseCode == "not_supported")
             lastResultCode_ = HZCYKJTHardWare_RET_UNSUPPORTED;
         if (logRawResponse) {
-            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：方法=POST，地址=%s，状态=%d，request_id=%s，响应=%s",
-                      url.c_str(), statusCode, requestIdForLog, response.c_str());
+            LOG_ERROR("代理服务", "硬件控制程序响应状态异常：方法=POST，地址=%s，状态=%d，request_id=%s，%s",
+                      safeUrl.c_str(), statusCode, requestIdForLog,
+                      SanitizeLargePayloadForLog(response, requestId).c_str());
         } else {
             LOG_ERROR("代理服务", "硬件控制程序响应状态异常：方法=POST，地址=%s，HTTP状态=%d，request_id=%s，错误码=%s，消息=%s",
-                      url.c_str(), statusCode, requestIdForLog,
+                      safeUrl.c_str(), statusCode, requestIdForLog,
                       LogValue(JsonHelper::GetString(response, "code")).c_str(),
                       LogValue(JsonHelper::GetString(response, "message")).c_str());
         }
@@ -584,18 +593,19 @@ bool DelphiProxy::PostJson(const std::string& path,
         if (errorCode == "not_supported")
             lastResultCode_ = HZCYKJTHardWare_RET_UNSUPPORTED;
         if (logRawResponse) {
-            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：地址=%s，request_id=%s，代码=%s，消息=%s，响应=%s",
-                      url.c_str(), requestIdForLog, errorCode.c_str(), errorMessage.c_str(), response.c_str());
+            LOG_ERROR("代理服务", "硬件控制程序返回业务错误：地址=%s，request_id=%s，代码=%s，消息=%s，%s",
+                      safeUrl.c_str(), requestIdForLog, errorCode.c_str(), errorMessage.c_str(),
+                      SanitizeLargePayloadForLog(response, requestId).c_str());
         } else {
             LOG_ERROR("代理服务", "硬件控制程序返回业务错误：地址=%s，request_id=%s，错误码=%s，消息=%s",
-                      url.c_str(), requestIdForLog,
+                      safeUrl.c_str(), requestIdForLog,
                       LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
         }
         return false;
     }
 
     LOG_DEBUG("代理服务", "DLL下发硬件控制程序成功：方法=POST，地址=%s，状态=%d，request_id=%s",
-              url.c_str(), statusCode, requestIdForLog);
+              safeUrl.c_str(), statusCode, requestIdForLog);
     return true;
 }
 
@@ -603,8 +613,9 @@ bool DelphiProxy::IsOkResponse(const std::string& response) {
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("代理服务", "硬件控制程序响应包含错误：code=%s，message=%s，response=%s",
-                  errorCode.c_str(), errorMessage.c_str(), response.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序响应包含错误：code=%s，message=%s，%s",
+                  errorCode.c_str(), errorMessage.c_str(),
+                  SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
 
@@ -613,7 +624,8 @@ bool DelphiProxy::IsOkResponse(const std::string& response) {
         return true;
     }
 
-    LOG_ERROR("代理服务", "硬件控制程序响应未返回成功状态：response=%s", response.c_str());
+    LOG_ERROR("代理服务", "硬件控制程序响应未返回成功状态：%s",
+              SanitizeLargePayloadForLog(response).c_str());
     return false;
 }
 
@@ -621,8 +633,9 @@ bool DelphiProxy::IsAcceptedResponse(const std::string& response) {
     std::string errorCode;
     std::string errorMessage;
     if (HasErrorResponse(response, errorCode, errorMessage)) {
-        LOG_ERROR("代理服务", "硬件控制程序受理响应包含错误：code=%s，message=%s，response=%s",
-                  errorCode.c_str(), errorMessage.c_str(), response.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序受理响应包含错误：code=%s，message=%s，%s",
+                  errorCode.c_str(), errorMessage.c_str(),
+                  SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
 
@@ -630,7 +643,8 @@ bool DelphiProxy::IsAcceptedResponse(const std::string& response) {
         return true;
     }
 
-    LOG_ERROR("代理服务", "硬件控制程序未受理请求：response=%s", response.c_str());
+    LOG_ERROR("代理服务", "硬件控制程序未受理请求：%s",
+              SanitizeLargePayloadForLog(response).c_str());
     return false;
 }
 
@@ -642,8 +656,8 @@ bool DelphiProxy::ExtractSavePath(const std::string& response,
 
     outSavePath = JsonHelper::GetString(response, "save_path");
     if (outSavePath.empty()) {
-        LOG_ERROR("代理服务", "硬件控制程序同步抓拍响应缺少save_path：response=%s",
-                  response.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序同步抓拍响应缺少save_path：%s",
+                  SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
     return true;
@@ -660,8 +674,8 @@ bool DelphiProxy::GetPreviewUrl(const std::string& path,
 
     outPreviewUrl = JsonHelper::GetString(response, "preview_url");
     if (outPreviewUrl.empty()) {
-        LOG_ERROR("代理服务", "硬件控制程序预览地址响应为空：path=%s，response=%s",
-                  path.c_str(), response.c_str());
+        LOG_ERROR("代理服务", "硬件控制程序预览地址响应为空：path=%s，%s",
+                  path.c_str(), SanitizeLargePayloadForLog(response, requestId).c_str());
         return false;
     }
     return true;

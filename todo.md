@@ -1643,3 +1643,62 @@
 - [ ] Windows 界面实际启动和现场 DLL 联调待验证。
 
 兼容性：仅修复 C# Demo 对 JSONC 配置的读取，不修改统一配置字段含义、Native DLL ABI、Proxy 行为或第三方调用方式。
+
+## 阶段3：日志体系优化（新增功能，不增加版本号，2026-08-31）
+
+### 当前阶段
+
+阶段3 L1-L5 已完成代码修改，现场硬件、第三方调用和长稳验证待执行。
+
+### 已完成内容
+
+- [x] L1：Native DLL、C# Proxy 增加统一日志模块、级别和业务上下文字段；业务入口/出口补充 `Operation`、`RequestId`、`Result`、`ErrorCode`、`DurationMs` 等上下文。
+- [x] L2：增加 JSON 标量摘要、Base64/原始正文过滤、URL 用户信息和凭据 query 脱敏；非法正文仅记录长度及 `RequestId`，不回退打印完整正文。
+- [x] L3：调整 HTTP、队列、路由、VLC/MJPEG 内部步骤为 DEBUG；保留流程、预览状态、最终成功/失败和永久故障的 INFO/WARN/ERROR 语义。
+- [x] L4：增加 60 秒限频和窗口汇总，覆盖 HTTP 故障、终端离线、MJPEG/VLC 恢复、回调忙/无效/重复、事件队列以及日志写入异常。
+- [x] L5：Native DLL 与 C# Proxy 均使用有界异步队列、ERROR 保留队列、应急输出、按天/按大小滚动、保留期/总容量治理、低磁盘 DEBUG 抑制和运行指标；当前文件也计入容量治理。
+- [x] 修改前已提交并推送基线：`89435ae5 feat: 新增功能阶段3实施前版本基线（不增加版本号)`，分支为 `feature/overlay-container-preview`。
+
+### 涉及文件
+
+- Native 日志与调用点：`src/logger.h`、`src/logger.cpp`、`src/callback_server.cpp`、`src/delphi_proxy.cpp`、`src/event_dispatcher.cpp`、`src/exports.cpp`、`src/http_client.cpp`、`src/libvlc_rtsp_renderer.cpp`、`src/preview_manager.cpp`、`src/request_session_manager.cpp`、`src/terminal_manager.cpp`、`src/terminal_status_checker.cpp`。
+- C# Proxy 日志与调用点：`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/Logger.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/LogRateLimiter.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/PingLogAggregator.cs`、预览、HTTP、请求队列、回调和服务文件。
+- 测试：`demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/PingLogAggregatorTests.cs`。
+
+### 兼容性说明
+
+- DLL ABI、导出函数名与参数、调用约定、结构体布局、回调签名和错误码未修改；公开头文件及 `.def` 未修改。
+- HTTP/回调请求响应格式、第三方调用流程和设备协议未修改；仅改变日志级别、日志内容摘要和日志落盘策略。
+- 不新增依赖；版本号保持修改前基线值，本次未增加版本号。
+- 现有第三方业务载荷仍按原链路传输，日志不再记录完整 Base64/原始正文。
+
+### 风险与注意事项
+
+1. 日志目录不可写、主日志文件写入失败或低磁盘时将转入应急文件/`OutputDebugString`，ERROR 仍尽力保留；现场需确认临时目录权限和磁盘空间。
+2. 同设备/接口/错误类别的重复故障在 60 秒内会被聚合，窗口结束记录 `Count`、`FirstTime`、`LastTime`、`LastError`；首次故障及恢复/最终故障仍即时记录。
+3. 异步日志可能在进程异常终止时来不及完整落盘；需要结合 `log_pending`、`log_dropped_total`、`log_write_failures`、`log_last_flush_age_ms` 和当前文件大小观察。
+4. 工作区中的 `_codex_build`、测试 `obj`、抓拍/压力输出、Office 临时文件和示例凭据文件为生成物或既有未跟踪内容，本次未纳入阶段3范围。
+
+### 验证状态
+
+- [x] Native `Release|Win32`（x86）编译：0 警告、0 错误，生成 `Release\HZCYKJTHardWare.dll`。
+- [x] C# Proxy `Release|x86` 编译：0 警告、0 错误。
+- [x] C# Tests `Release|x86` 编译：0 错误；存在既有 NuGet 漏洞源不可达警告 `NU1900`。
+- [x] 阶段3定向 VSTest：11/11 通过，覆盖日志队列健康、级别分类、载荷/URL 脱敏、限频汇总和 Ping 聚合。
+- [x] 完整 x86 VSTest：151 个，139 通过，12 失败。10 个 Proxy 集成测试因当前 VSTest/.NET 环境的 `System.Net.HttpListener` `PlatformNotSupportedException` 在类初始化阶段失败；`ProductVersion_IsEmbeddedAndVisibleInMainWindow` 仍为既有版本期望 `1.3.1.0`、实际 `1.3.5.0`；`ProcessCallback_AfterSwitchAtoBtoA_IsDeliveredAgain` 仍为既有路由测试失败，日志差异未改变其路由逻辑。
+- [x] `git diff --check`：未发现空白错误；仅有 Git 关于 LF/CRLF 的提示。
+- [x] 相对阶段3基线核对：公开头文件/`.def` 未变更，版本资源与 `AssemblyInfo.cs` 未新增变化。
+- [ ] `dotnet test` 有返回码但当前测试项目未配置 `Microsoft.NET.Test.Sdk`，未形成有效测试执行，不能视为通过。
+- [x] `dumpbin` 导出表：生成 DLL 导出 25 个符号，与现有 `.def` 导出集合一致。
+- [ ] 第三方 Delphi Demo、Windows 10/11 x86 Release 真实设备调用待验证。
+- [ ] 真实终端断开/重连、第三方 callback、低磁盘/不可写目录、长时间（2/24 小时）稳定性待验证。
+
+### 下一步计划
+
+- [ ] 在 Windows 10/11 x86 Release 环境执行真实硬件启停、抓拍/OCR/NFC/授权、预览恢复和第三方回调回归。
+- [ ] 验证日志滚动、保留期、总容量、低磁盘应急输出和长稳指标。
+- [ ] 单独处理或确认上述既有测试环境/版本号/路由测试问题，不将其混入阶段3日志改动。
+
+### 回退方式
+
+阶段3改动当前仍在本地、未形成新的提交；修改前基线 `89435ae5` 已推送到 Gitee。需要回退时，仅按阶段3涉及文件相对 `89435ae5` 的差异逐文件恢复，保留工作区其他用户改动及生成物；不修改版本号、不执行宽范围重置。

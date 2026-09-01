@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using Newtonsoft.Json.Linq;
+using HZCYKJTHardWare.Proxy.Parsing;
 
 namespace HZCYKJTHardWare.Proxy.Infrastructure
 {
@@ -37,12 +40,22 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
     public static class Logger
     {
         private const int MaxQueueLength = 10000;
+        private const int ReservedErrorQueueLength = 256;
+        private const long MaxFileSizeBytes = 200L * 1024L * 1024L;
         private static readonly object _writerLock = new object();
         private static readonly BlockingCollection<LogEntry> _queue;
+        private static readonly BlockingCollection<LogEntry> _errorQueue;
         private static readonly string _logDir;
         private static readonly Thread _workerThread;
+        private static readonly LogRateLimiter _rateLimiter =
+            new LogRateLimiter(TimeSpan.FromMinutes(1));
+        private static readonly LogRateLimiter _writerFailureRateLimiter =
+            new LogRateLimiter(TimeSpan.FromMinutes(1));
         private static StreamWriter _writer;
         private static string _currentLogPath;
+        private static string _currentLogDate;
+        private static int _rollIndex;
+        private static long _pendingBytes;
         private static long _droppedCount;
         private static long _totalDroppedCount;
         private const string LogNamePrefix = "HZCYKJTHardWareExe_Logs";
@@ -59,8 +72,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static long _currentFileLength;
         private static long _writeFailureCount;
         private static string _lastWriteError = "";
-        private static long _lastEmergencyReportUtcTicks;
         private static int _shutdownState;
+        private static int _lowDiskMode;
 
         // 日志级别过滤：0=Debug，1=Info，2=Warn，3=Error
         private static int _minLevel = 1; // default Info
@@ -80,7 +93,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         }
 
         public static string LogDirectory => _logDir;
-        internal static int PendingCount => _queue.Count;
+        internal static int PendingCount => _queue.Count + _errorQueue.Count;
         internal static long TotalDroppedCount => Interlocked.Read(ref _totalDroppedCount);
         internal static long WriteFailureCount => Interlocked.Read(ref _writeFailureCount);
         internal static long CurrentFileLength => Interlocked.Read(ref _currentFileLength);
@@ -91,13 +104,24 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         static Logger()
         {
             _logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, LogNamePrefix);
-            if (!Directory.Exists(_logDir))
-                Directory.CreateDirectory(_logDir);
+            try
+            {
+                if (!Directory.Exists(_logDir))
+                    Directory.CreateDirectory(_logDir);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("Logger log directory initialization failure: " + ex);
+                Interlocked.Increment(ref _writeFailureCount);
+            }
 
             lock (_writerLock)
                 CleanupOldLogsLocked();
 
-            _queue = new BlockingCollection<LogEntry>(new ConcurrentQueue<LogEntry>(), MaxQueueLength);
+            _queue = new BlockingCollection<LogEntry>(
+                new ConcurrentQueue<LogEntry>(), MaxQueueLength - ReservedErrorQueueLength);
+            _errorQueue = new BlockingCollection<LogEntry>(
+                new ConcurrentQueue<LogEntry>(), ReservedErrorQueueLength);
             _workerThread = new Thread(WriterLoop)
             {
                 Name = "CSharpProxy_Logger",
@@ -162,6 +186,140 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             return $"[{normalizedModule}][{normalizedLevel}] {message ?? string.Empty}";
         }
 
+        internal static string FormatContextMessage(string operation,
+            string terminalIndex = null, string device = null, string requestId = null,
+            string result = null, string errorCode = null, long? durationMs = null,
+            long? queueWaitMs = null, int? attempt = null, long? routeEpoch = null)
+        {
+            var fields = new List<string>();
+            AppendContextField(fields, "Operation", operation);
+            AppendContextField(fields, "TerminalIndex", terminalIndex);
+            AppendContextField(fields, "Device", device);
+            AppendContextField(fields, "RequestId", requestId);
+            AppendContextField(fields, "Result", result);
+            AppendContextField(fields, "ErrorCode", errorCode);
+            if (durationMs.HasValue)
+                AppendContextField(fields, "DurationMs", durationMs.Value.ToString());
+            if (queueWaitMs.HasValue)
+                AppendContextField(fields, "QueueWaitMs", queueWaitMs.Value.ToString());
+            if (attempt.HasValue)
+                AppendContextField(fields, "Attempt", attempt.Value.ToString());
+            if (routeEpoch.HasValue)
+                AppendContextField(fields, "RouteEpoch", routeEpoch.Value.ToString());
+            return string.Join(" ", fields);
+        }
+
+        internal static string SanitizeLargePayloadForLog(string payload,
+            string requestId = null)
+        {
+            payload = payload ?? string.Empty;
+            var requestIdForLog = requestId;
+            JObject json = null;
+            try
+            {
+                json = string.IsNullOrWhiteSpace(payload) ? null : JObject.Parse(payload);
+                if (string.IsNullOrWhiteSpace(requestIdForLog))
+                    requestIdForLog = json?["request_id"]?.ToString();
+            }
+            catch
+            {
+                json = null;
+            }
+
+            var text = "payload=<omitted chars=" + payload.Length +
+                       " estimated_bytes=" + Encoding.UTF8.GetByteCount(payload) + ">";
+            if (!string.IsNullOrWhiteSpace(requestIdForLog))
+                text += " RequestId=" + JsonHelper.ToLogValue(requestIdForLog);
+
+            if (json == null)
+                return text;
+
+            var safeKeys = new[]
+            {
+                "status", "error_code", "code", "accepted", "result",
+                "resource_type", "message", "save_path", "mrz", "card_text"
+            };
+            foreach (var key in safeKeys)
+            {
+                var token = json[key];
+                if (token == null || token.Type == JTokenType.Object ||
+                    token.Type == JTokenType.Array || IsSensitivePayloadKey(key))
+                    continue;
+
+                var value = token.Type == JTokenType.String
+                    ? token.Value<string>()
+                    : token.ToString(Newtonsoft.Json.Formatting.None);
+                if (string.IsNullOrEmpty(value))
+                    continue;
+                text += " " + key + "=" + JsonHelper.ToLogValue(value);
+            }
+            return text;
+        }
+
+        internal static string SanitizeUrlForLog(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
+            var result = value;
+            var schemeEnd = result.IndexOf("://", StringComparison.Ordinal);
+            var authorityStart = schemeEnd >= 0 ? schemeEnd + 3 : 0;
+            if (schemeEnd >= 0)
+            {
+                var authorityEnd = result.IndexOfAny(new[] { '/', '?', '#' }, authorityStart);
+                if (authorityEnd < 0) authorityEnd = result.Length;
+                var at = authorityEnd > authorityStart
+                    ? result.LastIndexOf('@', authorityEnd - 1,
+                        authorityEnd - authorityStart)
+                    : -1;
+                if (at >= authorityStart)
+                    result = result.Substring(0, authorityStart) + "***:***@" +
+                             result.Substring(at + 1);
+            }
+
+            var queryStart = result.IndexOf('?', authorityStart);
+            if (queryStart >= 0)
+            {
+                var fragmentStart = result.IndexOf('#', queryStart + 1);
+                var queryEnd = fragmentStart >= 0 ? fragmentStart : result.Length;
+                var query = result.Substring(queryStart + 1, queryEnd - queryStart - 1);
+                var queryParts = query.Split(new[] { '&' }, StringSplitOptions.None);
+                for (var i = 0; i < queryParts.Length; i++)
+                {
+                    var equal = queryParts[i].IndexOf('=');
+                    if (equal >= 0)
+                    {
+                        var key = queryParts[i].Substring(0, equal).ToLowerInvariant();
+                        if (key.Contains("password") || key.Contains("passwd") ||
+                            key.Contains("token") || key.Contains("secret") ||
+                            key.Contains("credential") || key == "key" || key == "auth")
+                        {
+                            queryParts[i] = queryParts[i].Substring(0, equal + 1) + "***";
+                        }
+                    }
+                }
+                var suffix = fragmentStart >= 0 ? result.Substring(fragmentStart) : string.Empty;
+                result = result.Substring(0, queryStart + 1) +
+                         string.Join("&", queryParts) + suffix;
+            }
+            return JsonHelper.ToLogValue(result, 512);
+        }
+
+        internal static bool TryLogRateLimited(string key, string module,
+            string level, string message)
+        {
+            var normalizedLevel = NormalizeLevelName(level);
+            var levelNumber = LevelToNumber(normalizedLevel);
+            if (!IsLevelEnabled(levelNumber)) return false;
+
+            var decision = _rateLimiter.Record(key, message, DateTime.UtcNow);
+            if (!decision.EmitCurrent) return false;
+            if (!string.IsNullOrEmpty(decision.WindowSummary))
+                Write(normalizedLevel, FormatModuleMessage(module, normalizedLevel,
+                    decision.WindowSummary), levelNumber);
+            Write(normalizedLevel, FormatModuleMessage(module, normalizedLevel,
+                message), levelNumber);
+            return true;
+        }
+
         public static string NormalizeForDisplay(string message, string defaultLevel = "信息")
         {
             var parsed = ParseMessage(message, defaultLevel);
@@ -177,30 +335,45 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static void Write(string level, string message, int levelNum)
         {
             if (!IsLevelEnabled(levelNum)) return;
-            if (Volatile.Read(ref _shutdownState) != 0)
-            {
-                RecordDroppedEntry();
-                return;
-            }
+            string formattedLine = null;
             try
             {
                 var now = DateTime.Now;
                 var date = now.ToString("yyyyMMdd");
-                var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] {NormalizeForDisplay(message, level)}";
+                formattedLine = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] {NormalizeForDisplay(message, level)}";
 
-                if (!_queue.TryAdd(new LogEntry
-                    { Date = date, Line = line, LevelNum = levelNum }, 0))
+                var entry = new LogEntry
+                {
+                    Date = date,
+                    Line = formattedLine,
+                    LevelNum = levelNum
+                };
+                if (levelNum >= 3)
+                {
+                    if (!_errorQueue.TryAdd(entry, 0) &&
+                        !TryWriteEmergencyLine(formattedLine, "ERROR queue full or logger stopping"))
+                        RecordDroppedEntry();
+                }
+                else if (!_queue.TryAdd(entry, 0))
                 {
                     RecordDroppedEntry();
                 }
             }
             catch (InvalidOperationException)
             {
-                RecordDroppedEntry();
+                if (levelNum >= 3 && !TryWriteEmergencyLine(
+                    formattedLine ?? message ?? string.Empty, "ERROR queue is closed"))
+                    RecordDroppedEntry();
+                else if (levelNum < 3)
+                    RecordDroppedEntry();
             }
             catch
             {
-                // 日志组件不得向外抛出异常，避免导致进程退出
+                if (levelNum >= 3 && !TryWriteEmergencyLine(
+                    formattedLine ?? message ?? string.Empty, "ERROR enqueue failed"))
+                    RecordDroppedEntry();
+                else if (levelNum < 3)
+                    RecordDroppedEntry();
             }
         }
 
@@ -241,6 +414,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 try { _queue.CompleteAdding(); }
                 catch (InvalidOperationException) { }
+                try { _errorQueue.CompleteAdding(); }
+                catch (InvalidOperationException) { }
             }
 
             if (Thread.CurrentThread == _workerThread)
@@ -255,30 +430,42 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 Trace.WriteLine("Logger shutdown timed out before the queue was fully drained.");
             }
 
-            return stopped && _queue.Count == 0;
+            return stopped && _queue.Count == 0 && _errorQueue.Count == 0;
         }
 
         private static void WriterLoop()
         {
-            while (!_queue.IsCompleted)
+            while (!_queue.IsCompleted || !_errorQueue.IsCompleted)
             {
+                LogEntry entry = default(LogEntry);
+                var hasEntry = false;
                 try
                 {
-                    LogEntry entry;
-                    if (_queue.TryTake(out entry, _flushIntervalMs))
+                    if (_errorQueue.TryTake(out entry, 0))
                     {
-                        if (entry.FlushSignal != null)
-                        {
-                            try { FlushWriter(); }
-                            finally { entry.FlushSignal.Set(); }
-                        }
-                        else
-                        {
-                            WriteToFile(entry);
-                        }
+                        hasEntry = true;
+                    }
+                    else if (_queue.TryTake(out entry, _flushIntervalMs))
+                    {
+                        hasEntry = true;
                     }
                     else
+                    {
                         FlushWriter();
+                    }
+
+                    if (!hasEntry)
+                        continue;
+
+                    if (entry.FlushSignal != null)
+                    {
+                        try { FlushWriter(); }
+                        finally { entry.FlushSignal.Set(); }
+                    }
+                    else
+                    {
+                        WriteToFile(entry);
+                    }
                 }
                 catch (ThreadAbortException)
                 {
@@ -287,7 +474,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 catch (Exception ex)
                 {
                     RecordWriterFailure(ex);
-                    // 日志组件不得向外抛出异常
+                    if (hasEntry && entry.FlushSignal != null)
+                        entry.FlushSignal.Set();
+                    else if (hasEntry && entry.LevelNum >= 3)
+                        TryWriteEmergencyLine(entry.Line, "logger worker exception");
                 }
             }
 
@@ -298,6 +488,10 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     FlushWriterLocked();
                     _writer?.Dispose();
                     _writer = null;
+                    _currentLogPath = null;
+                    _currentLogDate = null;
+                    _rollIndex = 0;
+                    _pendingBytes = 0;
                 }
             }
             catch (Exception ex)
@@ -314,38 +508,109 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             lock (_writerLock)
             {
+                if (entry.LevelNum == 0 && Volatile.Read(ref _lowDiskMode) != 0)
+                    return;
+
                 if (!Directory.Exists(_logDir))
                     Directory.CreateDirectory(_logDir);
 
-                var filePath = Path.Combine(_logDir, $"{LogNamePrefix}_{entry.Date}.log");
-                if (_writer == null || !string.Equals(_currentLogPath, filePath, StringComparison.OrdinalIgnoreCase))
+                var basePath = Path.Combine(_logDir, $"{LogNamePrefix}_{entry.Date}.log");
+                if (_writer == null || !string.Equals(_currentLogDate, entry.Date,
+                    StringComparison.Ordinal))
                 {
                     _writer?.Dispose();
+                    _rollIndex = 0;
+                    var filePath = SelectLogPath(entry.Date, basePath);
                     _writer = CreateSharedWriter(filePath);
                     _currentLogPath = filePath;
+                    _currentLogDate = entry.Date;
                     _pendingLines = 0;
+                    _pendingBytes = 0;
                     _lastFlushUtc = DateTime.UtcNow;
-                    CleanupOldLogsLocked();
+                    CleanupOldLogsLocked(true);
                     CheckDiskSpaceLocked();
                 }
 
                 var dropped = Interlocked.Exchange(ref _droppedCount, 0);
                 if (dropped > 0)
                 {
-                    _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
-                        NormalizeForDisplay("日志队列已满，已丢弃 " + dropped + " 条日志", "警告"));
-                    _pendingLines++;
+                    WriteLineLocked($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                        NormalizeForDisplay("日志队列已满，已丢弃 " + dropped + " 条日志", "警告"), 2);
                 }
 
-                _writer.WriteLine(entry.Line);
+                if (!WriteLineLocked(entry.Line, entry.LevelNum))
+                    throw new IOException("日志行写入失败");
                 Interlocked.Exchange(ref _lastSuccessfulWriteUtcTicks, DateTime.UtcNow.Ticks);
-                _pendingLines++;
                 if (entry.LevelNum >= 3 || _pendingLines >= _flushBatchSize ||
                     (DateTime.UtcNow - _lastFlushUtc).TotalMilliseconds >= _flushIntervalMs)
                 {
                     FlushWriterLocked();
                 }
             }
+        }
+
+        private static string SelectLogPath(string date, string basePath)
+        {
+            var candidate = basePath;
+            _rollIndex = 0;
+            if (File.Exists(candidate) && new FileInfo(candidate).Length >= MaxFileSizeBytes)
+            {
+                for (var index = 1; index < 10000; index++)
+                {
+                    candidate = Path.Combine(_logDir,
+                        $"{LogNamePrefix}_{date}_{index:000}.log");
+                    if (!File.Exists(candidate) ||
+                        new FileInfo(candidate).Length < MaxFileSizeBytes)
+                    {
+                        _rollIndex = index;
+                        break;
+                    }
+                }
+            }
+            return candidate;
+        }
+
+        private static bool WriteLineLocked(string line, int levelNum)
+        {
+            if (_writer == null)
+                return false;
+
+            var text = line ?? string.Empty;
+            var lineBytes = Encoding.UTF8.GetByteCount(text) +
+                            Encoding.UTF8.GetByteCount(Environment.NewLine);
+            var fileLength = File.Exists(_currentLogPath)
+                ? new FileInfo(_currentLogPath).Length : 0L;
+            if (MaxFileSizeBytes > 0 &&
+                fileLength + _pendingBytes + lineBytes > MaxFileSizeBytes &&
+                fileLength + _pendingBytes > 0)
+            {
+                _writer.Flush();
+                _writer.Dispose();
+                for (var index = _rollIndex + 1; index < 10000; index++)
+                {
+                    var candidate = Path.Combine(_logDir,
+                        $"{LogNamePrefix}_{_currentLogDate}_{index:000}.log");
+                    if (!File.Exists(candidate) ||
+                        new FileInfo(candidate).Length < MaxFileSizeBytes)
+                    {
+                        _rollIndex = index;
+                        _currentLogPath = candidate;
+                        break;
+                    }
+                }
+                _writer = CreateSharedWriter(_currentLogPath);
+                _pendingBytes = 0;
+                _pendingLines = 0;
+                fileLength = File.Exists(_currentLogPath)
+                    ? new FileInfo(_currentLogPath).Length : 0L;
+                CleanupOldLogsLocked(true);
+            }
+
+            _writer.WriteLine(text);
+            _pendingLines++;
+            _pendingBytes += lineBytes;
+            Interlocked.Exchange(ref _currentFileLength, fileLength + _pendingBytes);
+            return true;
         }
 
         private static void FlushWriter()
@@ -363,6 +628,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 Interlocked.Exchange(ref _lastSuccessfulFlushUtcTicks, DateTime.UtcNow.Ticks);
             }
             _pendingLines = 0;
+            _pendingBytes = 0;
             _lastFlushUtc = DateTime.UtcNow;
         }
 
@@ -371,6 +637,36 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             var stream = new FileStream(filePath, FileMode.Append, FileAccess.Write,
                 FileShare.ReadWrite, 4096, FileOptions.SequentialScan);
             return new StreamWriter(stream, Encoding.UTF8) { AutoFlush = false };
+        }
+
+        private static bool TryWriteEmergencyLine(string line, string reason)
+        {
+            try
+            {
+                var emergencyDir = Path.GetTempPath();
+                if (string.IsNullOrEmpty(emergencyDir))
+                    emergencyDir = AppDomain.CurrentDomain.BaseDirectory;
+                var emergencyPath = Path.Combine(emergencyDir,
+                    "HZCYKJTHardWareExe_Logs_Emergency_" +
+                    DateTime.Now.ToString("yyyyMMdd") + ".log");
+                using (var stream = new FileStream(emergencyPath, FileMode.Append,
+                    FileAccess.Write, FileShare.ReadWrite, 4096, FileOptions.WriteThrough))
+                using (var writer = new StreamWriter(stream, Encoding.UTF8))
+                {
+                    writer.WriteLine("[{0:yyyy-MM-dd HH:mm:ss.fff}] [日志管理][错误] " +
+                        "应急写入原因={1}", DateTime.Now,
+                        JsonHelper.ToLogValue(reason ?? "unknown"));
+                    writer.WriteLine(line ?? string.Empty);
+                    writer.Flush();
+                    stream.Flush(true);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("Logger emergency write failure: " + ex);
+                return false;
+            }
         }
 
         private static void RecordDroppedEntry()
@@ -388,6 +684,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static bool IsLevelEnabled(int levelNum)
         {
+            if (levelNum == 0 && Volatile.Read(ref _lowDiskMode) != 0)
+                return false;
             return levelNum >= Volatile.Read(ref _minLevel);
         }
 
@@ -398,40 +696,24 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             Volatile.Write(ref _lastWriteError, error);
             Trace.WriteLine("Logger writer failure: " + error);
 
-            var nowTicks = DateTime.UtcNow.Ticks;
-            var previous = Interlocked.Read(ref _lastEmergencyReportUtcTicks);
-            if (previous > 0 && nowTicks - previous < TimeSpan.FromSeconds(30).Ticks)
-                return;
-            if (Interlocked.CompareExchange(ref _lastEmergencyReportUtcTicks, nowTicks, previous) != previous)
-                return;
-
-            try
-            {
-                var emergencyPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
-                    "HZCYKJTHardWareExe_Logs_Emergency_" + DateTime.Now.ToString("yyyyMMdd") + ".log");
-                using (var stream = new FileStream(emergencyPath, FileMode.Append, FileAccess.Write,
-                    FileShare.ReadWrite, 4096, FileOptions.WriteThrough))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8))
-                {
-                    writer.WriteLine("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}",
-                        DateTime.Now,
-                        NormalizeForDisplay("日志主写入器失败：" + error.Replace(Environment.NewLine, " | "), "错误"));
-                    writer.Flush();
-                    stream.Flush(true);
-                }
-            }
-            catch (Exception fallbackEx)
-            {
-                Trace.WriteLine("Logger emergency write failure: " + fallbackEx);
-            }
+            var decision = _writerFailureRateLimiter.Record(
+                "Logger|writer_failure", error, DateTime.UtcNow);
+            if (!string.IsNullOrEmpty(decision.WindowSummary))
+                TryWriteEmergencyLine("[日志管理][错误] " + decision.WindowSummary,
+                    "writer failure window");
+            if (decision.EmitCurrent)
+                TryWriteEmergencyLine(
+                    "[日志管理][错误] 日志主写入器失败：原因=" +
+                    JsonHelper.ToLogValue(error.Replace(Environment.NewLine, " | ")),
+                    "writer failure");
         }
 
-        private static void CleanupOldLogsLocked()
+        private static void CleanupOldLogsLocked(bool force = false)
         {
             try
             {
                 var today = DateTime.Now.ToString("yyyyMMdd");
-                if (string.Equals(today, _lastCleanupDate,
+                if (!force && string.Equals(today, _lastCleanupDate,
                     StringComparison.Ordinal)) return;
                 _lastCleanupDate = today;
 
@@ -440,13 +722,14 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var files = Directory.GetFiles(_logDir,
                         LogNamePrefix + "_*.log", SearchOption.TopDirectoryOnly)
                     .Select(path => new FileInfo(path))
-                    .Where(file => !string.Equals(file.FullName,
-                        _currentLogPath, StringComparison.OrdinalIgnoreCase))
                     .OrderBy(file => file.LastWriteTimeUtc)
                     .ToList();
 
                 foreach (var file in files.Where(file => file.LastWriteTime < cutoff).ToList())
                 {
+                    if (string.Equals(file.FullName, _currentLogPath,
+                        StringComparison.OrdinalIgnoreCase))
+                        continue;
                     try { file.Delete(); files.Remove(file); }
                     catch { }
                 }
@@ -455,6 +738,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 foreach (var file in files)
                 {
                     if (totalSize <= _maxTotalSizeBytes) break;
+                    if (string.Equals(file.FullName, _currentLogPath,
+                        StringComparison.OrdinalIgnoreCase))
+                        continue;
                     try
                     {
                         var length = file.Exists ? file.Length : 0L;
@@ -472,14 +758,25 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
         private static void CheckDiskSpaceLocked()
         {
-            if (_diskWarningFreeBytes <= 0) return;
+            if (_diskWarningFreeBytes <= 0)
+            {
+                Volatile.Write(ref _lowDiskMode, 0);
+                return;
+            }
             try
             {
                 var root = Path.GetPathRoot(Path.GetFullPath(_logDir));
                 if (string.IsNullOrEmpty(root)) return;
                 var drive = new DriveInfo(root);
-                if (!drive.IsReady || drive.AvailableFreeSpace >= _diskWarningFreeBytes)
+                if (!drive.IsReady)
                     return;
+                if (drive.AvailableFreeSpace >= _diskWarningFreeBytes)
+                {
+                    Volatile.Write(ref _lowDiskMode, 0);
+                    return;
+                }
+
+                Volatile.Write(ref _lowDiskMode, 1);
 
                 var warning = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] " +
                     NormalizeForDisplay(
@@ -487,8 +784,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     $"预警阈值={_diskWarningFreeBytes / 1024 / 1024}MB", "警告");
                 if (_writer != null)
                 {
-                    _writer.WriteLine(warning);
-                    _pendingLines++;
+                    WriteLineLocked(warning, 2);
                     FlushWriterLocked();
                 }
                 System.Diagnostics.Debug.WriteLine(warning);
@@ -513,6 +809,27 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             public string Level;
             public int LevelNumber;
             public string Body;
+        }
+
+        private static void AppendContextField(ICollection<string> fields,
+            string name, string value)
+        {
+            if (fields == null || string.IsNullOrWhiteSpace(value))
+                return;
+            fields.Add(name + "=" + JsonHelper.ToLogValue(value));
+        }
+
+        private static bool IsSensitivePayloadKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return false;
+            var value = key.ToLowerInvariant();
+            return value == "image_base64" || value == "imagedata" ||
+                   value == "image_data" || value == "undistorted_image_base64" ||
+                   value == "raw_json" || value == "raw_body" || value == "body" ||
+                   value == "binary" || value == "frame" || value == "video" ||
+                   value.Contains("password") || value.Contains("passwd") ||
+                   value.Contains("token") || value.Contains("secret") ||
+                   value.Contains("credential");
         }
 
         private static ParsedLogMessage ParseMessage(string message, string defaultLevel)

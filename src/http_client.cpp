@@ -32,11 +32,13 @@ bool HttpClient::PostJson(const std::string& url,
     const ULONGLONG startedAt = GetTickCount64();
     const std::string requestId = JsonHelper::GetString(body, "request_id");
     const char* requestIdForLog = requestId.empty() ? "<无>" : requestId.c_str();
+    const std::string safeUrl = SanitizeUrlForLog(url);
     responseBody.clear();
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHTTP会话未初始化，request_id=%s", requestIdForLog);
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|session", "HTTP请求",
+            "HTTP请求失败：WinHTTP会话未初始化，request_id=%s", requestIdForLog);
         return false;
     }
 
@@ -56,8 +58,9 @@ bool HttpClient::PostJson(const std::string& url,
     urlComp.dwExtraInfoLength = 256;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：URL解析失败，地址=%s，request_id=%s",
-                  url.c_str(), requestIdForLog);
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|url_parse", "HTTP请求",
+                  "HTTP请求失败：URL解析失败，地址=%s，request_id=%s",
+                  safeUrl.c_str(), requestIdForLog);
         return false;
     }
 
@@ -65,7 +68,8 @@ bool HttpClient::PostJson(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：连接终端失败，主机=%s，端口=%d，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|connect", "HTTP请求",
+                  "HTTP请求失败：连接终端失败，主机=%s，端口=%d，request_id=%s",
                   PathHelper::WideToUtf8(hostName).c_str(), port, requestIdForLog);
         return false;
     }
@@ -77,7 +81,8 @@ bool HttpClient::PostJson(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：WinHttpOpenRequest 失败，request_id=%s", requestIdForLog);
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|open_request", "HTTP请求",
+            "HTTP请求失败：WinHttpOpenRequest 失败，request_id=%s", requestIdForLog);
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -94,14 +99,16 @@ bool HttpClient::PostJson(const std::string& url,
                             (LPVOID)utf8Body.c_str(), (DWORD)utf8Body.size(),
                             (DWORD)utf8Body.size(), 0)) {
         DWORD err = GetLastError();
-        LOG_ERROR("HTTP请求", "HTTP请求失败：发送请求失败，错误码=%lu，request_id=%s", err, requestIdForLog);
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|send", "HTTP请求",
+            "HTTP请求失败：发送请求失败，错误码=%lu，request_id=%s", err, requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR("HTTP请求", "HTTP请求失败：接收响应失败，错误码=%lu，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST|receive", "HTTP请求",
+                  "HTTP请求失败：接收响应失败，错误码=%lu，request_id=%s",
                   GetLastError(), requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
@@ -135,7 +142,7 @@ bool HttpClient::PostJson(const std::string& url,
 
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
     LOG_DEBUG("HTTP请求", "HTTP POST完成：地址=%s，状态=%d，request_id=%s，请求长度=%zu，响应长度=%zu，耗时=%llums",
-             url.c_str(), responseStatusCode, requestIdForLog, body.size(), responseBody.size(),
+             safeUrl.c_str(), responseStatusCode, requestIdForLog, body.size(), responseBody.size(),
              static_cast<unsigned long long>(elapsedMs));
 
     return true;
@@ -151,11 +158,13 @@ bool HttpClient::PostBinary(const std::string& url,
     const ULONGLONG startedAt = GetTickCount64();
     const std::string requestId = JsonHelper::GetString(body, "request_id");
     const char* requestIdForLog = requestId.empty() ? "<无>" : requestId.c_str();
+    const std::string safeUrl = SanitizeUrlForLog(url);
     responseBody.clear();
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：WinHTTP会话未初始化，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|session", "HTTP请求",
+                  "二进制HTTP请求失败：WinHTTP会话未初始化，request_id=%s",
                   requestIdForLog);
         return false;
     }
@@ -175,8 +184,9 @@ bool HttpClient::PostBinary(const std::string& url,
     urlComp.dwExtraInfoLength = 256;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：URL解析失败，地址=%s，request_id=%s",
-                  url.c_str(), requestIdForLog);
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|url_parse", "HTTP请求",
+                  "二进制HTTP请求失败：URL解析失败，地址=%s，request_id=%s",
+                  safeUrl.c_str(), requestIdForLog);
         return false;
     }
 
@@ -184,7 +194,8 @@ bool HttpClient::PostBinary(const std::string& url,
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName,
                                         (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：连接失败，主机=%s，端口=%d，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|connect", "HTTP请求",
+                  "二进制HTTP请求失败：连接失败，主机=%s，端口=%d，request_id=%s",
                   PathHelper::WideToUtf8(hostName).c_str(), port, requestIdForLog);
         return false;
     }
@@ -196,7 +207,8 @@ bool HttpClient::PostBinary(const std::string& url,
         hConnect, L"POST", wPath.c_str(), nullptr, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：WinHttpOpenRequest失败，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|open_request", "HTTP请求",
+            "二进制HTTP请求失败：WinHttpOpenRequest失败，request_id=%s",
                   requestIdForLog);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -211,7 +223,8 @@ bool HttpClient::PostBinary(const std::string& url,
                             (DWORD)body.size(), 0)) {
         const DWORD error = GetLastError();
         if (error == ERROR_WINHTTP_TIMEOUT) responseStatusCode = -2;
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：发送请求失败，错误码=%lu，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|send", "HTTP请求",
+                  "二进制HTTP请求失败：发送请求失败，错误码=%lu，request_id=%s",
                   error, requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
@@ -221,7 +234,8 @@ bool HttpClient::PostBinary(const std::string& url,
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
         const DWORD error = GetLastError();
         if (error == ERROR_WINHTTP_TIMEOUT) responseStatusCode = -2;
-        LOG_ERROR("HTTP请求", "二进制HTTP请求失败：接收响应失败，错误码=%lu，request_id=%s",
+        LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|receive", "HTTP请求",
+                  "二进制HTTP请求失败：接收响应失败，错误码=%lu，request_id=%s",
                   error, requestIdForLog);
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
@@ -242,9 +256,10 @@ bool HttpClient::PostBinary(const std::string& url,
         if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) {
             const DWORD error = GetLastError();
             if (error == ERROR_WINHTTP_TIMEOUT) responseStatusCode = -2;
-            LOG_ERROR("HTTP请求", "二进制HTTP响应长度查询失败：错误码=%lu，地址=%s，"
+            LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|read_available", "HTTP请求",
+                      "二进制HTTP响应长度查询失败：错误码=%lu，地址=%s，"
                       "request_id=%s",
-                      error, url.c_str(), requestIdForLog);
+                      error, safeUrl.c_str(), requestIdForLog);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             return false;
@@ -256,9 +271,10 @@ bool HttpClient::PostBinary(const std::string& url,
              static_cast<size_t>(bytesAvailable) >
                  maxResponseBytes - responseBody.size())) {
             responseStatusCode = -1;
-            LOG_ERROR("HTTP请求", "二进制HTTP响应超过大小限制：地址=%s，状态=%d，"
+            LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|response_too_large", "HTTP请求",
+                      "二进制HTTP响应超过大小限制：地址=%s，状态=%d，"
                       "request_id=%s，限制=%zu，已接收=%zu，待接收=%lu",
-                      url.c_str(), responseStatusCode, requestIdForLog,
+                      safeUrl.c_str(), responseStatusCode, requestIdForLog,
                       maxResponseBytes, responseBody.size(), bytesAvailable);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
@@ -271,9 +287,10 @@ bool HttpClient::PostBinary(const std::string& url,
         if (!WinHttpReadData(hRequest, buffer, bytesToRead, &bytesRead)) {
             const DWORD error = GetLastError();
             if (error == ERROR_WINHTTP_TIMEOUT) responseStatusCode = -2;
-            LOG_ERROR("HTTP请求", "二进制HTTP响应读取失败：错误码=%lu，地址=%s，"
+            LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|read", "HTTP请求",
+                      "二进制HTTP响应读取失败：错误码=%lu，地址=%s，"
                       "request_id=%s",
-                      error, url.c_str(), requestIdForLog);
+                      error, safeUrl.c_str(), requestIdForLog);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             return false;
@@ -288,7 +305,7 @@ bool HttpClient::PostBinary(const std::string& url,
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
     LOG_DEBUG("HTTP请求", "HTTP二进制POST完成：地址=%s，状态=%d，request_id=%s，"
               "请求长度=%zu，响应长度=%zu，耗时=%llums",
-              url.c_str(), responseStatusCode, requestIdForLog, body.size(),
+              safeUrl.c_str(), responseStatusCode, requestIdForLog, body.size(),
               responseBody.size(), static_cast<unsigned long long>(elapsedMs));
     return true;
 }
@@ -299,11 +316,13 @@ bool HttpClient::Get(const std::string& url,
                      std::string& responseBody,
                      int& responseStatusCode) {
     const ULONGLONG startedAt = GetTickCount64();
+    const std::string safeUrl = SanitizeUrlForLog(url);
     responseBody.clear();
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：WinHTTP session 未初始化，url=%s", url.c_str());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|session", "HTTP请求",
+            "HTTP GET失败：WinHTTP session 未初始化，url=%s", safeUrl.c_str());
         return false;
     }
 
@@ -319,7 +338,8 @@ bool HttpClient::Get(const std::string& url,
     urlComp.dwUrlPathLength = 1024;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：URL解析失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|url_parse", "HTTP请求",
+            "HTTP GET失败：URL解析失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         return false;
     }
 
@@ -327,7 +347,8 @@ bool HttpClient::Get(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：创建连接失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|connect", "HTTP请求",
+            "HTTP GET失败：创建连接失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         return false;
     }
 
@@ -337,7 +358,8 @@ bool HttpClient::Get(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：创建请求失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|open_request", "HTTP请求",
+            "HTTP GET失败：创建请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -347,14 +369,16 @@ bool HttpClient::Get(const std::string& url,
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：发送请求失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|send", "HTTP请求",
+            "HTTP GET失败：发送请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR("HTTP请求", "HTTP GET失败：接收响应失败，url=%s，错误码=%lu", url.c_str(), GetLastError());
+        LOG_ERROR_RATE_LIMITED("HTTP|GET|receive", "HTTP请求",
+            "HTTP GET失败：接收响应失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
@@ -385,7 +409,7 @@ bool HttpClient::Get(const std::string& url,
 
     const ULONGLONG elapsedMs = GetTickCount64() - startedAt;
     LOG_DEBUG("HTTP请求", "HTTP GET完成：url=%s，status=%d，response_size=%zu，elapsed_ms=%llu",
-              url.c_str(), responseStatusCode, responseBody.size(),
+              safeUrl.c_str(), responseStatusCode, responseBody.size(),
               static_cast<unsigned long long>(elapsedMs));
 
     return true;

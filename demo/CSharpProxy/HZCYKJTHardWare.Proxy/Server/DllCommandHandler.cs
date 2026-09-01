@@ -341,19 +341,30 @@ namespace HZCYKJTHardWare.Proxy.Server
                 SaveDirHk = saveDirHk,
                 RouteEpoch = routeEpoch
             };
+            var queueWaitSw = Stopwatch.StartNew();
             using (routeEpoch.CancellationToken.Register(
                 () => tcs.TrySetResult(TerminalSwitchingResult)))
             {
                 if (!queue.Enqueue(data, routeEpoch.Generation))
                 {
-                    Logger.Warn($"[队列] {queue.Name} 队列满");
+                    _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "警告",
+                        Logger.FormatContextMessage("Enqueue " + queue.Name,
+                            terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                            result: "失败", errorCode: "busy",
+                            queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                            routeEpoch: routeEpoch.Route.RouteEpoch)));
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
                 var completed = await Task.WhenAny(tcs.Task,
                     Task.Delay(OperationTimeouts.CaptureProxyWaitMs));
                 if (completed == tcs.Task && tcs.Task.IsCompleted)
                     return await tcs.Task;
-                Logger.Error($"[队列] {queue.Name} 请求超时");
+                _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "错误",
+                    Logger.FormatContextMessage("Enqueue " + queue.Name,
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        result: "失败", errorCode: "timeout",
+                        queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch)));
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))
                     return timeoutResult;
@@ -406,10 +417,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                 tcs.TrySetResult(TerminalSwitchingResult);
             }))
             {
+                var queueWaitSw = Stopwatch.StartNew();
                 if (!_queueManager.IrisQueue.Enqueue(data, routeEpoch.Generation))
                 {
                     _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage);
-                    Logger.Warn("[虹膜抓拍] 虹膜任务队列已满");
+                    _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "警告",
+                        Logger.FormatContextMessage("Enqueue iris",
+                            terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                            requestId: requestId, result: "失败", errorCode: "busy",
+                            queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                            routeEpoch: routeEpoch.Route.RouteEpoch)));
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
@@ -422,7 +439,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return result;
                 }
 
-                Logger.Error($"[虹膜抓拍] 受理请求超时({OperationTimeouts.AsyncProxyWaitMs}ms)");
+                _log(Logger.FormatModuleMessage(LogModules.IrisCapture, "错误",
+                    Logger.FormatContextMessage("/capture/iris",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败", errorCode: "timeout",
+                        queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch) +
+                    " TimeoutMs=" + OperationTimeouts.AsyncProxyWaitMs));
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.IrisImage, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))
@@ -485,10 +508,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                 tcs.TrySetResult(TerminalSwitchingResult);
             }))
             {
+                var queueWaitSw = Stopwatch.StartNew();
                 if (!_queueManager.AuthorizeQueue.Enqueue(data, routeEpoch.Generation))
                 {
                     _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
-                    Logger.Warn("[授权] 授权任务队列已满");
+                    _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "警告",
+                        Logger.FormatContextMessage("Enqueue authorize",
+                            terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                            requestId: requestId, result: "失败", errorCode: "busy",
+                            queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                            routeEpoch: routeEpoch.Route.RouteEpoch)));
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
@@ -501,7 +530,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                     return result;
                 }
 
-                Logger.Error($"[授权] 受理请求超时({OperationTimeouts.AuthorizeProxyWaitMs}ms)");
+                _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
+                    Logger.FormatContextMessage("/authorize",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败", errorCode: "timeout",
+                        queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch) +
+                    " TimeoutMs=" + OperationTimeouts.AuthorizeProxyWaitMs));
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))
@@ -543,10 +578,17 @@ namespace HZCYKJTHardWare.Proxy.Server
                 tcs.TrySetResult(TerminalSwitchingResult);
             }))
             {
+                var queueWaitSw = Stopwatch.StartNew();
                 if (!queue.Enqueue(data, routeEpoch.Generation))
                 {
                     _requestRegistry.Fail(requestId, resourceType);
-                    Logger.Warn($"[队列] {queue.Name} 队列满, 拒绝请求: {path}");
+                    _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "警告",
+                        Logger.FormatContextMessage("Enqueue " + path,
+                            terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                            requestId: requestId, result: "失败", errorCode: "busy",
+                            queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                            routeEpoch: routeEpoch.Route.RouteEpoch) +
+                        " Queue=" + JsonHelper.ToLogValue(queue.Name)));
                     return "{\"error\":true,\"code\":\"busy\"}";
                 }
 
@@ -560,7 +602,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                 }
 
                 // 等待超时
-                Logger.Error($"[队列] {queue.Name} 请求超时({timeoutMs}ms): {path}");
+                _log(Logger.FormatModuleMessage(LogModules.TaskQueue, "错误",
+                    Logger.FormatContextMessage("Enqueue " + path,
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败", errorCode: "timeout",
+                        queueWaitMs: queueWaitSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch) +
+                    " TimeoutMs=" + timeoutMs + " Queue=" + JsonHelper.ToLogValue(queue.Name)));
                 _requestRegistry.Fail(requestId, resourceType, timedOut: true);
                 const string timeoutResult = "{\"error\":true,\"code\":\"timeout\"}";
                 if (tcs.TrySetResult(timeoutResult))

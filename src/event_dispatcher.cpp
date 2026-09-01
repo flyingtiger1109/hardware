@@ -353,8 +353,8 @@ void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
     const size_t totalOutstanding = m_queue.size() + m_pendingCallbacks.size() +
         (m_processingCallback ? 1u : 0u);
     if (!callbackProducer && totalOutstanding >= kMaxEventQueueSize) {
-        LOG_WARN("事件分发", "第三方事件队列已满，拒绝新事件：outstanding=%zu",
-                 totalOutstanding);
+        LOG_WARN_RATE_LIMITED("EventDispatcher|event_queue_full", "事件分发",
+            "第三方事件队列已满，拒绝新事件：outstanding=%zu", totalOutstanding);
         LeaveCriticalSection(&m_cs);
         return;
     }
@@ -382,7 +382,9 @@ void EventDispatcher::PostEvent(const HZCYKJTHardWare_EVENT& event) {
 // 处理回调服务器的数据并转化为事件
 bool EventDispatcher::TryPostCallbackData(const CallbackData& cbData) {
     if (!m_running) {
-        LOG_WARN("事件分发", "回调分发未运行，拒绝硬件控制程序回调：path=%s", cbData.path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|callback_not_running", "事件分发",
+            "回调分发未运行，拒绝硬件控制程序回调：path=%s",
+            SanitizeUrlForLog(cbData.path).c_str());
         return false;
     }
 
@@ -395,8 +397,9 @@ bool EventDispatcher::TryPostCallbackData(const CallbackData& cbData) {
     if (!m_running || totalOutstanding >= kMaxPendingCallbackQueueSize ||
         callbackBytes > kMaxPendingCallbackBytes ||
         m_pendingCallbackBytes > kMaxPendingCallbackBytes - callbackBytes) {
-        LOG_WARN("事件分发", "硬件控制程序回调处理队列已满或已停止，拒绝新回调：outstanding=%zu, pending_bytes=%zu, incoming_bytes=%zu",
-                 totalOutstanding, m_pendingCallbackBytes, callbackBytes);
+        LOG_WARN_RATE_LIMITED("EventDispatcher|callback_queue_full", "事件分发",
+            "硬件控制程序回调处理队列已满或已停止，拒绝新回调：outstanding=%zu, pending_bytes=%zu, incoming_bytes=%zu",
+            totalOutstanding, m_pendingCallbackBytes, callbackBytes);
         LeaveCriticalSection(&m_cs);
         return false;
     }
@@ -424,13 +427,17 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
     } else if (path.find("/authorize") != std::string::npos) {
         resourceType = HZCYKJTHardWare_RESOURCE_AUTHORIZATION;
     } else {
-        LOG_WARN("事件分发", "收到未知硬件控制程序回调路径：path=%s", path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|unknown_callback_path", "事件分发",
+            "收到未知硬件控制程序回调路径：path=%s",
+            SanitizeUrlForLog(path).c_str());
         return;
     }
 
     std::string requestId = JsonHelper::GetString(body, "request_id");
     if (requestId.empty()) {
-        LOG_WARN("事件分发", "收到硬件控制程序回调但缺少request_id：path=%s", path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|callback_missing_request_id", "事件分发",
+            "收到硬件控制程序回调但缺少request_id：path=%s",
+            SanitizeUrlForLog(path).c_str());
         return;
     }
 
@@ -441,8 +448,9 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
     auto& sessionMgr = RequestSessionManager::Instance();
     if (sessionMgr.IsRecentlyCompleted(requestId, resourceType)) {
-        LOG_WARN("事件分发", "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
-                 requestId.c_str(), path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|duplicate_callback", "事件分发",
+            "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
+            requestId.c_str(), SanitizeUrlForLog(path).c_str());
         return;
     }
 
@@ -522,14 +530,16 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             }
         }
 
-        LOG_WARN("事件分发", "收到硬件控制程序回调但请求不存在：request_id=%s，path=%s",
-                 requestId.c_str(), path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|callback_missing_session", "事件分发",
+            "收到硬件控制程序回调但请求不存在：request_id=%s，path=%s",
+            requestId.c_str(), SanitizeUrlForLog(path).c_str());
         return;
     }
 
     if (!sessionMgr.MarkCallbackReceived(requestId, resourceType, body)) {
-        LOG_WARN("事件分发", "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
-                 requestId.c_str(), path.c_str());
+        LOG_WARN_RATE_LIMITED("EventDispatcher|duplicate_callback", "事件分发",
+            "硬件控制程序重复回调已忽略：request_id=%s，path=%s",
+            requestId.c_str(), SanitizeUrlForLog(path).c_str());
         return;
     }
 
@@ -940,8 +950,8 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         cardText = JsonHelper::GetString(body, "ic_number");
     }
     if (cardText.empty()) {
-        LOG_ERROR("NFC", "硬件控制程序IC卡回调缺少card_text：request_id=%s，body=%s",
-                  requestId.c_str(), body.c_str());
+        LOG_ERROR("NFC", "硬件控制程序IC卡回调缺少card_text：request_id=%s，%s",
+                  requestId.c_str(), SanitizeLargePayloadForLog(body, requestId).c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "IC卡回调缺少card_text",
                   nullptr, body.c_str());
@@ -960,8 +970,8 @@ void EventDispatcher::ProcessNfcCardCallbackLegacy(const std::string& requestId,
                                                    const RequestSession& session) {
     LOG_DEBUG("NFC", "收到终端IC卡识别回调：request_id=%s",
              requestId.c_str());
-    LOG_DEBUG("NFC", "IC卡识别回调原始JSON：request_id=%s，raw_json=%s",
-             requestId.c_str(), body.c_str());
+    LOG_DEBUG("NFC", "IC卡识别回调载荷摘要：request_id=%s，%s",
+             requestId.c_str(), SanitizeLargePayloadForLog(body, requestId).c_str());
 
     auto nfcResult = ResultParser::ParseNfcCardResult(body);
     if (!nfcResult.valid) {
@@ -1202,10 +1212,10 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                     ProcessCallback(cb);
                 } catch (const std::exception& ex) {
                     LOG_ERROR("事件分发", "处理回调异常：path=%s，error=%s",
-                              cb.path.c_str(), ex.what());
+                              SanitizeUrlForLog(cb.path).c_str(), ex.what());
                 } catch (...) {
                     LOG_ERROR("事件分发", "处理回调发生未知异常：path=%s",
-                              cb.path.c_str());
+                              SanitizeUrlForLog(cb.path).c_str());
                 }
                 EnterCriticalSection(&m_cs);
                 m_processingCallback = false;
