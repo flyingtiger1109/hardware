@@ -312,9 +312,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
             var decision = _rateLimiter.Record(key, message, DateTime.UtcNow);
             if (!decision.EmitCurrent) return false;
-            var output = string.IsNullOrEmpty(decision.WindowSummary)
-                ? message
-                : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
+            var output = LogRateLimiter.FormatMergedMessage(decision, message);
             Write(normalizedLevel, FormatModuleMessage(module, normalizedLevel,
                 output), levelNumber);
             return true;

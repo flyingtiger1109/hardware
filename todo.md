@@ -1806,3 +1806,63 @@
 - [ ] 在 Windows 10/11 现场执行第三方 Delphi7、真实终端和六路预览启停/切换/重连验证。
 - [ ] 采集 L6 后 EXE/DLL 真实 INFO/WARN/ERROR 日志，核对启动、预览、切换、健康检查和限频数量。
 - [ ] 单独处理测试环境 `HttpListener`、版本号断言和既有路由测试，不混入本任务卡。
+
+## 阶段3 Task L7：日志一致性与现场可读性收尾（2026-09-01）
+
+### 完成状态
+
+Task L7 代码完成，阶段3待实机异常场景和长稳验收。
+
+- [x] 已建立 Native `Operation -> Module` 确定性映射，覆盖当前 `.def` 的 25 个导出；未知场景仍保留原有 legacy Message fallback。
+- [x] 已在不改变 DLL ABI 的前提下贯通同步人脸/指纹抓拍的 DLL request_id 到 Proxy、终端请求和最终日志；直连旧入口仍保留原有内部 request_id 生成回退。
+- [x] 正常健康检查 Summary 改为 DEBUG；首次异常 WARN、持续异常按窗口聚合、恢复 INFO；窗口边界不再额外重复输出同一当前错误。
+- [x] 收口抓拍、授权、preview-ready 和 DLL callback 日志：HTTP/队列/保存及内部步骤改为 DEBUG，业务请求/受理/最终结果/成功通知保留现场可读 INFO。
+- [x] 限频汇总字段改为中文现场描述，生产源码中不再生成 `RateLimitWindowEnd`、`Count=`、`FirstTime=`、`LastTime=`、`LastError=` 这些现场字段。
+
+### 根因与修改范围
+
+根因是 Native 导出边界传入了通用模块名，Logger 只能依赖 Message 推断；C# 的同步抓拍任务没有继续携带 DLL request_id；健康检查正常 Summary、窗口边界当前错误和业务内部 HTTP 轨迹仍可能进入 INFO。本次只调整确定性映射、RequestId 传递、日志级别/文案、限频合并和对应测试，没有重新实现 Logger，也没有重构 PreviewManager。
+
+### 修改文件与函数/类
+
+- `src/logger.cpp`：新增 25 个导出 Operation 的确定性模块映射，保留 legacy fallback。
+- `src/exports.cpp`、`src/delphi_proxy.cpp`：抓拍/授权内部成功和 IPC 明细降为 DEBUG，保留业务最终结果。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/Logger.cs`、`LogRateLimiter.cs`、`PingLogAggregator.cs`：统一限频合并输出，正常 Summary 降级并避免窗口重复表达。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`、`Scheduler/WorkerExecutionEngine.cs`、`Coordinator/BizOperationHandler.cs`：同步抓拍 RequestId 传递及最终结果日志。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`、`DllCallbackSender.cs`、`TerminalCallbackHandler.cs`：授权、preview-ready、callback 的业务语义日志和内部 HTTP 明细分级。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Core/DllCallbackSenderTests.cs`、`Infrastructure/LoggerTests.cs`、`Infrastructure/PingLogAggregatorTests.cs`：映射、中文限频、窗口不重复、健康检查和载荷脱敏测试。
+- `scripts/verify_operation_module_mapping.ps1`：表驱动核对 `.def`、Native 映射表和 `dumpbin` 实际导出集合。
+- `README.md`：仅修正已确认的生产架构说明为 Delphi7/Native DLL x86、C# Proxy x64；未修改工程目标框架或部署协议。
+
+### 修改前后行为与日志示例
+
+- 导出模块：原 `[未识别接口][信息] 入口 Operation=...`；现已知导出按确定性表归入 `[预览]`、`[人脸抓拍]`、`[授权]` 等模块，未知调用仍按原 fallback 处理。
+- 健康检查：原正常统计可能为 INFO；现为 `[健康检查][调试] 统计周期=...`，异常为首次 WARN/持续汇总 WARN，恢复仅一条 `[健康检查][信息] /ping恢复...`。
+- 限频：原英文字段输出改为 `重复故障汇总：类别=...，次数=...，首次=...，最近=...，最近错误=...，本次错误=...`，窗口边界只写一条合并日志。
+- preview-ready：原 `[DLL回调] POST完成：Operation=POST /preview-ready...` 的成功明细降为 DEBUG；现场 INFO 为 `预览结果已通知DLL：资源=摄像头，RequestId=...，Result=成功`。
+- 抓拍/授权：内部 HTTP、队列、响应长度和保存步骤降为 DEBUG；保留请求/受理/最终结果及成功通知等业务节点。
+
+### 兼容性说明
+
+- DLL ABI 影响：无。导出名、参数数量/顺序/类型、`__stdcall`、结构体、callback 签名、错误码、接口 `1/0` 语义和 `.def` 均未改变。
+- Delphi7：无须修改；第三方调用、callback HTTP 状态码、JSON 字段含义、终端协议和第三方 HWND 所有权均未改变。
+- 位数：Native DLL 按 `Release|Win32/x86` 验证；C# Proxy/Tests 按 `Release|x64` 验证；未将 Proxy 改为 x86，未修改 TargetFramework。
+- 版本号：未增加。
+
+### 验证结果
+
+- [x] Native DLL `Release|Win32/x86`：0 警告、0 错误。
+- [x] C# Proxy `Release|x64`：0 警告、0 错误。
+- [x] C# Tests `Release|x64`：0 错误；有既有 `NU1900`（NuGet 漏洞源不可达）警告。
+- [x] L7 定向 VSTest：34/34 通过，覆盖 `PingLogAggregatorTests`、`LoggerTests`（含 Payload Sanitizer）、`DllCallbackSenderTests`、健康检查和 R1 预览恢复相关测试。
+- [x] Operation->Module 表驱动脚本：25 个导出通过；与编译后 x86 DLL 的 `dumpbin` 导出集合一致。
+- [x] `.def` 与 HEAD 比较：导出定义未改变。
+- [x] 生产源码限频字段扫描：未发现 `RateLimitWindowEnd`、`Count=`、`FirstTime=`、`LastTime=`、`LastError=` 输出文本。
+- [x] `git diff --check`：无空白错误；仅有 Git LF/CRLF 转换提示。
+- [ ] 完整 x64 VSTest：155 项中 143 项通过、12 项失败；10 项集成测试受当前宿主 `HttpListener` `PlatformNotSupportedException` 影响，另有既有 ProductVersion 断言（期望 `1.3.1.0`、实际 `1.3.5.0`）和既有路由测试失败，待独立处理。
+
+### 未验证项目、风险与回退
+
+- 未执行真实 Windows 10/11 硬件、Delphi7 第三方 Demo、真实 EXE/DLL 日志计数、HWND 销毁/零尺寸、MJPEG 断流恢复、Proxy 重启、12029 持续 60 秒、10 分钟正常健康检查和长稳压测；这些均待现场验证。
+- 风险集中在日志级别调整后的现场信息取舍、RequestId 贯通与旧直连入口的回退分支，以及真实终端/回调环境差异；未改变业务协议和接口语义。
+- 回退方式：仅回退 L7 对应提交或逐文件回退本节列出的 L7 文件；使用 `git revert <L7提交>`，不执行宽范围 `reset`，不删除用户已有未跟踪文件、构建产物或方案文档改动。

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Core;
@@ -185,18 +186,33 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         }
 
         internal async Task<(bool ok, string path)> CaptureFaceAsync(string saveDir,
-            TerminalRouteEpochSnapshot routeEpoch)
+            TerminalRouteEpochSnapshot routeEpoch, string requestId = null)
         {
             if (routeEpoch == null || routeEpoch.IsCancellationRequested)
                 return (false, "");
-            var requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = "FACE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
+            var captureSw = Stopwatch.StartNew();
             var (ok, response) = await _terminalClient.PostJsonAsync(
                 routeEpoch.Route.BaseUrl, "/resources/face-image/sync-request", body,
                 OperationTimeouts.FaceTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
-            if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
+            captureSw.Stop();
+            if (!ok || routeEpoch.IsCancellationRequested)
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FaceCapture,
+                    routeEpoch.IsCancellationRequested ? "警告" : "错误",
+                    "抓拍失败：" + Logger.FormatContextMessage("/capture/face",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败",
+                        errorCode: routeEpoch.IsCancellationRequested
+                            ? "terminal_switching" : "terminal_request_failed",
+                        durationMs: captureSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch)));
+                return (false, "");
+            }
 
             var result = CallbackParser.ParseImageCapture(response, "face_image");
             string savePath = "";
@@ -219,9 +235,20 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 }
             }
             if (!string.IsNullOrEmpty(savePath))
-                _log("[人脸抓拍] 图片保存成功");
+                _log("[人脸抓拍] 图片保存成功：" + Logger.FormatContextMessage("/capture/face",
+                    terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                    requestId: requestId, result: "成功",
+                    durationMs: captureSw.ElapsedMilliseconds,
+                    routeEpoch: routeEpoch.Route.RouteEpoch) +
+                    "，路径=" + JsonHelper.ToLogValue(savePath));
             else
-                _log("[人脸抓拍] 抓拍失败：未获取有效图片或终端请求失败");
+                _log(Logger.FormatModuleMessage(LogModules.FaceCapture, "警告",
+                    "抓拍失败：未获取有效图片，" + Logger.FormatContextMessage("/capture/face",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败",
+                        errorCode: "capture_failed",
+                        durationMs: captureSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch)));
             return (!string.IsNullOrEmpty(savePath), savePath);
         }
 
@@ -233,18 +260,33 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         }
 
         internal async Task<(bool ok, string path)> CaptureFingerprintAsync(string saveDir, string saveDirHk,
-            TerminalRouteEpochSnapshot routeEpoch)
+            TerminalRouteEpochSnapshot routeEpoch, string requestId = null)
         {
             if (routeEpoch == null || routeEpoch.IsCancellationRequested)
                 return (false, "");
-            var requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = "FP_" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
             var body = $"{{\"request_id\":\"{requestId}\"}}";
+            var captureSw = Stopwatch.StartNew();
             var (ok, response) = await _terminalClient.PostJsonAsync(
                 routeEpoch.Route.BaseUrl, "/resources/fingerprint/sync-request", body,
                 OperationTimeouts.FingerprintTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
-            if (!ok || routeEpoch.IsCancellationRequested) return (false, "");
+            captureSw.Stop();
+            if (!ok || routeEpoch.IsCancellationRequested)
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FingerprintCapture,
+                    routeEpoch.IsCancellationRequested ? "警告" : "错误",
+                    "抓拍失败：" + Logger.FormatContextMessage("/capture/fingerprint",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败",
+                        errorCode: routeEpoch.IsCancellationRequested
+                            ? "terminal_switching" : "terminal_request_failed",
+                        durationMs: captureSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch)));
+                return (false, "");
+            }
 
             var result = CallbackParser.ParseImageCapture(response, "fingerprint_image");
             string savePath = "";
@@ -274,14 +316,27 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
             if (!string.IsNullOrEmpty(savePath))
             {
-                var message = "[指纹抓拍] 图片保存成功";
+                var message = "[指纹抓拍] 图片保存成功：" +
+                    Logger.FormatContextMessage("/capture/fingerprint",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "成功",
+                        durationMs: captureSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch);
                 if (!string.IsNullOrEmpty(undistortedPath))
-                    message += "，无畸变图保存成功: " + undistortedPath;
+                    message += "，无畸变图保存成功：" +
+                        JsonHelper.ToLogValue(undistortedPath);
                 _log(message);
             }
             else
             {
-                _log("[指纹抓拍] 抓拍失败：未获取有效图片或终端请求失败");
+                _log(Logger.FormatModuleMessage(LogModules.FingerprintCapture, "警告",
+                    "抓拍失败：未获取有效图片，" + Logger.FormatContextMessage(
+                        "/capture/fingerprint",
+                        terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                        requestId: requestId, result: "失败",
+                        errorCode: "capture_failed",
+                        durationMs: captureSw.ElapsedMilliseconds,
+                        routeEpoch: routeEpoch.Route.RouteEpoch)));
             }
 
             return (!string.IsNullOrEmpty(savePath), savePath);
@@ -294,7 +349,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 if (string.IsNullOrEmpty(undistortedB64))
                 {
-                    _log("[无畸变] 图片保存跳过：终端响应中无 data.undistorted_image_base64 字段");
+                    _log(Logger.FormatModuleMessage(LogModules.FingerprintCapture, "调试",
+                        "无畸变图保存跳过：终端响应中无 data.undistorted_image_base64 字段"));
                     return "";
                 }
                 // 有扩展名 → 精确路径，直接覆盖；无扩展名 → 目录，自动命名
@@ -432,16 +488,19 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 $"\"XB\":\"{JsonHelper.EscapeString(sex)}\",\"CSRQ\":\"{JsonHelper.EscapeString(birthday)}\"," +
                 "\"KADM\":\"\"}}";
 
-            _log("[授权] EXE本机授权请求：请求ID=" + JsonHelper.ToLogValue(requestId) +
-                "，终端=" + routeEpoch.Route.TerminalIndex +
-                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
-                "，回调地址=" + JsonHelper.ToLogValue(callbackBase) +
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+                "授权请求：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，TerminalIndex=" + routeEpoch.Route.TerminalIndex +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
                 "，证件类别=" + JsonHelper.ToLogValue(docType) +
                 "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
                 "，姓名=" + JsonHelper.ToLogValue(name) +
                 "，性别=" + JsonHelper.ToLogValue(sex) +
-                "，出生日期=" + JsonHelper.ToLogValue(birthday));
+                "，出生日期=" + JsonHelper.ToLogValue(birthday)));
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
+                "授权请求通信上下文：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
+                "，回调地址=" + JsonHelper.ToLogValue(callbackBase)));
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.Protocol,
                 _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex),
@@ -454,12 +513,18 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 OperationTimeouts.AuthorizeTerminalRequestMs,
                 routeEpoch.CancellationToken)
                 .ConfigureAwait(false);
-            _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
-                "，HTTP提交=" + (ok ? "是" : "否") +
-                "，响应请求ID=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "request_id")) +
-                "，状态=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "status")) +
-                "，错误码=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorCode(response)) +
-                "，消息=" + JsonHelper.ToLogValue(ResultParser.ExtractErrorMessage(response)));
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
+                "终端受理响应：" + Logger.FormatContextMessage("/resources/protocol/request",
+                    terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
+                    requestId: requestId, result: ok ? "成功" : "失败",
+                    errorCode: ResultParser.ExtractErrorCode(response),
+                    routeEpoch: routeEpoch.Route.RouteEpoch) +
+                    "，响应请求ID=" + JsonHelper.ToLogValue(
+                        JsonHelper.ExtractString(response, "request_id")) +
+                    "，状态=" + JsonHelper.ToLogValue(
+                        JsonHelper.ExtractString(response, "status")) +
+                    "，消息=" + JsonHelper.ToLogValue(
+                        ResultParser.ExtractErrorMessage(response))));
             if (routeEpoch.IsCancellationRequested)
             {
                 _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
@@ -474,13 +539,16 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))
                     return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "request expired" };
-                _log("[授权] 已受理");
+                _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+                    "授权请求已受理：RequestId=" + JsonHelper.ToLogValue(requestId)));
                 return new AuthorizeRequestResult { Ok = true, RequestId = requestId, Message = "" };
             }
 
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
             _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
-            _log("[授权] 下发失败: " + detail);
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
+                "授权请求最终失败：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，错误=" + detail));
             return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = detail };
         }
 

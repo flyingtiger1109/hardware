@@ -79,6 +79,14 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             }
         }
 
+        internal static string FormatMergedMessage(LogRateLimitDecision decision,
+            string currentMessage)
+        {
+            if (decision == null || string.IsNullOrEmpty(decision.WindowSummary))
+                return currentMessage;
+            return decision.WindowSummary + "，本次错误=" + decision.CurrentError;
+        }
+
         internal void Clear()
         {
             lock (_sync)

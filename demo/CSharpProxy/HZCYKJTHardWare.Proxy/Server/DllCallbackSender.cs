@@ -61,6 +61,18 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        internal static string FormatPreviewResource(string resourceType)
+        {
+            switch (resourceType)
+            {
+                case "face_image": return "摄像头";
+                case "fingerprint_image": return "指纹";
+                case "iris_image": return "虹膜";
+                case "plate_image": return "车牌";
+                default: return string.IsNullOrWhiteSpace(resourceType) ? "未知" : resourceType;
+            }
+        }
+
         private static string FormatHwnd(IntPtr hwnd)
         {
             return PreviewManager.FormatHwnd(hwnd);
@@ -176,6 +188,13 @@ namespace HZCYKJTHardWare.Proxy.Server
                     durationMs: previewCallbackSw.ElapsedMilliseconds) + $" 资源={resourceType}";
             if (result == CallbackDeliveryResult.Failed)
                 Logger.Error(completionMessage);
+            else if (result == CallbackDeliveryResult.Delivered)
+            {
+                Logger.Debug(completionMessage);
+                Logger.Info("[预览] 预览结果已通知DLL：资源=" +
+                    FormatPreviewResource(resourceType) +
+                    "，RequestId=" + requestTrace + "，Result=成功");
+            }
             else
                 Logger.Debug(completionMessage);
         }
@@ -228,7 +247,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     .ConfigureAwait(false);
                 if (attemptResult == CallbackAttemptResult.Delivered)
                 {
-                    Logger.Info("[DLL回调] POST完成：" +
+                    Logger.Debug("[DLL回调] POST完成：" +
                         Logger.FormatContextMessage("POST " + path, requestId: requestTrace,
                             result: "成功", durationMs: totalSw.ElapsedMilliseconds,
                             attempt: attempt + 1));

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdarg>
+#include <cstring>
 #include <filesystem>
 #include <io.h>
 #include <share.h>
@@ -32,10 +33,57 @@ bool ContainsText(const std::string& text, const char* value) {
     return value && text.find(value) != std::string::npos;
 }
 
+struct OperationModuleEntry {
+    const char* operation;
+    const char* module;
+};
+
+// 导出边界已经提供了确定的 Operation。优先使用此表，避免依赖日志正文中的关键词推断模块。
+// 表项必须与 HZCYKJTHardWare.def 保持一致；等价校验脚本会核对两者的完整集合。
+const OperationModuleEntry kOperationModuleEntries[] = {
+    {"HZCYKJTHardWare_InitSdk", "SDK生命周期"},
+    {"HZCYKJTHardWare_ReleaseSdk", "SDK生命周期"},
+    {"HZCYKJTHardWare_SwitchTerminal", "终端切换"},
+    {"HZCYKJTHardWare_StartProcess", "流程控制"},
+    {"HZCYKJTHardWare_EndProcess", "流程控制"},
+    {"HZCYKJTHardWare_StartCameraPreview", "预览"},
+    {"HZCYKJTHardWare_StopCameraPreview", "预览"},
+    {"HZCYKJTHardWare_StartFingerprintPreview", "预览"},
+    {"HZCYKJTHardWare_StopFingerprintPreview", "预览"},
+    {"HZCYKJTHardWare_StartIrisPreview", "预览"},
+    {"HZCYKJTHardWare_StopIrisPreview", "预览"},
+    {"HZCYKJTHardWare_StartPlatePreviewCJ", "预览"},
+    {"HZCYKJTHardWare_StopPlatePreviewCJ", "预览"},
+    {"HZCYKJTHardWare_StartPlatePreviewRJ2", "预览"},
+    {"HZCYKJTHardWare_StopPlatePreviewRJ2", "预览"},
+    {"HZCYKJTHardWare_StartPlatePreviewRJ3", "预览"},
+    {"HZCYKJTHardWare_StopPlatePreviewRJ3", "预览"},
+    {"HZCYKJTHardWare_SaveLatestPlateFrame", "车牌抓帧"},
+    {"HZCYKJTHardWare_CaptureCameraImage", "人脸抓拍"},
+    {"HZCYKJTHardWare_CaptureFingerprintImage", "指纹抓拍"},
+    {"HZCYKJTHardWare_CaptureIrisImage", "虹膜抓拍"},
+    {"HZCYKJTHardWare_RequestOCR", "证件识别"},
+    {"HZCYKJTHardWare_RequestNfcCard", "NFC读卡"},
+    {"HZCYKJTHardWare_RequestAuthorize", "授权"},
+    {"HZCYKJTHardWare_RegisterEventCallback", "终端回调"}
+};
+
+const char* ModuleFromOperation(const char* operation) {
+    if (!operation || !*operation) return nullptr;
+    for (const auto& entry : kOperationModuleEntries) {
+        if (std::strcmp(entry.operation, operation) == 0)
+            return entry.module;
+    }
+    return nullptr;
+}
+
 std::string ModuleFromMessage(const std::string& message) {
     if (ContainsText(message, "预览") || ContainsText(message, "preview") ||
         ContainsText(message, "MJPEG")) {
         return "预览";
+    }
+    if (ContainsText(message, "车牌帧") || ContainsText(message, "最新车牌")) {
+        return "车牌抓帧";
     }
     if (ContainsText(message, "人脸抓拍") || ContainsText(message, "摄像头抓拍") ||
         ContainsText(message, "/capture/face") || ContainsText(message, "face_capture")) {
@@ -77,7 +125,8 @@ std::string ModuleFromMessage(const std::string& message) {
     return "未识别接口";
 }
 
-std::string NormalizeModule(const char* module, const char* message) {
+std::string NormalizeModule(const char* module, const char* function,
+                            const char* message) {
     const std::string name = module ? module : "";
     const std::string text = message ? message : "";
 
@@ -105,6 +154,8 @@ std::string NormalizeModule(const char* module, const char* message) {
         return "终端通信";
     }
     if (name == "接口" || name.empty()) {
+        const char* operationModule = ModuleFromOperation(function);
+        if (operationModule) return operationModule;
         return ModuleFromMessage(text);
     }
     if (name == "能力检查") return "设备能力";
@@ -992,10 +1043,10 @@ void Logger::Log(LogLevel level, const char* module, const char* function,
     va_end(args);
 
     const std::string timestamp = FormatTimestamp();
-    const std::string normalizedModule = NormalizeModule(module, message.c_str());
+    const std::string normalizedModule = NormalizeModule(
+        module, function, message.c_str());
     const std::string line = "[" + timestamp + "] [" + normalizedModule +
         "][" + LevelToString(level) + "] " + message + "\n";
-    (void)function;
 
     LogEntry entry;
     entry.level = level;

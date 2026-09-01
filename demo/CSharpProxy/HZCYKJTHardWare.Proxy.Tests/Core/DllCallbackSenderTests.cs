@@ -13,6 +13,15 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
     public class DllCallbackSenderTests
     {
         [TestMethod]
+        public void PreviewReadyResource_UsesOperatorFacingNames()
+        {
+            Assert.AreEqual("摄像头", DllCallbackSender.FormatPreviewResource("face_image"));
+            Assert.AreEqual("指纹", DllCallbackSender.FormatPreviewResource("fingerprint_image"));
+            Assert.AreEqual("虹膜", DllCallbackSender.FormatPreviewResource("iris_image"));
+            Assert.AreEqual("车牌", DllCallbackSender.FormatPreviewResource("plate_image"));
+        }
+
+        [TestMethod]
         public async Task ServiceUnavailable_IsRetriedWithSameDelivery()
         {
             var handler = new SequenceHandler(call => new HttpResponseMessage(

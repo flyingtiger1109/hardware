@@ -167,6 +167,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _bizOps.CaptureFaceAsync(d, route).GetAwaiter().GetResult();
             _engine.CaptureFingerprintFunc = (d, hk, route) =>
                 _bizOps.CaptureFingerprintAsync(d, hk, route).GetAwaiter().GetResult();
+            _engine.CaptureFaceWithRequestIdFunc = (requestId, d, route) =>
+                _bizOps.CaptureFaceAsync(d, route, requestId).GetAwaiter().GetResult();
+            _engine.CaptureFingerprintWithRequestIdFunc = (requestId, d, hk, route) =>
+                _bizOps.CaptureFingerprintAsync(d, hk, route, requestId).GetAwaiter().GetResult();
 
             // 辅助模块
             _commandHandler = new DllCommandHandler(
@@ -608,9 +612,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var decision = _callbackIngressRateLimiter.Record(key, message, DateTime.UtcNow);
             if (decision.EmitCurrent)
             {
-                var output = string.IsNullOrEmpty(decision.WindowSummary)
-                    ? message
-                    : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
+                var output = LogRateLimiter.FormatMergedMessage(decision, message);
                 _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
                     output));
             }

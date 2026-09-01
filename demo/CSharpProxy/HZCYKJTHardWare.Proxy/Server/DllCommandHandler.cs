@@ -154,12 +154,14 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                 // === 同步采集（等待结果，传入第三方提供的 saveDir）===
                 case "/capture/face":
-                    return await EnqueueCapture(_queueManager.FaceCaptureQueue, routeEpoch, saveDir);
+                    return await EnqueueCapture(_queueManager.FaceCaptureQueue, routeEpoch,
+                        saveDir, requestId: requestId);
 
                 case "/capture/fingerprint":
                     {
                         var saveDirHk = request.GetString("save_dir_hk");
-                        return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch, saveDir, saveDirHk);
+                        return await EnqueueCapture(_queueManager.FingerprintCaptureQueue, routeEpoch,
+                            saveDir, saveDirHk, requestId);
                     }
 
                 // === 异步操作（终端转发成功后立即返回 "accepted"）===
@@ -331,7 +333,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// saveDir 包含文件扩展名时直接作为保存路径。
         /// </summary>
         private async Task<string> EnqueueCapture(WorkerQueue<object> queue,
-            TerminalRouteEpochSnapshot routeEpoch, string saveDir, string saveDirHk = null)
+            TerminalRouteEpochSnapshot routeEpoch, string saveDir, string saveDirHk = null,
+            string requestId = null)
         {
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var data = new CaptureTaskData
@@ -339,6 +342,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 Tcs = tcs,
                 SaveDir = saveDir,
                 SaveDirHk = saveDirHk,
+                RequestId = requestId,
                 RouteEpoch = routeEpoch
             };
             var queueWaitSw = Stopwatch.StartNew();
@@ -467,17 +471,20 @@ namespace HZCYKJTHardWare.Proxy.Server
             var authSex = JsonHelper.ToLogValue(request.GetString("XB"));
             var authBirthday = JsonHelper.ToLogValue(request.GetString("CSRQ"));
             var authPortCode = JsonHelper.ToLogValue(request.GetString("KADM"));
-            _log("[授权] 收到DLL授权请求：请求ID=" + JsonHelper.ToLogValue(requestId) +
-                "，终端=" + routeEpoch.Route.TerminalIndex +
-                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
-                "，回调地址=" + JsonHelper.ToLogValue(callbackUrl) +
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+                "授权请求：来源=DLL，RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，TerminalIndex=" + routeEpoch.Route.TerminalIndex +
                 "，证件号码=" + authIdNo +
                 "，证件类别=" + authDocType +
                 "，国家地区代码=" + authNationality +
                 "，姓名=" + authName +
                 "，性别=" + authSex +
                 "，出生日期=" + authBirthday +
-                "，口岸代码=" + authPortCode);
+                "，口岸代码=" + authPortCode));
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
+                "授权请求通信上下文：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
+                "，回调地址=" + JsonHelper.ToLogValue(callbackUrl)));
 
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var data = new AuthorizeTaskData
@@ -1090,6 +1097,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         public TaskCompletionSource<string> Tcs { get; set; }
         public string SaveDir { get; set; }
         public string SaveDirHk { get; set; }
+        public string RequestId { get; set; }
         public TerminalRouteEpochSnapshot RouteEpoch { get; set; }
         public bool IsQueueResultCompleted => Tcs == null || Tcs.Task.IsCompleted;
 

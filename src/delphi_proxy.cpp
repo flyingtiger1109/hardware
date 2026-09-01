@@ -458,20 +458,20 @@ bool DelphiProxy::RequestAuthorize(const std::string& requestId,
         "}";
     std::string response;
     const std::string safeAuthorizeUrl = SanitizeUrlForLog(BuildUrl("/authorize"));
-    LOG_INFO("授权", "DLL转发授权请求至EXE：请求ID=%s，请求地址=%s，回调地址=%s",
-             requestId.c_str(), safeAuthorizeUrl.c_str(),
-             SanitizeUrlForLog(callbackUrl).c_str());
+    LOG_DEBUG("授权", "DLL转发授权请求至EXE：请求ID=%s，请求地址=%s，回调地址=%s",
+              requestId.c_str(), safeAuthorizeUrl.c_str(),
+              SanitizeUrlForLog(callbackUrl).c_str());
 
     bool posted = PostJson("/authorize", body, response, timeoutMs, false);
     std::string errorCode;
     std::string errorMessage;
     HasErrorResponse(response, errorCode, errorMessage);
     bool accepted = posted && JsonHelper::GetBool(response, "accepted", false);
-    LOG_INFO("授权", "EXE授权受理响应：请求ID=%s，HTTP提交=%s，已受理=%s，状态=%s，错误码=%s，消息=%s",
-             requestId.c_str(), posted ? "是" : "否",
-             accepted ? "是" : "否",
-             LogValue(JsonHelper::GetString(response, "status")).c_str(),
-             LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
+    LOG_DEBUG("授权", "EXE授权受理响应：请求ID=%s，HTTP提交=%s，已受理=%s，状态=%s，错误码=%s，消息=%s",
+              requestId.c_str(), posted ? "是" : "否",
+              accepted ? "是" : "否",
+              LogValue(JsonHelper::GetString(response, "status")).c_str(),
+              LogValue(errorCode).c_str(), LogValue(errorMessage).c_str());
     if (!accepted && posted) {
         LOG_ERROR("授权", "EXE未受理授权请求：请求ID=%s，状态=%s，错误码=%s，消息=%s",
                   requestId.c_str(),

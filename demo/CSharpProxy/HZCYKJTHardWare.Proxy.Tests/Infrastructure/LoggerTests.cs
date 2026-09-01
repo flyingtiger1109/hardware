@@ -160,11 +160,34 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             Assert.IsNull(first.WindowSummary);
             Assert.IsFalse(repeated.EmitCurrent);
             Assert.IsTrue(nextWindow.EmitCurrent);
+            Assert.IsFalse(nextWindow.WindowSummary.Contains("RateLimitWindowEnd"));
+            Assert.IsFalse(nextWindow.WindowSummary.Contains("Count="));
+            Assert.IsFalse(nextWindow.WindowSummary.Contains("FirstTime="));
+            Assert.IsFalse(nextWindow.WindowSummary.Contains("LastTime="));
+            Assert.IsFalse(nextWindow.WindowSummary.Contains("LastError="));
             StringAssert.Contains(nextWindow.WindowSummary, "次数=2");
             StringAssert.Contains(nextWindow.WindowSummary, "首次=");
             StringAssert.Contains(nextWindow.WindowSummary, "最近=");
             StringAssert.Contains(nextWindow.WindowSummary, "最近错误=连接超时");
             Assert.AreEqual("连接被拒绝", nextWindow.CurrentError);
+
+            var merged = LogRateLimiter.FormatMergedMessage(nextWindow, "连接被拒绝");
+            Assert.AreEqual(1, CountOccurrences(merged, "重复故障汇总"));
+            Assert.AreEqual(1, CountOccurrences(merged, "本次错误="));
+        }
+
+        private static int CountOccurrences(string text, string value)
+        {
+            var count = 0;
+            var offset = 0;
+            while (!string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(value))
+            {
+                var index = text.IndexOf(value, offset, StringComparison.Ordinal);
+                if (index < 0) break;
+                count++;
+                offset = index + value.Length;
+            }
+            return count;
         }
     }
 }

@@ -22,8 +22,8 @@ DLL 和 Proxy 通过同一份 `HZCYKJTHardWare.json` 协同工作。默认情况
 ## 兼容性要求
 
 - Windows 10 / Windows 11；部署到 Windows 7 前需单独完成现场验证。
-- DLL 支持 Win32 和 x64 构建；调用方、DLL、依赖库的位数必须一致。
-- 当前 C# Proxy 的目标框架为 `.NET Framework 4.6`，平台为 `x86`。
+- 生产部署中第三方 Delphi7 与 Native DLL 使用 `Win32/x86`；C# Proxy 为独立的 `.NET Framework 4.6` `x64` 进程，双方通过 Loopback HTTP 通信，不要求同位数。
+- DLL 仍支持 Win32 和 x64 构建；具体部署组合必须与对应的第三方调用方和 Native 依赖库匹配。
 - DLL 对外导出使用 `extern "C"` 和 `__stdcall`；不得自行改变导出名、参数顺序或调用约定。
 - 向 DLL 传入的路径和字符串参数使用 UTF-8 `const char*`。
 
@@ -39,7 +39,7 @@ DLL 和 Proxy 通过同一份 `HZCYKJTHardWare.json` 协同工作。默认情况
 
 运行前应确认：
 
-1. 调用方、DLL 和 Proxy 同为 x86，或全部切换为 x64；
+1. 生产部署确认 Delphi7 调用方与 Native DLL 为 `x86`，C# Proxy 为 `x64`，并确认 Loopback HTTP 端口可用；
 2. 配置文件与 DLL 位于同一目录；
 3. Proxy 的 VLC 依赖完整且未被安全软件隔离；
 4. 终端网络、端口和本机防火墙策略允许通信。
@@ -165,7 +165,7 @@ finally
 ### C# Proxy
 
 ```powershell
-dotnet build .\demo\CSharpProxy\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.csproj -c Release -p:Platform=x86
+dotnet build .\demo\CSharpProxy\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.csproj -c Release -p:Platform=x64
 ```
 
 若正式输出目录中的 Proxy 正在运行，VLC 文件可能被锁定。此时应先停止 Proxy，或使用独立输出目录完成编译验证。
@@ -173,7 +173,7 @@ dotnet build .\demo\CSharpProxy\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.cspr
 ## 故障排查
 
 - `InitSdk` 失败：确认 DLL 同目录存在有效的 `HZCYKJTHardWare.json`，并检查 DLL 日志。
-- Proxy 无法启动：检查 `delphi_server.executable`、x86/x64 一致性和运行依赖。
+- Proxy 无法启动：检查 `delphi_server.executable`、Proxy 的 x64 运行依赖和本机 Loopback 通信。
 - 预览失败：确认传入的 `HWND` 有效、VLC 依赖完整、终端可返回预览地址。
 - OCR/NFC 未收到结果：检查终端回调地址、端口、防火墙及 DLL 事件回调注册顺序。
 - 终端切换失败：检查 `terminal.mode`、网段配置和两台终端的可达性。
@@ -182,7 +182,7 @@ dotnet build .\demo\CSharpProxy\HZCYKJTHardWare.Proxy\HZCYKJTHardWare.Proxy.cspr
 
 发布前至少完成以下验证：
 
-- DLL `Release|Win32` 与 C# Proxy `x86 Release` 编译；
+- DLL `Release|Win32` 与 C# Proxy `x64 Release` 编译；
 - 第三方 Demo 初始化、释放和重复初始化；
 - 双终端切换后的预览、抓拍、OCR、NFC 与授权；
 - 终端断开、重连、超时和 Proxy 重启；

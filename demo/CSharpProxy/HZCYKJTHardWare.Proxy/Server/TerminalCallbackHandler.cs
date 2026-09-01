@@ -173,6 +173,22 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        private static string FormatCallbackResource(string resourceType)
+        {
+            switch (resourceType)
+            {
+                case "face_image": return "摄像头";
+                case "fingerprint_image": return "指纹";
+                case ProxyResourceTypes.IrisImage: return "虹膜";
+                case ProxyResourceTypes.OcrDocument: return "证件识别";
+                case ProxyResourceTypes.NfcCard: return "IC卡";
+                case ProxyResourceTypes.Protocol:
+                case "authorization": return "授权";
+                case "plate_image": return "车牌";
+                default: return string.IsNullOrWhiteSpace(resourceType) ? "未知" : resourceType;
+            }
+        }
+
         private void HandleOcrEventStatus(string bodyUtf8)
         {
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
@@ -444,17 +460,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\"message\":\"" + JsonHelper.EscapeString(message) + "\"" +
                 "}";
 
-            _log("[授权回调] 转发至DLL：原始请求ID=" + JsonHelper.ToLogValue(result.RequestId) +
-                "，投递请求ID=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
-                "，授权结果=" + authResult +
-                "，消息=" + JsonHelper.ToLogValue(message) +
-                "，证件号码=" + JsonHelper.ToLogValue(idNo) +
-                "，证件类别=" + JsonHelper.ToLogValue(docType) +
-                "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
-                "，姓名=" + JsonHelper.ToLogValue(name) +
-                "，性别=" + JsonHelper.ToLogValue(sex) +
-                "，出生日期=" + JsonHelper.ToLogValue(birthday) +
-                "，口岸代码=" + JsonHelper.ToLogValue(portCode));
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
+                "授权结果准备通知DLL：RequestId=" + JsonHelper.ToLogValue(result.RequestId) +
+                "，DeliveryRequestId=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
+                "，Result=" + authResult +
+                "，消息=" + JsonHelper.ToLogValue(message)));
             if (!CanDeliver(route, "授权")) return;
             var delivery = await _dllCallback.PostCallbackRaw("/authorize", payload,
                 route.CancellationToken).ConfigureAwait(false);
@@ -630,9 +640,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var decision = _callbackRateLimiter.Record(key, message, DateTime.UtcNow);
             if (!decision.EmitCurrent || _log == null)
                 return;
-            var output = string.IsNullOrEmpty(decision.WindowSummary)
-                ? message
-                : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
+            var output = LogRateLimiter.FormatMergedMessage(decision, message);
             _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, level,
                 output));
         }
@@ -788,6 +796,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             if (route == null || route.Persistent)
             {
+                if (route != null && delivery == CallbackDeliveryResult.Delivered)
+                    LogCallbackDelivered(route);
                 if (route != null && delivery == CallbackDeliveryResult.Failed)
                     LogCallbackRateLimited("dll_callback|persistent_delivery_failed|" + route.ResourceType,
                         "警告",
@@ -800,6 +810,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 _requestRegistry.Complete(route.SourceRequestId,
                     route.ResourceType);
+                LogCallbackDelivered(route);
                 return;
             }
 
@@ -811,6 +822,18 @@ namespace HZCYKJTHardWare.Proxy.Server
                     $"资源={route.ResourceType}");
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             }
+        }
+
+        private void LogCallbackDelivered(CallbackRoute route)
+        {
+            var message = Logger.FormatModuleMessage(LogModules.DllCallback, "信息",
+                "结果已通知DLL：资源=" + FormatCallbackResource(route.ResourceType) +
+                "，RequestId=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
+                "，Result=成功");
+            if (_log != null)
+                _log(message);
+            else
+                Logger.Info(message);
         }
 
         private sealed class CallbackRoute

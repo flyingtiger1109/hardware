@@ -2027,7 +2027,7 @@ static int CaptureCameraImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("接口", "人脸抓拍成功");
+    LOG_DEBUG("接口", "人脸抓拍成功：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2084,7 +2084,7 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("接口", "指纹抓拍成功");
+    LOG_DEBUG("接口", "指纹抓拍成功：request_id=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2328,12 +2328,14 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
         HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
-    LOG_INFO("授权", "第三方调用授权请求：请求ID=%s，回调地址=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
-             requestId.c_str(), LogValue(callbackUrl).c_str(),
+    LOG_INFO("授权", "第三方调用授权请求：请求ID=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
+             requestId.c_str(),
              LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
              LogValue(authGJDQDM).c_str(), LogValue(authXM).c_str(),
              LogValue(authXB).c_str(), LogValue(authCSRQ).c_str(),
              LogValue(authKADM).c_str());
+    LOG_DEBUG("授权", "授权请求通信上下文：请求ID=%s，回调地址=%s",
+              requestId.c_str(), LogValue(callbackUrl).c_str());
 
     if (IsSwitchPending()) {
         LOG_WARN("接口", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
@@ -2361,7 +2363,9 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
                                 callbackUrl,
                                 httpTimeoutMs)) {
         const int failureCode = ProxyFailureCode(proxy);
-        LOG_ERROR("授权", "EXE授权请求受理失败：请求ID=%s，EXE地址=%s",
+        LOG_ERROR("授权", "EXE授权请求受理失败：请求ID=%s，错误码=%d",
+                  requestId.c_str(), failureCode);
+        LOG_DEBUG("授权", "授权请求通信失败：请求ID=%s，EXE地址=%s",
                   requestId.c_str(), LogValue(ctx.delphi_server_url).c_str());
         LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
@@ -2383,7 +2387,7 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
         LOG_WARN("接口", "授权请求受理结果已过期：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    LOG_INFO("接口", "授权请求已受理");
+    LOG_INFO("授权", "授权请求已受理：请求ID=%s", requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 

@@ -29,6 +29,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
         // 仅由专用采集工作线程调用的同步适配器
         public Func<string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFaceFunc { get; set; }
         public Func<string, string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintFunc { get; set; }
+        public Func<string, string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFaceWithRequestIdFunc { get; set; }
+        public Func<string, string, string, TerminalRouteEpochSnapshot, (bool ok, string path)> CaptureFingerprintWithRequestIdFunc { get; set; }
 
         internal WorkerExecutionEngine(
             TerminalManager terminalManager,
@@ -68,9 +70,12 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 if (string.IsNullOrEmpty(saveDir)) saveDir = AppConfig.Instance.DefaultSaveDir;
 
                 var captureFunc = CaptureFaceFunc;
-                var (ok, path) = captureFunc != null
-                    ? captureFunc(saveDir, routeEpoch)
-                    : (false, "");
+                var captureFuncWithRequestId = CaptureFaceWithRequestIdFunc;
+                var (ok, path) = captureFuncWithRequestId != null
+                    ? captureFuncWithRequestId(data?.RequestId, saveDir, routeEpoch)
+                    : captureFunc != null
+                        ? captureFunc(saveDir, routeEpoch)
+                        : (false, "");
 
                 tcs?.TrySetResult(routeEpoch.IsCancellationRequested
                     ? TerminalSwitchingResult
@@ -103,9 +108,12 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 var saveDirHk = data?.SaveDirHk;
 
                 var captureFunc = CaptureFingerprintFunc;
-                var (ok, path) = captureFunc != null
-                    ? captureFunc(saveDir, saveDirHk, routeEpoch)
-                    : (false, "");
+                var captureFuncWithRequestId = CaptureFingerprintWithRequestIdFunc;
+                var (ok, path) = captureFuncWithRequestId != null
+                    ? captureFuncWithRequestId(data?.RequestId, saveDir, saveDirHk, routeEpoch)
+                    : captureFunc != null
+                        ? captureFunc(saveDir, saveDirHk, routeEpoch)
+                        : (false, "");
 
                 tcs?.TrySetResult(routeEpoch.IsCancellationRequested
                     ? TerminalSwitchingResult
@@ -380,14 +388,17 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             {
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))
                     return "{\"error\":true,\"code\":\"request_expired\"}";
-                _log("[授权] 已受理");
+                _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+                    "授权请求已受理：RequestId=" + JsonHelper.ToLogValue(requestId)));
                 return "{\"accepted\":true}";
             }
 
             var code = ResultParser.ExtractErrorCode(response);
             var message = ResultParser.ExtractErrorMessage(response);
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
-            _log("[授权][错误] 下发失败: " + detail);
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
+                "授权请求最终失败：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "，错误=" + detail));
 
             if (string.IsNullOrEmpty(code))
                 code = "terminal_request_failed";

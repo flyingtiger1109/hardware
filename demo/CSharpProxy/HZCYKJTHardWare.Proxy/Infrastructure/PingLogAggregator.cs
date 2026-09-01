@@ -76,7 +76,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 if (_disposed)
                     return;
 
-                AddDueSummaryLocked(now, messages);
+                var summaryAdded = AddDueSummaryLocked(now, messages);
                 AddTimingLocked(elapsedMs);
                 _failureCount++;
                 if (exception)
@@ -91,7 +91,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     _failureStartedUtc = now;
                 }
 
-                if (reasonChanged || now - _lastFailureNoticeUtc >= RepeatedFailureNoticeInterval)
+                var shouldNotice = reasonChanged ||
+                    (!summaryAdded && now - _lastFailureNoticeUtc >= RepeatedFailureNoticeInterval);
+                if (shouldNotice)
                 {
                     var level = exception ? "错误" : "警告";
                     var kind = exception ? "异常" : "失败";
@@ -103,6 +105,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                         _consecutiveFailureCount));
                     _lastFailureNoticeUtc = now;
                     _lastFailureReason = normalizedReason;
+                }
+                else if (summaryAdded)
+                {
+                    // 窗口边界的汇总已经表达了同一原因的持续故障，避免紧接着再打印一条当前错误。
+                    _lastFailureNoticeUtc = now;
                 }
             }
 
@@ -152,13 +159,14 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             Emit(message);
         }
 
-        private void AddDueSummaryLocked(DateTime now, ICollection<string> messages)
+        private bool AddDueSummaryLocked(DateTime now, ICollection<string> messages)
         {
             if (_requestCount == 0 || now - _windowStartedUtc < SummaryInterval)
-                return;
+                return false;
 
             messages.Add(BuildSummaryLocked(now));
             ResetWindowLocked(now);
+            return true;
         }
 
         private void AddTimingLocked(long elapsedMs)
@@ -177,7 +185,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             var reason = string.IsNullOrWhiteSpace(_lastFailureReason) ? "无" : _lastFailureReason;
             return Logger.FormatModuleMessage(
                 LogModules.HealthCheck,
-                _failureActive ? "警告" : "信息",
+                _failureActive ? "警告" : "调试",
                 "统计周期=" + Math.Max(0L, (long)(now - _windowStartedUtc).TotalSeconds) +
                 "秒，请求次数=" + _requestCount +
                 "，成功次数=" + _successCount +
