@@ -99,6 +99,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly ConcurrentDictionary<string, byte> _activeRecoveries = new ConcurrentDictionary<string, byte>();
         private readonly ConcurrentDictionary<string, Task> _recoveryTasks = new ConcurrentDictionary<string, Task>();
         private readonly ConcurrentDictionary<string, Task> _deferredMjpegDisposals = new ConcurrentDictionary<string, Task>();
+        private readonly ConcurrentDictionary<string, MjpegRecoveryEpisode> _mjpegRecoveryEpisodes =
+            new ConcurrentDictionary<string, MjpegRecoveryEpisode>();
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
         private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
         private readonly TerminalClient _terminalClient;
@@ -113,6 +115,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _previewUrlValidationRunning;
         private int _externalHostValidationRunning;
         private long _sessionGeneration;
+        private long _nextMjpegRecoveryEpisodeId;
         private int _stopping;
         private int _shutdownCompleted;
         private int _finalResourcesDisposed;
@@ -126,6 +129,17 @@ namespace HZCYKJTHardWare.Proxy.Preview
             public string Url { get; set; }
             public DateTime UpdatedUtc { get; set; }
             public DateTime LastValidatedUtc { get; set; }
+        }
+
+        private sealed class MjpegRecoveryEpisode
+        {
+            internal long Id;
+            internal DateTime FirstFailureUtc;
+            internal DateTime LastFailureUtc;
+            internal int FailureCount;
+            internal int Attempt;
+            internal MjpegFailureKind LastFailureKind;
+            internal string LastError;
         }
 
         public PreviewManager(TerminalClient terminalClient,
@@ -966,22 +980,33 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return;
 
             var generation = session.Generation;
-            mjpegPlayer.SetStreamFaultHandler((faultedPlayer, reason) =>
-                ScheduleMjpegRecovery(key, generation, faultedPlayer, reason));
+            mjpegPlayer.SetFailureHandler((faultedPlayer, failureKind, reason) =>
+            {
+                if (failureKind == MjpegFailureKind.RenderTargetFailure)
+                {
+                    ScheduleMjpegRenderTargetFailure(key, generation, faultedPlayer, reason);
+                    return;
+                }
+
+                ScheduleMjpegRecovery(key, generation, faultedPlayer, failureKind, reason);
+            });
         }
 
         private void ScheduleMjpegRecovery(string key, long generation,
-            MjpegPreviewController faultedPlayer, string reason)
+            MjpegPreviewController faultedPlayer, MjpegFailureKind failureKind,
+            string reason)
         {
             if (_disposed || Volatile.Read(ref _stopping) != 0 ||
                 _lifetimeCts.IsCancellationRequested)
                 return;
 
-            var recoveryKey = key + "#" + generation;
+            var episode = RecordMjpegFailure(key, failureKind, reason);
+            var recoveryKey = GetMjpegRecoveryKey(key);
             if (!_activeRecoveries.TryAdd(recoveryKey, 0))
                 return;
 
-            Logger.Warn($"HTTP MJPEG流故障，启动受控恢复：会话={key}，代次={generation}，错误={reason}");
+            Logger.Warn($"HTTP MJPEG流故障，启动受控恢复：会话={key}，故障类型={failureKind}，" +
+                        $"RecoveryEpisodeId={episode.Id}，错误={reason}");
             if (_taskTracker != null)
             {
                 var accepted = _taskTracker.TryRun(async () =>
@@ -989,7 +1014,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     try
                     {
                         await RecoverMjpegPreviewAsync(key, generation, faultedPlayer,
-                            reason, _lifetimeCts.Token).ConfigureAwait(false);
+                            failureKind, reason, episode.Id, _lifetimeCts.Token).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -1005,7 +1030,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             var task = Task.Run(() => RecoverMjpegPreviewAsync(key, generation, faultedPlayer,
-                reason, _lifetimeCts.Token));
+                failureKind, reason, episode.Id, _lifetimeCts.Token));
             _recoveryTasks[recoveryKey] = task;
             task.ContinueWith(completedTask =>
             {
@@ -1014,16 +1039,155 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
 
-        private async Task RecoverMjpegPreviewAsync(string key, long generation,
-            MjpegPreviewController faultedPlayer, string faultReason,
-            CancellationToken cancellationToken)
+        private void ScheduleMjpegRenderTargetFailure(string key, long generation,
+            MjpegPreviewController faultedPlayer, string reason)
         {
-            int failedAttempts = 0;
-            PreviewSession recoverySession = null;
+            if (_disposed || Volatile.Read(ref _stopping) != 0 ||
+                _lifetimeCts.IsCancellationRequested)
+                return;
 
-            while (!_disposed && !cancellationToken.IsCancellationRequested &&
-                   failedAttempts < MaxMjpegRecoveryAttempts)
+            var recoveryKey = GetMjpegRecoveryKey(key);
+            if (!_activeRecoveries.TryAdd(recoveryKey, 0))
+                return;
+
+            Logger.Warn($"HTTP MJPEG绘制目标失效，结束预览会话：会话={key}，" +
+                        $"HWND原因={JsonHelper.ToLogValue(reason)}");
+            if (_taskTracker != null)
             {
+                var accepted = _taskTracker.TryRun(async () =>
+                {
+                    try
+                    {
+                        await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer, reason)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _activeRecoveries.TryRemove(recoveryKey, out _);
+                    }
+                }, "preview_mjpeg_render_target_failure_" + recoveryKey);
+                if (!accepted)
+                {
+                    _activeRecoveries.TryRemove(recoveryKey, out _);
+                    Logger.Warn($"HTTP MJPEG绘制目标故障未能及时清理：会话={key}");
+                }
+                return;
+            }
+
+            var task = Task.Run(() => FailRecoveryAndReleaseAsync(
+                key, generation, faultedPlayer, reason));
+            _recoveryTasks[recoveryKey] = task;
+            task.ContinueWith(completedTask =>
+            {
+                _activeRecoveries.TryRemove(recoveryKey, out _);
+                _recoveryTasks.TryRemove(recoveryKey, out _);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        private static string GetMjpegRecoveryKey(string key)
+        {
+            return key + "#mjpeg";
+        }
+
+        private MjpegRecoveryEpisode RecordMjpegFailure(string key,
+            MjpegFailureKind failureKind, string reason)
+        {
+            var episode = _mjpegRecoveryEpisodes.GetOrAdd(key, value =>
+                new MjpegRecoveryEpisode
+                {
+                    Id = Interlocked.Increment(ref _nextMjpegRecoveryEpisodeId),
+                    FirstFailureUtc = DateTime.UtcNow
+                });
+            lock (episode)
+            {
+                var now = DateTime.UtcNow;
+                if (episode.FailureCount == 0)
+                    episode.FirstFailureUtc = now;
+                episode.LastFailureUtc = now;
+                episode.FailureCount++;
+                episode.LastFailureKind = failureKind;
+                episode.LastError = string.IsNullOrWhiteSpace(reason)
+                    ? "MJPEG故障"
+                    : reason;
+            }
+            return episode;
+        }
+
+        private bool TryAdvanceMjpegRecoveryAttempt(string key, long episodeId,
+            MjpegFailureKind failureKind, string reason, out int attempt)
+        {
+            attempt = 0;
+            if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) || episode == null)
+                return false;
+
+            lock (episode)
+            {
+                if (episode.Id != episodeId || episode.Attempt >= MaxMjpegRecoveryAttempts)
+                    return false;
+
+                episode.Attempt++;
+                episode.Attempt = Math.Min(episode.Attempt, MaxMjpegRecoveryAttempts);
+                episode.LastFailureKind = failureKind;
+                episode.LastError = string.IsNullOrWhiteSpace(reason)
+                    ? episode.LastError
+                    : reason;
+                attempt = episode.Attempt;
+                return true;
+            }
+        }
+
+        private void CompleteMjpegRecoveryEpisode(string key, long episodeId)
+        {
+            if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) || episode == null)
+                return;
+
+            lock (episode)
+            {
+                if (episode.Id == episodeId)
+                    _mjpegRecoveryEpisodes.TryRemove(key, out _);
+            }
+        }
+
+        private bool IsMjpegRecoveryAttemptExhausted(string key, long episodeId)
+        {
+            if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) || episode == null)
+                return true;
+
+            lock (episode)
+                return episode.Id != episodeId || episode.Attempt >= MaxMjpegRecoveryAttempts;
+        }
+
+        private async Task RecoverMjpegPreviewAsync(string key, long generation,
+            MjpegPreviewController faultedPlayer, MjpegFailureKind failureKind,
+            string faultReason, long episodeId, CancellationToken cancellationToken)
+        {
+            PreviewSession recoverySession = null;
+            var lastFailureKind = failureKind;
+            var lastFailureReason = string.IsNullOrWhiteSpace(faultReason)
+                ? "MJPEG流不可用"
+                : faultReason;
+
+            while (!_disposed && !cancellationToken.IsCancellationRequested)
+            {
+                int attempt;
+                if (!TryAdvanceMjpegRecoveryAttempt(key, episodeId,
+                    lastFailureKind, lastFailureReason, out attempt))
+                {
+                    Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
+                                 $"RecoveryEpisodeId={episodeId}，最大次数={MaxMjpegRecoveryAttempts}，" +
+                                 $"{TraceRequest(recoverySession?.RequestId)}");
+                    await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
+                        lastFailureReason).ConfigureAwait(false);
+                    CompleteMjpegRecoveryEpisode(key, episodeId);
+                    return;
+                }
+
+                IPreviewController replacement = null;
+                MjpegPreviewController mjpegReplacement = null;
+                PreviewSession current = null;
+                var invalidTarget = false;
+                var committed = false;
+
                 try
                 {
                     await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -1035,7 +1199,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 try
                 {
-                    if (_disposed || !_sessions.TryGetValue(key, out var current) ||
+                    if (_disposed || !_sessions.TryGetValue(key, out current) ||
                         current.Generation != generation)
                         return;
 
@@ -1062,70 +1226,71 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (recoveryHwnd == IntPtr.Zero || !IsWindow(recoveryHwnd) ||
                         (current.SessionType == PreviewSessionType.External && !IsExternalHostCurrent(current)))
                     {
-                        Logger.Warn($"HTTP MJPEG恢复取消，目标HWND已失效：会话={key}，" +
-                                     $"hwnd={FormatHwnd(recoveryHwnd)}");
-                        RemoveSessionIfCurrent(key, current);
-                        await ReleasePlayerAsync(key, faultedPlayer, preserveMjpegWorker: false)
-                            .ConfigureAwait(false);
-                        return;
-                    }
-
-                    var attempt = failedAttempts + 1;
-                    string previewUrl;
-                    if (!string.IsNullOrWhiteSpace(current.ExplicitPreviewUrl))
-                    {
-                        previewUrl = SelectRecoveryPreviewUrl(current.ExplicitPreviewUrl, null);
-                        Logger.Debug($"HTTP MJPEG恢复复用保存的显式URL：会话={JsonHelper.ToLogValue(key)}，" +
-                                     $"尝试次数={attempt}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
+                        invalidTarget = true;
+                        lastFailureKind = MjpegFailureKind.RenderTargetFailure;
+                        lastFailureReason = "预览窗口已销毁或宿主进程已变更";
                     }
                     else
                     {
-                        ClearPreviewUrlCache(current.ResourceType, current.TerminalBaseUrl);
-                        Logger.Debug($"HTTP MJPEG恢复申请新URL：会话={JsonHelper.ToLogValue(key)}，" +
-                                     $"尝试次数={attempt}");
-                        previewUrl = SelectRecoveryPreviewUrl(null,
-                            await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
-                                forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
-                    }
-
-                    if (!CanContinueRecovery(current))
-                        return;
-
-                    if (!string.IsNullOrEmpty(previewUrl))
-                    {
-                        var (srcW, srcH, swap) = GetSourceDimensions(current.ResourceType);
-                        var isHttpPreview = IsHttpPreviewUrl(previewUrl);
-                        var terminalMjpegResource = current.SessionType == PreviewSessionType.External &&
-                                                    IsTerminalMjpegResource(current.ResourceType);
-                        if (!terminalMjpegResource && !isHttpPreview)
-                            await WarmupPreviewStreamIfNeeded(current.ResourceType, previewUrl,
-                                recoveryHwnd, srcW, srcH, swap, current.RequestId).ConfigureAwait(false);
-
-                        var description = BuildTraceDescription(
-                            $"{ResourceToName(current.ResourceType)} {SessionToName(current.SessionType)}", current.RequestId);
-                        var effectiveDirectRenderTarget = current.DirectRenderTarget || terminalMjpegResource;
-                        var allowVlcFallback = !terminalMjpegResource;
-                        var replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
-                            recoveryHwnd, srcW, srcH, swap, isHttpPreview,
-                            effectiveDirectRenderTarget, allowVlcFallback, current.RequestId,
-                            captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
-                        if (replacement != null && replacement.IsRunning)
+                        string previewUrl;
+                        if (!string.IsNullOrWhiteSpace(current.ExplicitPreviewUrl))
                         {
-                            // 替换操作创建新的生命周期代次。新实例立即失败时，不得因当前代次任务结束而抑制其恢复。
-                            current.Generation = Interlocked.Increment(ref _sessionGeneration);
-                            current.Player = replacement;
-                            _sessions[key] = current;
-                            _restartInfo[key] = PreviewRestartInfo.FromSession(current);
-                            AttachMjpegFaultHandler(key, current, replacement);
-                            Logger.Info($"HTTP MJPEG预览已恢复：会话={key}，尝试次数={attempt}");
-                            return;
+                            previewUrl = SelectRecoveryPreviewUrl(current.ExplicitPreviewUrl, null);
+                            Logger.Debug($"HTTP MJPEG恢复复用保存的显式URL：会话={JsonHelper.ToLogValue(key)}，" +
+                                         $"尝试次数={attempt}，使用原第三方HWND={FormatHwnd(recoveryHwnd)}");
+                        }
+                        else
+                        {
+                            ClearPreviewUrlCache(current.ResourceType, current.TerminalBaseUrl);
+                            Logger.Debug($"HTTP MJPEG恢复申请新URL：会话={JsonHelper.ToLogValue(key)}，" +
+                                         $"尝试次数={attempt}");
+                            previewUrl = SelectRecoveryPreviewUrl(null,
+                                await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
+                                    forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
                         }
 
-                        if (replacement != null)
-                            await ReleasePlayerAsync(key, replacement, preserveMjpegWorker: true).ConfigureAwait(false);
-                    }
+                        if (!CanContinueRecovery(current))
+                            return;
 
-                    failedAttempts++;
+                        if (!string.IsNullOrEmpty(previewUrl))
+                        {
+                            var (srcW, srcH, swap) = GetSourceDimensions(current.ResourceType);
+                            var isHttpPreview = IsHttpPreviewUrl(previewUrl);
+                            var terminalMjpegResource = current.SessionType == PreviewSessionType.External &&
+                                                        IsTerminalMjpegResource(current.ResourceType);
+                            if (!terminalMjpegResource && !isHttpPreview)
+                                await WarmupPreviewStreamIfNeeded(current.ResourceType, previewUrl,
+                                    recoveryHwnd, srcW, srcH, swap, current.RequestId).ConfigureAwait(false);
+
+                            var description = BuildTraceDescription(
+                                $"{ResourceToName(current.ResourceType)} {SessionToName(current.SessionType)}", current.RequestId);
+                            var effectiveDirectRenderTarget = current.DirectRenderTarget || terminalMjpegResource;
+                            var allowVlcFallback = !terminalMjpegResource;
+                            replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
+                                recoveryHwnd, srcW, srcH, swap, isHttpPreview,
+                                effectiveDirectRenderTarget, allowVlcFallback, current.RequestId,
+                                captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
+                            mjpegReplacement = replacement as MjpegPreviewController;
+
+                            if (mjpegReplacement != null)
+                            {
+                                // 在真实绘制完成前保持原会话代次，避免首帧到达就制造新的恢复窗口。
+                                current.Player = mjpegReplacement;
+                                _sessions[key] = current;
+                                _restartInfo[key] = PreviewRestartInfo.FromSession(current);
+                                AttachMjpegFaultHandler(key, current, mjpegReplacement);
+                            }
+                            else if (replacement != null && replacement.IsRunning)
+                            {
+                                current.Generation = Interlocked.Increment(ref _sessionGeneration);
+                                current.Player = replacement;
+                                _sessions[key] = current;
+                                _restartInfo[key] = PreviewRestartInfo.FromSession(current);
+                                AttachPlayerFaultHandler(key, current, replacement);
+                                committed = true;
+                            }
+                        }
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -1133,34 +1298,141 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
                 catch (Exception ex)
                 {
-                    failedAttempts++;
-                    faultReason = ex.Message;
+                    lastFailureKind = MjpegFailureKind.StreamFailure;
+                    lastFailureReason = ex.Message;
                     Logger.TryLogRateLimited(
-                        "MJPEG|recovery|" + key + "|exception",
+                        "Mjpeg|Recovery|" + key + "|Exception",
                         LogModules.Preview, "错误",
                         $"HTTP MJPEG恢复异常：会话={JsonHelper.ToLogValue(key)}，" +
-                        $"尝试次数={failedAttempts}，错误={JsonHelper.ToLogValue(ex.Message)}");
+                        $"RecoveryEpisodeId={episodeId}，尝试次数={attempt}，错误={JsonHelper.ToLogValue(ex.Message)}");
                 }
                 finally
                 {
                     _operationLock.Release();
                 }
 
-                if (failedAttempts >= MaxMjpegRecoveryAttempts)
+                if (invalidTarget)
                 {
-                    Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
-                                 $"最大次数={MaxMjpegRecoveryAttempts}，{TraceRequest(recoverySession?.RequestId)}");
-                    await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer, faultReason)
-                        .ConfigureAwait(false);
+                    Logger.Warn($"HTTP MJPEG恢复取消，目标HWND已失效：会话={key}，" +
+                                $"{TraceRequest(recoverySession?.RequestId)}");
+                    await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
+                        lastFailureReason).ConfigureAwait(false);
+                    CompleteMjpegRecoveryEpisode(key, episodeId);
                     return;
                 }
 
-                var delayMs = GetRecoveryDelayMs(failedAttempts);
+                if (committed)
+                {
+                    CompleteMjpegRecoveryEpisode(key, episodeId);
+                    Logger.Info($"HTTP MJPEG预览已恢复：会话={key}，RecoveryEpisodeId={episodeId}，" +
+                                $"尝试次数={attempt}");
+                    return;
+                }
+
+                if (mjpegReplacement != null)
+                {
+                    var readiness = await mjpegReplacement.WaitForRenderedFrameAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (readiness != null && readiness.Succeeded)
+                    {
+                        var committedPlayer = false;
+                        var lockTaken = false;
+                        try
+                        {
+                            await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                            lockTaken = true;
+                            if (!_disposed && _sessions.TryGetValue(key, out var readySession) &&
+                                ReferenceEquals(readySession, recoverySession) &&
+                                readySession.Generation == generation &&
+                                ReferenceEquals(readySession.Player, mjpegReplacement))
+                            {
+                                readySession.Generation = Interlocked.Increment(ref _sessionGeneration);
+                                _sessions[key] = readySession;
+                                _restartInfo[key] = PreviewRestartInfo.FromSession(readySession);
+                                // 首次等待期间的处理器捕获旧 generation；提交后重新绑定到新代次。
+                                AttachMjpegFaultHandler(key, readySession, mjpegReplacement);
+                                committedPlayer = true;
+                            }
+                        }
+                        finally
+                        {
+                            if (lockTaken)
+                                _operationLock.Release();
+                        }
+
+                        if (committedPlayer)
+                        {
+                            CompleteMjpegRecoveryEpisode(key, episodeId);
+                            Logger.Info($"HTTP MJPEG预览已恢复：会话={key}，RecoveryEpisodeId={episodeId}，" +
+                                        $"尝试次数={attempt}");
+                            return;
+                        }
+
+                        return;
+                    }
+
+                    lastFailureKind = readiness == null
+                        ? MjpegFailureKind.StreamFailure
+                        : readiness.FailureKind;
+                    lastFailureReason = readiness == null || string.IsNullOrWhiteSpace(readiness.FailureReason)
+                        ? "MJPEG绘制未就绪"
+                        : readiness.FailureReason;
+
+                    if (lastFailureKind == MjpegFailureKind.RenderTargetFailure)
+                    {
+                        await FailRecoveryAndReleaseAsync(key, generation, mjpegReplacement,
+                            lastFailureReason).ConfigureAwait(false);
+                        CompleteMjpegRecoveryEpisode(key, episodeId);
+                        return;
+                    }
+                }
+
+                if (replacement != null)
+                {
+                    var lockTaken = false;
+                    try
+                    {
+                        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                        lockTaken = true;
+                        if (_sessions.TryGetValue(key, out var failedSession) &&
+                            ReferenceEquals(failedSession, recoverySession) &&
+                            failedSession.Generation == generation &&
+                            ReferenceEquals(failedSession.Player, replacement))
+                        {
+                            failedSession.Player = null;
+                            await ReleasePlayerAsync(key, replacement,
+                                preserveMjpegWorker: true).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                    finally
+                    {
+                        if (lockTaken)
+                            _operationLock.Release();
+                    }
+                }
+
+                RecordMjpegFailure(key, lastFailureKind, lastFailureReason);
+                if (attempt >= MaxMjpegRecoveryAttempts)
+                {
+                    Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
+                                 $"RecoveryEpisodeId={episodeId}，最大次数={MaxMjpegRecoveryAttempts}，" +
+                                 $"{TraceRequest(recoverySession?.RequestId)}");
+                    await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
+                        lastFailureReason).ConfigureAwait(false);
+                    CompleteMjpegRecoveryEpisode(key, episodeId);
+                    return;
+                }
+
+                var delayMs = GetRecoveryDelayMs(attempt);
                 Logger.TryLogRateLimited(
-                    "MJPEG|recovery|" + key + "|retry",
+                    "Mjpeg|Recovery|" + key + "|Retry",
                     LogModules.Preview, "警告",
                     $"HTTP MJPEG恢复未成功，{delayMs}ms后重试：会话={JsonHelper.ToLogValue(key)}，" +
-                    $"尝试次数={failedAttempts}");
+                    $"RecoveryEpisodeId={episodeId}，尝试次数={attempt}，故障类型={lastFailureKind}");
                 try
                 {
                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
@@ -1169,14 +1441,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     return;
                 }
-            }
-
-            if (failedAttempts >= MaxMjpegRecoveryAttempts)
-            {
-                Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
-                             $"最大次数={MaxMjpegRecoveryAttempts}，{TraceRequest(recoverySession?.RequestId)}");
-                await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer, faultReason)
-                    .ConfigureAwait(false);
             }
         }
 

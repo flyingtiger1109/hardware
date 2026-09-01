@@ -1702,3 +1702,40 @@
 ### 回退方式
 
 阶段3改动当前仍在本地、未形成新的提交；修改前基线 `89435ae5` 已推送到 Gitee。需要回退时，仅按阶段3涉及文件相对 `89435ae5` 的差异逐文件恢复，保留工作区其他用户改动及生成物；不修改版本号、不执行宽范围重置。
+
+## 阶段3 Task R1：MJPEG Recovery Episode / RenderTarget Failure 修复（2026-09-01）
+
+### 完成状态
+
+- [x] 确认 `PublishFrame()` 在真实 `DrawImage()` 前设置运行状态，原恢复流程仅凭 `replacement.IsRunning` 宣布恢复，且绘制失败会被重新送入 Stream Recovery。
+- [x] 增加 `StreamFailure`、`DecodeFailure`、`RenderTargetFailure` 三类 MJPEG 故障区分。
+- [x] 增加当前媒体代次的真实绘制就绪信号；恢复只有在至少一帧成功绘制到当前 HWND 后才提交新的 Session generation 并记录恢复成功。
+- [x] RenderTarget 临时失败使用有限退避重绘；`GetClientRect` 客户区为 0、短暂失败或 `GetDC` 失败不重建 MJPEG 流。
+- [x] HWND 销毁/宿主身份失效时结束外部预览 Session，复用既有最终失败通知路径；Proxy 不销毁第三方 HWND。
+- [x] 增加按 Session Key 维持的轻量 `RecoveryEpisode`，恢复尝试不再因短生命周期 generation 改变而清零；稳定绘制成功后才清理 Episode。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/MjpegPreviewController.cs`：故障分类、绘制就绪、RenderTarget 诊断与退避。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`：RecoveryEpisode、稳定恢复判定、RenderTarget 最终失败处理。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/MjpegWorkerReuseTests.cs`：真实绘制就绪、无效 HWND、外部 Session 结束、零客户区退避测试。
+
+### 兼容性、风险与回退
+
+- DLL ABI、导出函数、调用约定、错误码、终端 HTTP、callback 协议、第三方 HWND 所有权均未修改；`IPreviewController` 公共成员未修改。
+- 风险集中在渲染线程、恢复线程和 HWND 销毁的竞态，以及延迟释放期间的 Worker 身份校验；均通过 Session generation、Player 身份和既有释放路径约束。
+- 回退方式：回退 Task R1 独立提交即可；保留当前阶段3基线、用户已有方案文档改动和其他生成物，不执行宽范围重置。
+
+### 验证状态
+
+- [x] Proxy `Release|x86` 编译：0 警告、0 错误。
+- [x] Tests `Release|x86` 编译：0 错误；仅有既有 NuGet 漏洞源不可达 `NU1900` 环境警告。
+- [x] Native DLL `Release|Win32/x86` 编译：0 警告、0 错误。
+- [x] R1 定向 VSTest：9/9 通过，覆盖 MJPEG Worker 复用、真实绘制就绪、RenderTarget 销毁、PreviewManager 外部 Session 清理、零客户区退避、窗口身份和恢复策略。
+- [ ] DLL 导出表、Delphi7 第三方调用、真实终端断流/恢复、Windows 10/11 实机及长稳压测：待验证。
+- [ ] x64 Release 编译和测试：在 Task L6 完成后统一执行最终验收，当前待验证。
+
+### 下一步
+
+- [ ] 将 R1 作为独立提交推送到 `feature/overlay-container-preview`。
+- [ ] R1 独立验证完成后执行 Task L6 日志分级、中文化、限频及 INFO 收口。

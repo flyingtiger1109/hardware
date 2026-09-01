@@ -14,6 +14,20 @@ using HZCYKJTHardWare.Proxy.Parsing;
 
 namespace HZCYKJTHardWare.Proxy.Preview
 {
+    internal enum MjpegFailureKind
+    {
+        StreamFailure,
+        DecodeFailure,
+        RenderTargetFailure
+    }
+
+    internal sealed class MjpegRenderReadiness
+    {
+        internal bool Succeeded { get; set; }
+        internal MjpegFailureKind FailureKind { get; set; }
+        internal string FailureReason { get; set; }
+    }
+
     public sealed class MjpegPreviewController : IPreviewController
     {
         private const int ReadBufferSize = 8192;
@@ -22,6 +36,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const int RenderIntervalMs = 33;
         private const int SameUrlMaxFailures = 2;
         private const int RenderFailureThreshold = 3;
+        private const int RenderTargetRetryBaseDelayMs = 100;
+        private const int RenderTargetRetryMaxDelayMs = 1000;
         private const int ReconnectDelayMs = 1000;
         private const int ConnectTimeoutMs = 5000;
         private const int StreamReadTimeoutMs = 5000;
@@ -32,6 +48,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _readerExitTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<MjpegRenderReadiness> _renderReadyTcs =
+            new TaskCompletionSource<MjpegRenderReadiness>(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Thread _thread;
         private readonly Thread _readerThread;
         private readonly string _description;
@@ -58,10 +76,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _resourcesDisposed;
         private int _deferredCleanupScheduled;
         private int _streamFaulted;
-        private int _consecutiveRenderFailures;
+        private int _consecutiveDecodeFailures;
+        private int _consecutiveRenderTargetFailures;
+        private int _renderTargetRetryAttempt;
+        private long _nextRenderAttemptUtcTicks;
         private bool _faultCallbackIssued;
+        private MjpegFailureKind _streamFaultKind;
         private string _streamFaultReason;
-        private Action<MjpegPreviewController, string> _streamFaultHandler;
+        private Action<MjpegPreviewController, MjpegFailureKind, string> _failureHandler;
         private HttpWebRequest _request;
         private string _requestId;
         private IntPtr _videoHwnd = IntPtr.Zero;
@@ -123,6 +145,50 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return Task.WhenAll(_renderExitTcs.Task, _readerExitTcs.Task);
         }
 
+        /// <summary>
+        /// 等待当前媒体代次至少完成一帧真实绘制。
+        /// 首帧收到并不代表第三方 HWND 已经可绘制，因此恢复流程必须使用该信号。
+        /// </summary>
+        internal async Task<MjpegRenderReadiness> WaitForRenderedFrameAsync(
+            CancellationToken cancellationToken)
+        {
+            Task<MjpegRenderReadiness> renderReadyTask;
+            lock (_stateLock)
+            {
+                if (_streamActive && Volatile.Read(ref _streamFaulted) == 0 &&
+                    _renderedFrameSeq != 0)
+                {
+                    return new MjpegRenderReadiness { Succeeded = true };
+                }
+
+                renderReadyTask = _renderReadyTcs?.Task;
+            }
+
+            if (renderReadyTask == null)
+            {
+                return new MjpegRenderReadiness
+                {
+                    FailureKind = MjpegFailureKind.StreamFailure,
+                    FailureReason = "MJPEG绘制就绪状态不可用"
+                };
+            }
+
+            if (!cancellationToken.CanBeCanceled)
+                return await renderReadyTask.ConfigureAwait(false);
+
+            var cancellationTask = Task.Delay(Timeout.Infinite, cancellationToken);
+            var completed = await Task.WhenAny(renderReadyTask, cancellationTask)
+                .ConfigureAwait(false);
+            if (completed == renderReadyTask)
+                return await renderReadyTask.ConfigureAwait(false);
+
+            return new MjpegRenderReadiness
+            {
+                FailureKind = MjpegFailureKind.StreamFailure,
+                FailureReason = "MJPEG绘制就绪等待已取消"
+            };
+        }
+
         public bool IsRunning
         {
             get
@@ -137,11 +203,27 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (handler == null)
                 throw new ArgumentNullException(nameof(handler));
 
+            SetFailureHandler((player, kind, reason) =>
+            {
+                if (kind == MjpegFailureKind.StreamFailure ||
+                    kind == MjpegFailureKind.DecodeFailure)
+                    handler(player, reason);
+            });
+        }
+
+        internal void SetFailureHandler(
+            Action<MjpegPreviewController, MjpegFailureKind, string> handler)
+        {
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
             lock (_faultLock)
-                _streamFaultHandler = handler;
+            {
+                _failureHandler = handler;
+            }
 
             // 首帧到达后、PreviewManager 登记会话前数据流仍可能立即失败；此处转发故障以消除登记竞争窗口。
-            TryDispatchStreamFault();
+            TryDispatchFailure();
         }
 
         public static async Task<MjpegPreviewController> StartAsync(string description, string url,
@@ -190,6 +272,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 _activationTcs?.TrySetResult(false);
                 _pauseTcs?.TrySetResult(true);
+                _renderReadyTcs?.TrySetResult(new MjpegRenderReadiness
+                {
+                    FailureKind = MjpegFailureKind.StreamFailure,
+                    FailureReason = "媒体流已切换"
+                });
                 _pauseTcs = null;
                 generation = ++_streamGeneration;
                 _url = url;
@@ -198,14 +285,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _streamActive = true;
                 _running = false;
                 _activationTcs = activation;
+                _renderReadyTcs = new TaskCompletionSource<MjpegRenderReadiness>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 Interlocked.Exchange(ref _latestFrame, null);
-                _renderedFrameSeq = Interlocked.CompareExchange(ref _latestFrameSeq, 0, 0);
-                Interlocked.Exchange(ref _consecutiveRenderFailures, 0);
+                _renderedFrameSeq = 0;
+                Interlocked.Exchange(ref _consecutiveDecodeFailures, 0);
+                Interlocked.Exchange(ref _consecutiveRenderTargetFailures, 0);
+                Interlocked.Exchange(ref _renderTargetRetryAttempt, 0);
+                Interlocked.Exchange(ref _nextRenderAttemptUtcTicks, 0);
             }
 
             lock (_faultLock)
             {
-                _streamFaultHandler = null;
+                _failureHandler = null;
+                _streamFaultKind = MjpegFailureKind.StreamFailure;
                 _streamFaultReason = null;
                 _faultCallbackIssued = false;
                 Volatile.Write(ref _streamFaulted, 0);
@@ -238,12 +331,17 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _streamActive = false;
                 _running = false;
                 ++_streamGeneration;
+                _renderReadyTcs?.TrySetResult(new MjpegRenderReadiness
+                {
+                    FailureKind = MjpegFailureKind.StreamFailure,
+                    FailureReason = "媒体流已暂停"
+                });
                 pause = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _pauseTcs = pause;
             }
 
             lock (_faultLock)
-                _streamFaultHandler = null;
+                _failureHandler = null;
 
             Interlocked.Exchange(ref _latestFrame, null);
 
@@ -516,7 +614,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                                 LogModules.Preview, "错误",
                                 $"HTTP MJPEG同一地址恢复失败（{SameUrlMaxFailures}次）：" +
                                 $"{JsonHelper.ToLogValue(_description)}，错误={JsonHelper.ToLogValue(failureReason)}");
-                            SignalStreamFault(generation, failureReason);
+                            SignalStreamFault(generation, MjpegFailureKind.StreamFailure, failureReason);
                             break;
                         }
 
@@ -539,9 +637,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
-        private void SignalStreamFault(long generation, string reason)
+        private void SignalStreamFault(long generation, MjpegFailureKind failureKind,
+            string reason)
         {
             TaskCompletionSource<bool> activation;
+            TaskCompletionSource<MjpegRenderReadiness> renderReady;
+            string effectiveReason;
             lock (_stateLock)
             {
                 if (_stopRequested || !_streamActive || generation != _streamGeneration)
@@ -551,39 +652,51 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _running = false;
                 activation = _activationTcs;
                 _activationTcs = null;
+                renderReady = _renderReadyTcs;
             }
 
             if (Interlocked.Exchange(ref _streamFaulted, 1) != 0)
                 return;
 
             lock (_faultLock)
-                _streamFaultReason = string.IsNullOrWhiteSpace(reason) ? "MJPEG流不可用" : reason;
+            {
+                _streamFaultKind = failureKind;
+                effectiveReason = string.IsNullOrWhiteSpace(reason) ? "MJPEG流不可用" : reason;
+                _streamFaultReason = effectiveReason;
+            }
 
             activation?.TrySetResult(false);
-            TryDispatchStreamFault();
+            renderReady?.TrySetResult(new MjpegRenderReadiness
+            {
+                FailureKind = failureKind,
+                FailureReason = effectiveReason
+            });
+            TryDispatchFailure();
         }
 
-        private void TryDispatchStreamFault()
+        private void TryDispatchFailure()
         {
-            Action<MjpegPreviewController, string> handler;
+            Action<MjpegPreviewController, MjpegFailureKind, string> handler;
+            MjpegFailureKind failureKind;
             string reason;
             lock (_faultLock)
             {
-                if (_faultCallbackIssued || _streamFaultHandler == null || string.IsNullOrEmpty(_streamFaultReason))
+                if (_faultCallbackIssued || _failureHandler == null || string.IsNullOrEmpty(_streamFaultReason))
                     return;
 
                 _faultCallbackIssued = true;
-                handler = _streamFaultHandler;
+                handler = _failureHandler;
+                failureKind = _streamFaultKind;
                 reason = _streamFaultReason;
             }
 
             try
             {
-                handler(this, reason);
+                handler(this, failureKind, reason);
             }
             catch (Exception ex)
             {
-                Logger.Error($"HTTP MJPEG流故障回调失败：{_description}，错误={ex.Message}", ex);
+                Logger.Error($"HTTP MJPEG故障回调失败：{_description}，错误={ex.Message}", ex);
             }
         }
 
@@ -611,7 +724,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 buffer.Clear();
                 Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
                     $"MJPEG帧缓冲超过限制：{_description}，限制={MaxBufferedBytes}字节，代次={generation}"));
-                SignalStreamFault(generation, "MJPEG帧缓冲超过限制");
+                SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
+                    "MJPEG帧缓冲超过限制");
                 return false;
             }
 
@@ -644,7 +758,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     buffer.Clear();
                     Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
                         $"MJPEG单帧超过限制：{_description}，帧长度={frameLength}字节，限制={MaxFrameBytes}字节，代次={generation}"));
-                    SignalStreamFault(generation, "MJPEG单帧超过限制");
+                    SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
+                        "MJPEG单帧超过限制");
                     return;
                 }
 
@@ -694,7 +809,25 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         private void RenderLatestFrame()
         {
-            if (_videoHwnd == IntPtr.Zero || !IsWindow(_videoHwnd))
+            long generation;
+            lock (_stateLock)
+            {
+                if (!_streamActive || _videoHwnd == IntPtr.Zero)
+                    return;
+                generation = _streamGeneration;
+            }
+
+            if (!IsWindow(_videoHwnd))
+            {
+                SignalStreamFault(generation, MjpegFailureKind.RenderTargetFailure,
+                    "预览窗口已销毁");
+                BeginStop();
+                return;
+            }
+
+            var nextRenderAttemptUtcTicks = Interlocked.Read(ref _nextRenderAttemptUtcTicks);
+            if (nextRenderAttemptUtcTicks > 0 &&
+                DateTime.UtcNow.Ticks < nextRenderAttemptUtcTicks)
                 return;
 
             var seq = Interlocked.CompareExchange(ref _latestFrameSeq, 0, 0);
@@ -716,7 +849,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     }
                     catch (Exception ex)
                     {
-                        HandleRenderFailure(seq, frame.Length, "解码", ex);
+                        HandleDecodeFailure(seq, frame.Length, generation, ex);
                         return;
                     }
 
@@ -728,42 +861,108 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         }
                         catch (Exception ex)
                         {
-                            HandleRenderFailure(seq, frame.Length, "绘制", ex);
+                            HandleRenderTargetFailure(seq, frame.Length, generation, ex);
                             return;
                         }
                     }
                 }
 
-                Interlocked.Exchange(ref _consecutiveRenderFailures, 0);
-                _renderedFrameSeq = seq;
+                TaskCompletionSource<MjpegRenderReadiness> renderReady = null;
+                lock (_stateLock)
+                {
+                    if (!_streamActive || generation != _streamGeneration)
+                        return;
+
+                    _renderedFrameSeq = seq;
+                    renderReady = _renderReadyTcs;
+                }
+                Interlocked.Exchange(ref _consecutiveDecodeFailures, 0);
+                Interlocked.Exchange(ref _consecutiveRenderTargetFailures, 0);
+                Interlocked.Exchange(ref _renderTargetRetryAttempt, 0);
+                Interlocked.Exchange(ref _nextRenderAttemptUtcTicks, 0);
+                renderReady?.TrySetResult(new MjpegRenderReadiness { Succeeded = true });
             }
             catch (Exception ex)
             {
-                HandleRenderFailure(seq, frame.Length, "解码", ex);
+                HandleDecodeFailure(seq, frame.Length, generation, ex);
             }
         }
 
-        private void HandleRenderFailure(int sequence, int frameLength, string stage, Exception ex)
+        private void HandleDecodeFailure(int sequence, int frameLength, long generation,
+            Exception ex)
         {
+            if (!IsCurrentStream(generation))
+                return;
+
             _renderedFrameSeq = sequence;
-            var failures = Interlocked.Increment(ref _consecutiveRenderFailures);
-            var level = failures >= RenderFailureThreshold ? "错误" : "警告";
+            var failures = Interlocked.Increment(ref _consecutiveDecodeFailures);
             var exceptionType = ex == null ? "未知异常" : ex.GetType().Name;
             var hresult = ex == null ? "<无>" : "0x" + ex.HResult.ToString("X8");
             Logger.TryLogRateLimited(
-                "Mjpeg|render|" + _description + "|" + stage + "|" + level,
-                LogModules.Preview, level,
-                $"HTTP MJPEG帧渲染失败：{JsonHelper.ToLogValue(_description)}，阶段={JsonHelper.ToLogValue(stage)}，" +
+                "Mjpeg|Decode|" + _description,
+                LogModules.Preview, "警告",
+                $"HTTP MJPEG帧解码失败：{JsonHelper.ToLogValue(_description)}，" +
                 $"帧长度={frameLength}字节，异常类型={JsonHelper.ToLogValue(exceptionType)}，" +
-                $"HResult={hresult}，连续失败次数={failures}");
+                $"HResult={hresult}，连续失败次数={failures}，错误消息={JsonHelper.ToLogValue(ex?.Message)}");
 
             if (failures < RenderFailureThreshold)
                 return;
 
-            long generation;
-            lock (_stateLock)
-                generation = _streamGeneration;
-            SignalStreamFault(generation, "MJPEG帧连续渲染失败");
+            SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
+                "MJPEG帧连续解码失败");
+        }
+
+        private void HandleRenderTargetFailure(int sequence, int frameLength,
+            long generation, Exception ex)
+        {
+            if (!IsCurrentStream(generation))
+                return;
+
+            var hwnd = _videoHwnd;
+            var isWindow = hwnd != IntPtr.Zero && IsWindow(hwnd);
+            if (!isWindow)
+            {
+                SignalStreamFault(generation, MjpegFailureKind.RenderTargetFailure,
+                    "预览窗口已销毁");
+                BeginStop();
+                return;
+            }
+
+            RECT rect;
+            var hasClientRect = GetClientRect(hwnd, out rect);
+            var clientWidth = hasClientRect ? rect.Right - rect.Left : 0;
+            var clientHeight = hasClientRect ? rect.Bottom - rect.Top : 0;
+            var failures = Interlocked.Increment(ref _consecutiveRenderTargetFailures);
+            var retryAttempt = Interlocked.Increment(ref _renderTargetRetryAttempt);
+            var delayMs = GetRenderTargetRetryDelayMs(retryAttempt);
+            Interlocked.Exchange(ref _nextRenderAttemptUtcTicks,
+                DateTime.UtcNow.AddMilliseconds(delayMs).Ticks);
+
+            var errorMessage = ex == null ? "未知绘制异常" : ex.Message;
+            Logger.TryLogRateLimited(
+                "Mjpeg|RenderTarget|" + _description,
+                LogModules.Preview, "警告",
+                $"HTTP MJPEG绘制目标失败：资源={JsonHelper.ToLogValue(_description)}，" +
+                $"ErrorMessage={JsonHelper.ToLogValue(errorMessage)}，" +
+                $"HWND={PreviewManager.FormatHwnd(hwnd)}，IsWindow={(isWindow ? 1 : 0)}，" +
+                $"ClientWidth={clientWidth}，ClientHeight={clientHeight}，" +
+                $"连续失败次数={failures}，下次绘制退避={delayMs}ms，帧长度={frameLength}字节，" +
+                $"序号={sequence}");
+        }
+
+        private static int GetRenderTargetRetryDelayMs(int retryAttempt)
+        {
+            if (retryAttempt <= 0)
+                return RenderTargetRetryBaseDelayMs;
+
+            var delay = RenderTargetRetryBaseDelayMs;
+            for (var i = 1; i < retryAttempt; i++)
+            {
+                if (delay >= RenderTargetRetryMaxDelayMs)
+                    return RenderTargetRetryMaxDelayMs;
+                delay = Math.Min(RenderTargetRetryMaxDelayMs, delay * 2);
+            }
+            return delay;
         }
 
         private void DrawImage(Image image)
@@ -794,8 +993,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             finally
             {
                 if (ReleaseDC(_videoHwnd, hdc) == 0)
-                    Logger.Warn(Logger.FormatModuleMessage(LogModules.Preview, "警告",
-                        $"释放预览窗口HDC返回失败：{_description}，HWND={PreviewManager.FormatHwnd(_videoHwnd)}"));
+                    Logger.TryLogRateLimited(
+                        "Mjpeg|RenderTarget|ReleaseDC|" + _description,
+                        LogModules.Preview, "警告",
+                        $"释放预览窗口HDC返回失败：资源={JsonHelper.ToLogValue(_description)}，" +
+                        $"ErrorMessage=ReleaseDC返回0，HWND={PreviewManager.FormatHwnd(_videoHwnd)}，" +
+                        $"IsWindow={(IsWindow(_videoHwnd) ? 1 : 0)}");
             }
         }
 
@@ -916,6 +1119,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void BeginStop()
         {
             _stopRequested = true;
+            TaskCompletionSource<MjpegRenderReadiness> renderReady;
             lock (_stateLock)
             {
                 _streamActive = false;
@@ -923,7 +1127,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _activationTcs?.TrySetResult(false);
                 _activationTcs = null;
                 _pauseTcs?.TrySetResult(true);
+                renderReady = _renderReadyTcs;
             }
+            renderReady?.TrySetResult(new MjpegRenderReadiness
+            {
+                FailureKind = MjpegFailureKind.StreamFailure,
+                FailureReason = "MJPEG播放器已停止"
+            });
             Interlocked.Exchange(ref _latestFrame, null);
             try { _cts.Cancel(); } catch { }
             AbortRequest();
