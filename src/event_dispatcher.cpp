@@ -465,7 +465,7 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
             std::string errorMsg;
             bool isError = IsDelphiErrorResponse(body, errorCode, errorMsg);
 
-            LOG_INFO("事件分发", "处理流程回调：request_id=%s，resource=%s",
+            LOG_DEBUG("事件分发", "处理流程回调：request_id=%s，resource=%s",
                      requestId.c_str(), resourceType.c_str());
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {

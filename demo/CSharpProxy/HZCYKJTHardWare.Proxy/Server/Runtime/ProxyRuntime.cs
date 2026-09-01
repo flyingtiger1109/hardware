@@ -81,7 +81,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var deadline = DateTime.UtcNow.AddMilliseconds(5000);
-            _log("[运行时] 开始有序关闭...");
+            _log("[运行时][调试] 开始有序关闭...");
 
             try { _metricsReporter?.Stop(); }
             catch (Exception ex) { LogException("[运行时] 长稳指标停止异常", ex); }
@@ -163,9 +163,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 }
                 else
                 {
-                    const string message = "[运行时] 传输层在全局关闭时限内未完成";
-                    Logger.Warn(message);
-                    _log(message);
+                    _log("[运行时][警告] 传输层在全局关闭时限内未完成");
                 }
             }
             catch (Exception ex) { LogException("[运行时] 传输层停止异常", ex); }
@@ -173,13 +171,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             sw.Stop();
 
             // 7. 记录关闭遥测信息
-            _log("[运行时] ====== 关闭遥测 ======");
-            _log($"[运行时] 总耗时：{sw.ElapsedMilliseconds}ms");
-            _log($"[运行时] 队列统计：\n" + (_queueManager?.GetAllStats() ?? "无"));
-            _log("[运行时] 任务追踪：" + (_taskTracker?.GetStats() ?? "无"));
-            _log($"[运行时] 请求登记：活跃={_registry.ActiveCount}，容量={_registry.MaxActiveEntries}");
-            _log($"[运行时] 流程登记：当前路由={_processRegistry.CurrentCount}，保留绑定={_processRegistry.BindingCount}");
-            _log("[运行时] 有序关闭完成");
+            _log("[运行时][调试] ====== 关闭遥测 ======");
+            _log($"[运行时][调试] 总耗时：{sw.ElapsedMilliseconds}ms");
+            _log($"[运行时][调试] 队列统计：\n" + (_queueManager?.GetAllStats() ?? "无"));
+            _log("[运行时][调试] 任务追踪：" + (_taskTracker?.GetStats() ?? "无"));
+            _log($"[运行时][调试] 请求登记：活跃={_registry.ActiveCount}，容量={_registry.MaxActiveEntries}");
+            _log($"[运行时][调试] 流程登记：当前路由={_processRegistry.CurrentCount}，保留绑定={_processRegistry.BindingCount}");
+            _log("[运行时][调试] 有序关闭完成");
 
             _cts?.Dispose();
             _cts = null;
@@ -194,7 +192,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         {
             // ERROR 文件日志保留堆栈，UI 仅显示精简摘要。
             Logger.Error(context, ex);
-            _log($"{context}：{ex.Message}");
+            _log($"[运行时][调试] {context}：{ex.Message}");
         }
     }
 }

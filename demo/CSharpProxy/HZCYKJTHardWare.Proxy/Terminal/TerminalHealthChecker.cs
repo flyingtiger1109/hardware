@@ -15,6 +15,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         private const int RetryBaseDelayMs = 5000;
         private const int RetryMaxDelayMs = 60000;
         private const int MaxRetrySchedules = 5;
+        private static readonly TimeSpan FailureSummaryWindow = TimeSpan.FromMinutes(1);
         internal static readonly string[] RequiredDeviceIds =
         {
             "ocr", "nfc", "fingerprint", "iris", "face"
@@ -31,7 +32,20 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         private int _running;
         private int _refreshPending;
         private int _retryAttempt;
+        private HealthObservationState _lastHealthState;
+        private DateTime _healthFailureFirstUtc;
+        private DateTime _healthFailureWindowStartUtc;
+        private int _healthFailureTotalCount;
+        private int _healthFailureWindowCount;
+        private int _healthTerminalIndex = -1;
         private volatile bool _disposed;
+
+        private enum HealthObservationState
+        {
+            Unknown,
+            Normal,
+            Abnormal
+        }
 
         public TerminalHealthChecker(TerminalClient client, TerminalManager terminalManager,
             Action<string> log, Action<HealthStatus> onStatusChanged)
@@ -54,7 +68,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 _timer = new System.Threading.Timer(PollCallback, null,
                     InitialDelayMs, Timeout.Infinite);
             }
-            _log("[健康检测] 已启动，正常轮询间隔 5 分钟；异常状态按 5/10/20/40/60 秒退避复查");
+            _log(Logger.FormatModuleMessage(LogModules.HealthCheck, "调试",
+                "健康检查已启动：正常轮询间隔=5分钟，异常退避=5/10/20/40/60秒"));
         }
 
         public void RequestCheck()
@@ -102,8 +117,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 route = _terminalManager.CurrentRoute;
                 if (string.IsNullOrEmpty(route.BaseUrl))
                 {
-                    nextDelayMs = ResolveNextDelayAndUpdateRetry(
-                        CreateFailedStatus("终端地址为空"));
+                    var failedStatus = CreateFailedStatus("终端地址为空");
+                    nextDelayMs = ResolveNextDelayAndUpdateRetry(failedStatus);
+                    LogHealthState(failedStatus);
                     return;
                 }
 
@@ -118,23 +134,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 {
                     status = CreateFailedStatus("终端连接失败或超时");
                     nextDelayMs = ResolveNextDelayAndUpdateRetry(status);
-                    _log("[健康检测] 状态异常: 终端连接失败");
                 }
                 else
                 {
                     status = ParseResponse(response, DateTime.Now);
                     nextDelayMs = ResolveNextDelayAndUpdateRetry(status);
-                    if (!string.IsNullOrEmpty(status.ErrorMessage))
-                    {
-                        _log("[健康检测] 状态异常: " + status.ErrorMessage);
-                    }
-                    else if (!status.IsHealthy)
-                    {
-                        var unhealthyDevices = status.Devices
-                            .Where(d => !d.IsOnline)
-                            .Select(d => $"{d.Id}={d.Status}");
-                        _log($"[健康检测] 部分硬件异常: {string.Join(", ", unhealthyDevices)}");
-                    }
                 }
 
                 if (_terminalManager.CurrentRoute.RouteEpoch != route.RouteEpoch)
@@ -152,11 +156,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             catch (Exception ex)
             {
                 Logger.Error("[健康检测] 轮询异常", ex);
-                nextDelayMs = ResolveNextDelayAndUpdateRetry(
-                    CreateFailedStatus("健康检测执行失败"));
+                var failedStatus = CreateFailedStatus("健康检测执行失败");
+                nextDelayMs = ResolveNextDelayAndUpdateRetry(failedStatus);
                 if (!cancellationToken.IsCancellationRequested && (route == null ||
                     _terminalManager.CurrentRoute.RouteEpoch == route.RouteEpoch))
-                    NotifyStatus(CreateFailedStatus("健康检测执行失败"));
+                    NotifyStatus(failedStatus);
                 else if (!cancellationToken.IsCancellationRequested)
                     RequestCheck();
             }
@@ -222,12 +226,14 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             if (retryAttempt >= MaxRetrySchedules)
             {
                 Interlocked.Exchange(ref _retryAttempt, MaxRetrySchedules);
-                _log("[健康检测] 快速复查已完成，后续每 5 分钟慢速探测一次");
+                _log(Logger.FormatModuleMessage(LogModules.HealthCheck, "调试",
+                    "快速复查已完成，后续每5分钟慢速探测一次"));
                 return delay;
             }
 
             Interlocked.Exchange(ref _retryAttempt, retryAttempt + 1);
-            _log($"[健康检测] 将在 {delay / 1000} 秒后自动复查");
+            _log(Logger.FormatModuleMessage(LogModules.HealthCheck, "调试",
+                $"将在{delay / 1000}秒后自动复查"));
             return delay;
         }
 
@@ -333,12 +339,95 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         {
             try
             {
+                LogHealthState(status);
                 _onStatusChanged?.Invoke(status);
             }
             catch (Exception ex)
             {
                 Logger.Error("[健康检测] 状态通知异常", ex);
             }
+        }
+
+        private void LogHealthState(HealthStatus status)
+        {
+            var nowUtc = DateTime.UtcNow;
+            var terminalIndex = _terminalManager?.CurrentIndex ?? 0;
+            if (_healthTerminalIndex != terminalIndex)
+            {
+                _healthTerminalIndex = terminalIndex;
+                _lastHealthState = HealthObservationState.Unknown;
+                _healthFailureFirstUtc = DateTime.MinValue;
+                _healthFailureWindowStartUtc = DateTime.MinValue;
+                _healthFailureTotalCount = 0;
+                _healthFailureWindowCount = 0;
+            }
+
+            if (IsHealthyStatus(status))
+            {
+                if (_lastHealthState == HealthObservationState.Abnormal)
+                {
+                    var durationSeconds = _healthFailureFirstUtc == DateTime.MinValue
+                        ? 0
+                        : Math.Max(0, (long)(nowUtc - _healthFailureFirstUtc).TotalSeconds);
+                    _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "信息",
+                        $"终端连接已恢复：终端={GetCurrentTerminalDisplay()}，持续={durationSeconds}秒，累计失败={_healthFailureTotalCount}次"));
+                }
+
+                _lastHealthState = HealthObservationState.Normal;
+                _healthFailureFirstUtc = DateTime.MinValue;
+                _healthFailureWindowStartUtc = DateTime.MinValue;
+                _healthFailureTotalCount = 0;
+                _healthFailureWindowCount = 0;
+                return;
+            }
+
+            var error = DescribeHealthFailure(status);
+            if (_lastHealthState != HealthObservationState.Abnormal)
+            {
+                _lastHealthState = HealthObservationState.Abnormal;
+                _healthFailureFirstUtc = nowUtc;
+                _healthFailureWindowStartUtc = nowUtc;
+                _healthFailureTotalCount = 1;
+                _healthFailureWindowCount = 1;
+                _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "警告",
+                    $"终端连接异常：终端={GetCurrentTerminalDisplay()}，错误={error}，准备自动恢复"));
+                return;
+            }
+
+            _healthFailureTotalCount++;
+            _healthFailureWindowCount++;
+            if (nowUtc - _healthFailureWindowStartUtc >= FailureSummaryWindow)
+            {
+                _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "警告",
+                    $"终端连接异常持续：60秒内失败{_healthFailureWindowCount}次，最近错误={error}"));
+                _healthFailureWindowStartUtc = nowUtc;
+                _healthFailureWindowCount = 1;
+            }
+        }
+
+        private string GetCurrentTerminalDisplay()
+        {
+            var name = _terminalManager?.CurrentName;
+            var index = _terminalManager?.CurrentIndex ?? 0;
+            return string.IsNullOrWhiteSpace(name)
+                ? "终端" + index
+                : name + "（" + index + "）";
+        }
+
+        private static string DescribeHealthFailure(HealthStatus status)
+        {
+            if (status == null)
+                return "健康检查未返回状态";
+            if (!string.IsNullOrWhiteSpace(status.ErrorMessage))
+                return status.ErrorMessage;
+
+            var unhealthyDevices = (status.Devices ?? new List<DeviceHealth>())
+                .Where(d => d != null && !d.IsOnline)
+                .Select(d => d.Id + "=" + d.Status)
+                .ToArray();
+            return unhealthyDevices.Length == 0
+                ? "终端设备状态异常"
+                : "设备异常：" + string.Join("、", unhealthyDevices);
         }
 
         private static HealthStatus CreateFailedStatus(string message)

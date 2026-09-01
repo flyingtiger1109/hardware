@@ -160,10 +160,11 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             Assert.IsNull(first.WindowSummary);
             Assert.IsFalse(repeated.EmitCurrent);
             Assert.IsTrue(nextWindow.EmitCurrent);
-            StringAssert.Contains(nextWindow.WindowSummary, "Count=2");
-            StringAssert.Contains(nextWindow.WindowSummary, "FirstTime=");
-            StringAssert.Contains(nextWindow.WindowSummary, "LastTime=");
-            StringAssert.Contains(nextWindow.WindowSummary, "LastError=连接超时");
+            StringAssert.Contains(nextWindow.WindowSummary, "次数=2");
+            StringAssert.Contains(nextWindow.WindowSummary, "首次=");
+            StringAssert.Contains(nextWindow.WindowSummary, "最近=");
+            StringAssert.Contains(nextWindow.WindowSummary, "最近错误=连接超时");
+            Assert.AreEqual("连接被拒绝", nextWindow.CurrentError);
         }
     }
 }

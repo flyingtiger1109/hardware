@@ -40,7 +40,8 @@ public:
              int connectTimeoutMs,
              int requestTimeoutMs,
              std::string& responseBody,
-             int& responseStatusCode);
+             int& responseStatusCode,
+             bool quiet = false);
 
 private:
     // WinHTTP 会话句柄

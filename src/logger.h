@@ -58,7 +58,8 @@ public:
 
     void Log(LogLevel level, const char* module, const char* function, const char* fmt, ...);
 
-    // 对重复的同类故障执行 60 秒窗口聚合；首次故障、窗口汇总和恢复由调用方配合记录。
+    // 对重复的同类故障执行 60 秒窗口聚合；首次故障立即记录，窗口切换时
+    // 将汇总与本次故障合并为一条日志，恢复由调用方配合记录。
     void LogRateLimited(LogLevel level, const char* module, const char* function,
                         const char* rateKey, const char* fmt, ...);
 

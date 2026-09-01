@@ -631,7 +631,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (_terminalManager.IsSameTerminal(terminalIndex))
                 return "{\"status\":\"ok\",\"terminal_index\":" + terminalIndex + ",\"same_terminal\":true}";
 
-            _log("[终端切换] 下发切换请求: " + _terminalManager.CurrentIndex + " -> " + terminalIndex);
+            var requestId = request.GetString("request_id");
+            _log(Logger.FormatModuleMessage(LogModules.TerminalSwitch, "信息",
+                "开始切换：" + _terminalManager.CurrentName + " → " +
+                _terminalManager.GetTerminalName(terminalIndex) + "，来源=DLL，" +
+                "RequestId=" + FormatRequestId(requestId)));
 
             // 仅在 PreviewManager 停止终端绑定预览且 TerminalManager 提交新路由后返回成功。
             // 预览重启仍由 SwitchCoordinator 在后台执行。
@@ -799,7 +803,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
                     if (!shouldContinue())
                     {
-                        _log($"[预览管理] 外部预览已跳过：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
+                        _log($"[预览管理][调试] 外部预览已跳过：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
                              $"原因=终端正在切换或请求已过期，HWND={FormatHwnd(hwndValue)}");
                         return;
                     }

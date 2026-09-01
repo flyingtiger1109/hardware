@@ -1648,7 +1648,7 @@
 
 ### 当前阶段
 
-阶段3 L1-L5 已完成代码修改，现场硬件、第三方调用和长稳验证待执行。
+阶段3 L1-L5、Task R1 和 Task L6 已完成代码修改，现场硬件、第三方调用和长稳验证待执行。
 
 ### 已完成内容
 
@@ -1701,7 +1701,7 @@
 
 ### 回退方式
 
-阶段3改动当前仍在本地、未形成新的提交；修改前基线 `89435ae5` 已推送到 Gitee。需要回退时，仅按阶段3涉及文件相对 `89435ae5` 的差异逐文件恢复，保留工作区其他用户改动及生成物；不修改版本号、不执行宽范围重置。
+阶段3修改前基线 `89435ae5`、Task R1 提交 `47d5a071` 均已推送到 Gitee；Task L6 另行提交。需要回退时按对应任务卡提交逐项回退，保留工作区其他用户改动及生成物；不修改版本号、不执行宽范围重置。
 
 ## 阶段3 Task R1：MJPEG Recovery Episode / RenderTarget Failure 修复（2026-09-01）
 
@@ -1733,9 +1733,76 @@
 - [x] Native DLL `Release|Win32/x86` 编译：0 警告、0 错误。
 - [x] R1 定向 VSTest：9/9 通过，覆盖 MJPEG Worker 复用、真实绘制就绪、RenderTarget 销毁、PreviewManager 外部 Session 清理、零客户区退避、窗口身份和恢复策略。
 - [ ] DLL 导出表、Delphi7 第三方调用、真实终端断流/恢复、Windows 10/11 实机及长稳压测：待验证。
-- [ ] x64 Release 编译和测试：在 Task L6 完成后统一执行最终验收，当前待验证。
+- [x] x64 Release 编译和测试：已在 Task L6 最终验收中完成；定向测试 25/25 通过，完整回归失败项见 Task L6。
 
 ### 下一步
 
-- [ ] 将 R1 作为独立提交推送到 `feature/overlay-container-preview`。
-- [ ] R1 独立验证完成后执行 Task L6 日志分级、中文化、限频及 INFO 收口。
+- [x] R1 已作为独立提交推送到 `feature/overlay-container-preview`：`47d5a071 feat: Task R1 修复 MJPEG 恢复抖动`。
+- [x] R1 独立验证完成后执行 Task L6 日志分级、中文化、限频及 INFO 收口。
+
+## 阶段3 Task L6：日志分级、中文化、限频及 INFO 收口（2026-09-01）
+
+### 完成状态
+
+- [x] 保留现有 C# / Native Logger 的异步、有界队列、ERROR 保护、滚动保留、容量治理、载荷脱敏和 RequestId 能力，仅调整调用点、级别、文案和限频输出。
+- [x] 启动、预览启动/停止、终端切换和回调链路收敛 INFO；HTTP、队列、内部 Session/generation、VLC/MJPEG 内部步骤和普通健康检查改为 DEBUG。
+- [x] 健康检查改为状态变化日志：首次异常 WARN、持续异常按 60 秒聚合、恢复 INFO；正常轮询和退避细节不再刷 INFO。
+- [x] 长稳运行资源快照和队列全量指标改为 DEBUG，未删除指标内容。
+- [x] C# / Native 限频窗口汇总统一中文化；窗口切换时汇总与本次错误合并为一条，避免两条重复表达。
+- [x] `auto_start=true` 的首次 `/ping` 预探测使用静默 GET；仅由 SDK 生命周期日志表达“未运行、准备启动、启动成功/最终失败”。普通 GET 调用默认行为不变。
+
+### 根因与修改范围
+
+阶段3基础设施已具备，但生产 INFO 仍混入内部执行轨迹、健康检查轮询和运行指标；限频窗口结束还会同时输出汇总与当前错误。Native 自动启动的预期 `/ping` 失败也会经过底层 HTTP 错误日志，造成重复表达。本次仅收口日志调用和内部限频路径，没有重新实现 Logger 或重构 PreviewManager。
+
+### 涉及文件
+
+- C# 日志与配置：`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/Logger.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/LogRateLimiter.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/AppConfig.cs`、`demo/CSharpProxy/HZCYKJTHardWare.Proxy/MainForm.cs`。
+- C# 服务、健康检查、队列和业务：`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`、`Server/Runtime/ProxyRuntime.cs`、`Server/Runtime/RuntimeMetricsReporter.cs`、`Server/Runtime/TransportLayer.cs`、`Server/DllCommandHandler.cs`、`Server/TerminalCallbackHandler.cs`、`Server/Coordinator/BizOperationHandler.cs`、`Server/Coordinator/SwitchCoordinator.cs`、`Server/Scheduler/WorkerExecutionEngine.cs`、`Core/QueueManager.cs`、`Core/WorkerQueue.cs`、`Terminal/NetworkDetector.cs`、`Terminal/TerminalClient.cs`、`Terminal/TerminalHealthChecker.cs`、`Terminal/TerminalManager.cs`。
+- C# 预览：`demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`、`Preview/MjpegPreviewController.cs`、`Preview/VlcPreviewPlayer.cs`、`Preview/VlcResourceExtractor.cs`。
+- Native 日志、HTTP、生命周期和调用点：`src/logger.h`、`src/logger.cpp`、`src/http_client.h`、`src/http_client.cpp`、`src/delphi_proxy.cpp`、`src/config_manager.cpp`、`src/event_dispatcher.cpp`、`src/exports.cpp`、`src/network_detector.cpp`、`src/preview_manager.cpp`、`src/terminal_manager.cpp`、`src/terminal_status_checker.cpp`。
+- 测试：`demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`。
+
+### 外部行为与日志前后对比
+
+- 启动：由多条“服务监听/服务已启动”和重复 VLC 内部信息收敛为 `[应用程序][信息] ...启动`、`[配置管理][信息] 配置加载成功`、`[服务监听][信息] 服务启动成功`、`[VLC预热][信息] 初始化完成` 等必要节点；内部监听、预热开始改为 DEBUG。
+- 预览：`开始预览`、`请求已创建`、内部 Session、Worker、播放器步骤改为 DEBUG；保留 DLL 受理、最终启动/停止、失败和 callback 结果等现场节点。
+- 健康检查：不再按每次轮询输出 INFO；异常只在状态变化或 60 秒聚合窗口输出，恢复只输出一次 INFO。
+- 限频：原 `RateLimitWindowEnd key=... Count=... FirstTime=...` 改为 `重复故障汇总：类别=...，次数=...，首次=...，最近=...，最近错误=...`；窗口切换时追加 `本次错误=...`，只写一条。
+- 运行指标：`private_mb`、`working_set_mb`、`managed_heap_mb`、线程/句柄/GDI/USER/GC/队列全量快照仍保留，但默认等级为 DEBUG。
+
+### 兼容性说明
+
+- DLL ABI 影响：无。未修改导出函数名、参数数量/顺序/类型、`__stdcall`、结构体布局、callback 签名、错误码、接口 `1/0` 语义或 `.def`；`HttpClient::Get` 新增的 `quiet` 仅是 Native 内部 C++ 方法默认参数，不是 DLL 导出接口。
+- 第三方 Delphi7：无须修改；调用协议、callback HTTP 状态码、JSON 字段含义和第三方 HWND 所有权均未改变。
+- x86/x64：C# Proxy/Tests 和 Native DLL 均分别按 Release x86/x64 编译验证；仅日志级别、文案、内部静默参数和代码路径不改变位数 ABI。
+- 配置、终端 HTTP API、部署 TargetFramework、第三方既有行为：不变；版本号不增加。
+
+### 风险与回退
+
+1. 生产默认 INFO 不再包含内部 HTTP/队列/指标明细，现场需要排查内部时需开启 DEBUG；WARN/ERROR、业务最终结果、RequestId 和错误上下文仍保留。
+2. 健康检查异常日志按状态变化和 60 秒聚合，短时间重复故障不逐条输出；恢复状态只在实际恢复时输出。
+3. Native `quiet` 仅用于预期自动启动探测；非静默 GET 的原有故障记录仍保留并继续限频。
+4. 未执行真实硬件、真实第三方 Delphi7、HWND 现场销毁/零尺寸、网络断流和长稳压测，不能据此替代现场验收。
+
+回退方式：回退 L6 独立提交即可恢复本节的日志级别、文案、限频边界和内部静默参数；保留已推送的 R1 提交及工作区原有方案文档、构建产物和未跟踪文件，不执行宽范围 `reset` 或删除。
+
+### 验证状态
+
+- [x] C# Proxy `Release|x86` 编译：0 警告、0 错误。
+- [x] C# Tests `Release|x86` 编译：0 错误；存在 NuGet 漏洞源不可达警告 `NU1900`。
+- [x] Native DLL `Release|Win32/x86` 编译：0 警告、0 错误。
+- [x] C# Proxy/Tests `Release|x64` 编译：Proxy 0 警告、0 错误；Tests 0 错误，存在 `NU1900`。
+- [x] Native DLL `Release|x64` 编译：0 警告、0 错误。
+- [x] x86 定向 VSTest：25/25 通过，覆盖日志、健康检查、运行指标和 R1 预览恢复测试。
+- [x] x64 定向 VSTest：25/25 通过，覆盖同上范围。
+- [x] 完整 x86 VSTest：154 个，142 通过，12 失败；10 个集成测试因当前 VSTest/.NET 环境 `HttpListener` `PlatformNotSupportedException` 在类初始化失败，另有既有版本号测试（期望 `1.3.1.0`、实际 `1.3.5.0`）和既有路由测试失败，均非本次日志改动引入。
+- [x] 完整 x64 VSTest：154 个，142 通过，12 失败；失败构成与 x86 相同，`HttpListener`、版本号和既有路由测试问题待独立处理。
+- [x] `git diff --check`：无空白错误；仅有 Git LF/CRLF 提示。
+- [ ] Native DLL 导出表与基线再次核对、第三方 Delphi7、真实硬件/Proxy 重启、真实 HWND 无效/零尺寸、MJPEG 断流恢复、低磁盘和 2/24 小时长稳：待验证。
+
+### 下一步
+
+- [ ] 在 Windows 10/11 现场执行第三方 Delphi7、真实终端和六路预览启停/切换/重连验证。
+- [ ] 采集 L6 后 EXE/DLL 真实 INFO/WARN/ERROR 日志，核对启动、预览、切换、健康检查和限频数量。
+- [ ] 单独处理测试环境 `HttpListener`、版本号断言和既有路由测试，不混入本任务卡。

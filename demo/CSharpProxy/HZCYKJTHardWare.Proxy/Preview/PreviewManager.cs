@@ -691,7 +691,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             Logger.Debug($"预览启动明细：资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
                          $"hwnd={FormatHwnd(parentHwnd)}，耗时={totalSw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
 
-            Logger.Info($"预览已启动：{ResourceToName(resType)} {SessionToName(sessionType)}，{TraceRequest(requestId)}");
+            var startedMessage = $"预览已启动：{ResourceToName(resType)} {SessionToName(sessionType)}，{TraceRequest(requestId)}";
+            if (sessionType == PreviewSessionType.External)
+                Logger.Debug(startedMessage);
+            else
+                Logger.Info(startedMessage);
             return true;
         }
 
@@ -1707,8 +1711,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 await ReleasePlayerAsync(key, session.Player, preserveRestartInfo).ConfigureAwait(false);
                 if (!preserveRestartInfo)
                     _restartInfo.TryRemove(key, out _);
-                Logger.Info($"预览已停止：{ResourceToName(resType)} {SessionToName(sessionType)}，" +
-                            $"hwnd={FormatHwnd(session.HostHwnd)}，{TraceRequest(session.RequestId)}");
+                var stoppedMessage = $"预览已停止：{ResourceToName(resType)} {SessionToName(sessionType)}，" +
+                                     $"hwnd={FormatHwnd(session.HostHwnd)}，{TraceRequest(session.RequestId)}";
+                if (sessionType == PreviewSessionType.External)
+                    Logger.Debug(stoppedMessage);
+                else
+                    Logger.Info(stoppedMessage);
                 return true;
             }
 
@@ -1870,8 +1878,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     var previewSw = System.Diagnostics.Stopwatch.StartNew();
                     var resourceName = ResourceToName(info.ResourceType);
-                    Logger.Info($"预览后台恢复开始：资源={resourceName}，会话={SessionToName(info.SessionType)}，" +
-                                $"{TraceRequest(info.RequestId)}");
+                    Logger.Debug($"预览后台恢复开始：资源={resourceName}，会话={SessionToName(info.SessionType)}，" +
+                                 $"{TraceRequest(info.RequestId)}");
                     try
                     {
                         var started = await StartPreviewCore(info.ResourceType, info.SessionType, info.TargetHwnd,
@@ -1879,8 +1887,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                             info.ExplicitPreviewUrl, info.TerminalBound, info.DirectRenderTarget, info.RequestId)
                             .ConfigureAwait(false);
                         if (started)
-                            Logger.Info($"预览后台恢复完成：资源={resourceName}，会话={SessionToName(info.SessionType)}，" +
-                                        $"耗时={previewSw.ElapsedMilliseconds}ms，{TraceRequest(info.RequestId)}");
+                            Logger.Debug($"预览后台恢复完成：资源={resourceName}，会话={SessionToName(info.SessionType)}，" +
+                                         $"耗时={previewSw.ElapsedMilliseconds}ms，{TraceRequest(info.RequestId)}");
                         else
                             Logger.Warn($"预览后台恢复未完成：资源={resourceName}，会话={SessionToName(info.SessionType)}，" +
                                         $"耗时={previewSw.ElapsedMilliseconds}ms，{TraceRequest(info.RequestId)}");
@@ -2000,7 +2008,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (_mjpegWorkers.TryGetValue(key, out var current) &&
                     ReferenceEquals(current, worker))
                     _mjpegWorkers.TryRemove(key, out _);
-                Logger.Info($"预览Worker延迟释放完成：会话={key}，request_id={FormatRequestId(worker.RequestId)}");
+                Logger.Debug($"预览Worker延迟释放完成：会话={key}，request_id={FormatRequestId(worker.RequestId)}");
                 completion.TrySetResult(true);
             }
             catch (Exception ex)
@@ -2157,8 +2165,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (warmupPlayer != null)
                     await warmupPlayer.DisposeAsync(VlcStopTimeoutMs).ConfigureAwait(false);
                 sw.Stop();
-                Logger.Info($"首次预览预热完成：资源={ResourceToName(resType)}，结果={(ok ? "成功" : "失败")}，" +
-                            $"耗时={sw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
+                Logger.Debug($"首次预览预热完成：资源={ResourceToName(resType)}，结果={(ok ? "成功" : "失败")}，" +
+                             $"耗时={sw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
             }
         }
 

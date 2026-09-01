@@ -111,7 +111,7 @@ int ConfigManager::Load(const std::string& dllDir) {
         return HZCYKJTHardWare_RET_OK;
     }
 
-    LOG_INFO("配置管理", "配置文件加载成功：path=%s", configPath.c_str());
+    LOG_DEBUG("配置管理", "配置文件加载成功：path=%s", configPath.c_str());
     LOG_DEBUG("配置管理", "配置：terminal.mode=%s",
              m_mode == TerminalMode::AutoSubnet ? "auto_subnet" :
              (m_mode == TerminalMode::FixedUrl ? "fixed_url" : "manual"));

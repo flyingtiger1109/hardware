@@ -471,8 +471,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 // 外部目标窗口由第三方进程创建和管理。MJPEG 只借用其客户区 HDC 绘制，
                 // 不创建子窗口，也不改变第三方窗口的父子关系、位置或生命周期。
                 _videoHwnd = parentHwnd;
-                Logger.Info($"HTTP MJPEG预览使用第三方HWND直绘：{_description}，" +
-                            $"HWND={PreviewManager.FormatHwnd(parentHwnd)}");
+                Logger.Debug($"HTTP MJPEG预览使用第三方HWND直绘：{_description}，" +
+                             $"HWND={PreviewManager.FormatHwnd(parentHwnd)}");
                 return true;
             }
 

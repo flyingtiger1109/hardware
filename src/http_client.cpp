@@ -314,15 +314,17 @@ bool HttpClient::Get(const std::string& url,
                      int connectTimeoutMs,
                      int requestTimeoutMs,
                      std::string& responseBody,
-                     int& responseStatusCode) {
+                     int& responseStatusCode,
+                     bool quiet) {
     const ULONGLONG startedAt = GetTickCount64();
     const std::string safeUrl = SanitizeUrlForLog(url);
     responseBody.clear();
     responseStatusCode = 0;
 
     if (!m_hSession) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|session", "HTTP请求",
-            "HTTP GET失败：WinHTTP session 未初始化，url=%s", safeUrl.c_str());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|session", "HTTP请求",
+                "HTTP GET失败：WinHTTP session 未初始化，url=%s", safeUrl.c_str());
         return false;
     }
 
@@ -338,8 +340,9 @@ bool HttpClient::Get(const std::string& url,
     urlComp.dwUrlPathLength = 1024;
 
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|url_parse", "HTTP请求",
-            "HTTP GET失败：URL解析失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|url_parse", "HTTP请求",
+                "HTTP GET失败：URL解析失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         return false;
     }
 
@@ -347,8 +350,9 @@ bool HttpClient::Get(const std::string& url,
 
     HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|connect", "HTTP请求",
-            "HTTP GET失败：创建连接失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|connect", "HTTP请求",
+                "HTTP GET失败：创建连接失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         return false;
     }
 
@@ -358,8 +362,9 @@ bool HttpClient::Get(const std::string& url,
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|open_request", "HTTP请求",
-            "HTTP GET失败：创建请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|open_request", "HTTP请求",
+                "HTTP GET失败：创建请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hConnect);
         return false;
     }
@@ -369,16 +374,18 @@ bool HttpClient::Get(const std::string& url,
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|send", "HTTP请求",
-            "HTTP GET失败：发送请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|send", "HTTP请求",
+                "HTTP GET失败：发送请求失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-        LOG_ERROR_RATE_LIMITED("HTTP|GET|receive", "HTTP请求",
-            "HTTP GET失败：接收响应失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
+        if (!quiet)
+            LOG_WARN_RATE_LIMITED("HTTP|GET|receive", "HTTP请求",
+                "HTTP GET失败：接收响应失败，url=%s，错误码=%lu", safeUrl.c_str(), GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;

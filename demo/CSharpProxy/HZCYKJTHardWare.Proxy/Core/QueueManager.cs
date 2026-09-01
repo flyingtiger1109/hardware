@@ -94,7 +94,7 @@ namespace HZCYKJTHardWare.Proxy.Core
         public void ClearSwitching()
         {
             _switchingTerminal = false;
-            Logger.Info("[终端切换] 切换完成，清除切换中标志");
+            Logger.Debug("[终端切换] 切换完成，清除切换中标志");
         }
 
         /// <summary>

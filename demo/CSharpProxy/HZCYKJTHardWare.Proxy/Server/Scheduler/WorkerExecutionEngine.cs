@@ -178,7 +178,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         tcs?.TrySetResult("{\"error\":true,\"code\":\"request_expired\"}");
                         return;
                     }
-                    _log($"{operation} 已转发至终端：request_id={data.RequestId}");
+                    _log($"[{operation}][调试] 已转发至终端：request_id={data.RequestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" +
                         JsonHelper.EscapeString(data.RequestId) + "\"}");
                 }
@@ -256,7 +256,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                         tcs?.TrySetResult("{\"error\":true,\"code\":\"request_expired\"}");
                         return;
                     }
-                    _log($"虹膜抓拍已转发至终端：request_id={requestId}");
+                    _log($"[虹膜抓拍][调试] 已转发至终端：request_id={requestId}");
                     tcs?.TrySetResult("{\"accepted\":true,\"request_id\":\"" +
                         JsonHelper.EscapeString(requestId) + "\"}");
                     return;
@@ -349,7 +349,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 "\"callback_url\":\"" + JsonHelper.EscapeString(callbackBase) + "\"" +
                 "}";
 
-            _log("[授权] 转发至终端：请求ID=" + JsonHelper.ToLogValue(requestId) +
+            _log("[授权][调试] 转发至终端：请求ID=" + JsonHelper.ToLogValue(requestId) +
                 "，终端=" + routeEpoch.Route.TerminalIndex +
                 "，请求地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl + "/resources/protocol/request") +
                 "，回调地址=" + JsonHelper.ToLogValue(callbackBase) +
@@ -365,7 +365,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 "/resources/protocol/request", terminalBody,
                 OperationTimeouts.AuthorizeTerminalRequestMs,
                 routeEpoch.CancellationToken).ConfigureAwait(false);
-            _log("[授权] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
+            _log("[授权][调试] 终端受理响应：请求ID=" + JsonHelper.ToLogValue(requestId) +
                 "，HTTP提交=" + (ok ? "是" : "否") +
                 "，响应请求ID=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "request_id")) +
                 "，状态=" + JsonHelper.ToLogValue(JsonHelper.ExtractString(response, "status")) +
@@ -387,7 +387,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             var code = ResultParser.ExtractErrorCode(response);
             var message = ResultParser.ExtractErrorMessage(response);
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
-            _log("[授权] 下发失败: " + detail);
+            _log("[授权][错误] 下发失败: " + detail);
 
             if (string.IsNullOrEmpty(code))
                 code = "terminal_request_failed";

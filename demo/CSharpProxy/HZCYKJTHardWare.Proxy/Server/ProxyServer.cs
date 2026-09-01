@@ -208,12 +208,6 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _transport.AddListener("终端回调", cfg.CallbackListenHost, cfg.CallbackListenPort,
                     HandleCallbackRequest, maxConcurrent: 8, backlog: 50);
 
-            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
-                $"DLL服务监听：{cfg.DllServerHost}:{cfg.DllServerPort}"));
-            if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
-                _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
-                    $"终端回调服务监听：{cfg.CallbackListenHost}:{cfg.CallbackListenPort}"));
-
             _transport.StartAll(cts.Token);
 
             // 终端硬件健康检查
@@ -224,15 +218,25 @@ namespace HZCYKJTHardWare.Proxy.Server
             // VLC 预热
             if (!_taskTracker.TryRun(() =>
             {
-                _log("[VLC预热] 正在启动...");
+                _log(Logger.FormatModuleMessage("VLC预热", "调试", "正在启动"));
                 var player = new VlcPreviewPlayer();
-                try { player.Warmup(); _log($"[VLC预热] 已完成, 耗时={player.WarmupMs}ms"); }
+                try
+                {
+                    player.Warmup();
+                    _log(Logger.FormatModuleMessage("VLC预热", "信息",
+                        $"初始化完成：耗时={player.WarmupMs}ms"));
+                }
                 finally { player.StopKeepDlls(); }
             }, "vlc_warmup"))
-                _log("[VLC预热] 后台任务容量已满，跳过本次预热");
+                _log(Logger.FormatModuleMessage("VLC预热", "警告",
+                    "后台任务容量已满，跳过本次预热"));
 
             _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "信息",
-                $"服务已启动：本机IP={_lanIp}，当前终端={_terminalManager.CurrentName}（{_terminalManager.CurrentBaseUrl}）"));
+                $"服务启动成功：DLL={cfg.DllServerHost}:{cfg.DllServerPort}，" +
+                (_capabilities.IsSupported(DeviceCapability.TerminalControl)
+                    ? $"终端回调={cfg.CallbackListenHost}:{cfg.CallbackListenPort}，"
+                    : "") +
+                $"本机IP={_lanIp}，当前终端={_terminalManager.CurrentName}（{_terminalManager.CurrentBaseUrl}）"));
             if (_capabilities.IsSupported(DeviceCapability.TerminalControl))
                 NotifyTerminalChanged(_terminalManager.CurrentIndex);
         }
@@ -385,7 +389,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     var requestModule = GetDllRequestLogModule(requestPath);
                     if (!isPing)
                     {
-                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
                             "来源=DLL，" + Logger.FormatContextMessage(
                                 method + " " + requestPath,
                                 requestId: requestLogId, result: "收到") +
@@ -408,7 +412,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                             binaryResponse.Dispose();
                         }
 
-                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
                             "来源=DLL，" + Logger.FormatContextMessage(
                                 method + " " + requestPath,
                                 requestId: requestLogId,
@@ -437,7 +441,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                     }
                     else
                     {
-                        _log(Logger.FormatModuleMessage(requestModule, "信息",
+                        _log(Logger.FormatModuleMessage(requestModule, "调试",
                             "来源=DLL，" + Logger.FormatContextMessage(
                                 method + " " + requestPath,
                                 requestId: requestLogId,
@@ -602,12 +606,14 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void LogCallbackIngressRateLimited(string key, string message)
         {
             var decision = _callbackIngressRateLimiter.Record(key, message, DateTime.UtcNow);
-            if (!string.IsNullOrEmpty(decision.WindowSummary))
-                _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
-                    decision.WindowSummary));
             if (decision.EmitCurrent)
+            {
+                var output = string.IsNullOrEmpty(decision.WindowSummary)
+                    ? message
+                    : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
                 _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, "警告",
-                    message));
+                    output));
+            }
         }
 
         private void LogException(string context, Exception ex)

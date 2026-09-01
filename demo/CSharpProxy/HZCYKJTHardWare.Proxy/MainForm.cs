@@ -987,13 +987,16 @@ namespace HZCYKJTHardWare.Proxy
         private void MainForm_Load(object sender, EventArgs e)
         {
             UpdateHeaderStatus();
-            Logger.Info(ProductVersionInfo.DisplayName + "应用程序启动中...");
-            Logger.Info("设备模式(DeviceMode)=" + (int)_capabilities.Mode +
-                "，能力列表=[" + _capabilities.CapabilitiesText + "]");
-            Logger.Info("[运行环境] 进程架构=" +
+            Logger.Info(Logger.FormatModuleMessage(LogModules.Application, "信息",
+                ProductVersionInfo.DisplayName + "启动：进程架构=" +
                 (Environment.Is64BitProcess ? "x64" : "x86") +
-                "，操作系统架构=" + (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
-                "，CLR=" + Environment.Version);
+                "，操作系统架构=" +
+                (Environment.Is64BitOperatingSystem ? "x64" : "x86") +
+                "，CLR=" + Environment.Version));
+            Logger.Info(Logger.FormatModuleMessage(LogModules.DeviceCapability, "信息",
+                "设备模式=" + (int)_capabilities.Mode +
+                "（" + AppConfig.Instance.DeviceModeName + "），能力列表=[" +
+                _capabilities.CapabilitiesText + "]"));
             memoLog.ScrolledToTop += OnLogScrolledToTop;
             memoLog.ScrolledToBottom += OnLogScrolledToBottom;
             chkAutoScroll.CheckedChanged += (s, ev) =>
@@ -1294,7 +1297,6 @@ namespace HZCYKJTHardWare.Proxy
                 btnStartServer.Enabled = true;
                 btnStopServer.Enabled = true;
                 UpdateHeaderStatus();
-                AppendLog("服务已启动");
             }
             catch (Exception ex)
             {
@@ -1325,7 +1327,6 @@ namespace HZCYKJTHardWare.Proxy
                 ResetPreviewButtonStates();
                 SetPersistentButtonStyle(btnStartProcess, false);
                 _hardwareHealthPanel?.ShowServiceStopped();
-                AppendLog("服务已停止");
             }
             catch (Exception ex)
             {

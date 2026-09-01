@@ -7,11 +7,12 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
     {
         internal bool EmitCurrent { get; set; }
         internal string WindowSummary { get; set; }
+        internal string CurrentError { get; set; }
     }
 
     /// <summary>
     /// 按设备、接口和错误类别对重复故障做窗口聚合。
-    /// 第一次故障立即输出；窗口结束后先输出汇总，再输出新的当前故障。
+    /// 第一次故障立即输出；窗口结束时将旧窗口汇总和本次故障合并为一条日志。
     /// </summary>
     internal sealed class LogRateLimiter
     {
@@ -49,11 +50,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 {
                     var summary = bucket == null || bucket.Count <= 0
                         ? null
-                        : "RateLimitWindowEnd key=" + normalizedKey +
-                          " Count=" + bucket.Count +
-                          " FirstTime=" + FormatTime(bucket.FirstUtc) +
-                          " LastTime=" + FormatTime(bucket.LastUtc) +
-                          " LastError=" + bucket.LastError;
+                        : "重复故障汇总：类别=" + normalizedKey +
+                          "，次数=" + bucket.Count +
+                          "，首次=" + FormatTime(bucket.FirstUtc) +
+                          "，最近=" + FormatTime(bucket.LastUtc) +
+                          "，最近错误=" + bucket.LastError;
 
                     _buckets[normalizedKey] = new Bucket
                     {
@@ -66,7 +67,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     return new LogRateLimitDecision
                     {
                         EmitCurrent = true,
-                        WindowSummary = summary
+                        WindowSummary = summary,
+                        CurrentError = normalizedError
                     };
                 }
 

@@ -191,7 +191,7 @@ public:
             hwnd_ = hwnd;
             hasPending_ = true;
         }
-        LOG_INFO("接口", "虹膜预览恢复已进入后台队列");
+        LOG_DEBUG("接口", "虹膜预览恢复已进入后台队列");
         cv_.notify_one();
     }
 
@@ -483,7 +483,7 @@ static bool TerminateDelphiServiceProcesses(const std::string& executablePath,
                       executablePath.c_str(), processId, waitResult);
             return false;
         }
-        LOG_INFO("接口", "通信服务不可用，已终止旧硬件控制程序：path=%s，pid=%lu",
+        LOG_WARN("SDK生命周期", "通信服务不可用，已终止旧硬件控制程序：path=%s，pid=%lu",
                  executablePath.c_str(), processId);
     }
     return true;
@@ -526,7 +526,7 @@ static bool StartDelphiServiceProcess(const HZCYKJTHardWare::ConfigManager& cfg,
         return false;
     }
 
-    LOG_INFO("接口", "已自动启动硬件控制程序：path=%s，pid=%lu",
+    LOG_INFO("SDK生命周期", "硬件控制程序启动成功：path=%s，pid=%lu",
              executablePath.c_str(), processInfo.dwProcessId);
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
@@ -554,27 +554,30 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
         return true;
     }
     if (!cfg.GetDelphiAutoStart()) {
-        LOG_ERROR("接口", "硬件控制程序/ping失败且自动启动未启用：服务地址=%s",
+        LOG_ERROR("SDK生命周期", "硬件控制程序未运行且自动启动未启用：服务地址=%s",
                   HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str());
         return false;
     }
 
+    LOG_INFO("SDK生命周期", "硬件控制程序未运行，准备自动启动：服务地址=%s",
+             HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str());
+
     std::string executablePath = ResolveDelphiExecutablePath(cfg, dllDir);
     if (!HZCYKJTHardWare::PathHelper::FileExists(executablePath)) {
-        LOG_ERROR("接口", "自动启动硬件控制程序失败：可执行文件不存在，path=%s", executablePath.c_str());
+        LOG_ERROR("SDK生命周期", "自动启动硬件控制程序失败：可执行文件不存在，path=%s", executablePath.c_str());
         return false;
     }
 
     int intervalMs = cfg.GetDelphiPingIntervalMs();
     std::vector<DWORD> existingProcessIds;
     if (!FindProcessIdsForExecutablePath(executablePath, existingProcessIds)) {
-        LOG_ERROR("接口", "自动恢复硬件控制程序失败：无法检查同路径进程，path=%s",
+        LOG_ERROR("SDK生命周期", "自动恢复硬件控制程序失败：无法检查同路径进程，path=%s",
                   executablePath.c_str());
         return false;
     }
 
     if (!existingProcessIds.empty()) {
-        LOG_WARN("接口", "硬件控制程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，服务地址=%s",
+        LOG_WARN("SDK生命周期", "硬件控制程序已运行但通信服务不可用，正在立即重启同路径进程：path=%s，pid=%lu，服务地址=%s",
                  executablePath.c_str(), existingProcessIds.front(),
                  HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str());
         if (!TerminateDelphiServiceProcesses(executablePath, existingProcessIds)) {
@@ -588,11 +591,11 @@ static bool EnsureDelphiServiceAvailable(HZCYKJTHardWare::DelphiProxy& proxy,
 
     int waitMs = cfg.GetDelphiStartWaitMs();
     if (WaitForDelphiService(proxy, waitMs, intervalMs)) {
-        LOG_INFO("接口", "硬件控制程序通信服务已就绪");
+        LOG_INFO("SDK生命周期", "硬件控制程序通信服务已就绪");
         return true;
     }
 
-    LOG_ERROR("接口", "启动硬件控制程序后等待/ping超时：服务地址=%s，path=%s，wait_ms=%d",
+    LOG_ERROR("SDK生命周期", "启动硬件控制程序后等待ping超时：服务地址=%s，path=%s，wait_ms=%d",
               HZCYKJTHardWare::SanitizeUrlForLog(delphiServerUrl).c_str(), executablePath.c_str(), waitMs);
     return false;
 }
@@ -875,7 +878,7 @@ private:
                 continue;
             }
 
-            LOG_INFO("预览租约", "检测到C# Proxy实例恢复或变更，正在重建外部预览：old=%s，new=%s",
+            LOG_DEBUG("预览租约", "检测到C# Proxy实例恢复或变更，正在重建外部预览：old=%s，new=%s",
                      lastInstanceId.c_str(), currentInstanceId.c_str());
             bool restored = true;
             if (snapshot.cameraActive) {
@@ -908,7 +911,7 @@ private:
             recoveryPending = !restored;
             if (restored) {
                 lastInstanceId = currentInstanceId;
-                LOG_INFO("预览租约", "C# Proxy重启后的外部预览重建请求已受理");
+                LOG_DEBUG("预览租约", "C# Proxy重启后的外部预览重建请求已受理");
             } else {
                 LOG_WARN("预览租约", "外部预览重建请求未全部受理，将继续重试");
             }
@@ -1081,10 +1084,9 @@ static int InitSdkBody() {
         loadPlateConfig(ctx.plate_preview_rj3, PlatePreviewChannel::RJ3);
     }
 
-    LOG_INFO("配置管理", "第三方输入编码模式：%s",
+    LOG_INFO("配置管理", "配置加载成功：设备模式(DeviceMode)=%d，能力列表=[%s]，输入编码=%s",
+             cfg.GetDeviceMode(), cfg.GetDeviceMode() == 2 ? "车牌RJ2，车牌RJ3" : "全部",
              cfg.GetThirdPartyInputEncoding().c_str());
-    LOG_INFO("配置管理", "设备模式(DeviceMode)=%d，能力列表=[%s]",
-             cfg.GetDeviceMode(), cfg.GetDeviceMode() == 2 ? "车牌RJ2，车牌RJ3" : "全部");
 
     auto warnInvalidPlateConfig = [&cfg](PlatePreviewChannel channel) {
         const PlatePreviewCameraConfig& config = cfg.GetPlatePreviewConfig(channel);
@@ -1130,7 +1132,7 @@ static int InitSdkBody() {
 
     EventDispatcher::Instance().Start();
 
-    LOG_INFO("接口", "初始化DLL：正在检查硬件控制程序通信服务，服务地址=%s，自动启动=%s",
+    LOG_DEBUG("SDK生命周期", "初始化DLL：正在检查硬件控制程序通信服务，服务地址=%s，自动启动=%s",
              SanitizeUrlForLog(delphiServerUrl).c_str(), cfg.GetDelphiAutoStart() ? "true" : "false");
     {
         auto lock = WriteLock();
@@ -1139,7 +1141,7 @@ static int InitSdkBody() {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!EnsureDelphiServiceAvailable(proxy, cfg, ctx.dll_dir, delphiServerUrl)) {
-        LOG_ERROR("接口", "初始化DLL失败：硬件控制程序/ping不可用，服务地址=%s",
+        LOG_DEBUG("SDK生命周期", "初始化DLL失败：硬件控制程序通信服务不可用，服务地址=%s",
                   SanitizeUrlForLog(delphiServerUrl).c_str());
         EventDispatcher::Instance().Stop();
         CallbackServer::Instance().Stop();
@@ -1167,7 +1169,7 @@ static int InitSdkBody() {
     ExternalPreviewLeaseMonitor::Instance().Start(delphiServerUrl,
         proxyInstanceId, cfg.GetCheckHwndIntervalMs());
 
-    LOG_INFO("接口", "初始化DLL成功");
+    LOG_INFO("SDK生命周期", "初始化DLL成功");
 
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1289,7 +1291,7 @@ static int SetSavePathBody(const char* savePath) {
 
 static int SwitchTerminalBody(int terminalIndex) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "切换终端：%d", terminalIndex);
+    LOG_DEBUG("接口", "切换终端：%d", terminalIndex);
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (terminalIndex <= 0) return HZCYKJTHardWare_RET_TERMINAL_INDEX_INVALID;
@@ -1298,7 +1300,7 @@ static int SwitchTerminalBody(int terminalIndex) {
     {
         auto lock = ReadLock();
         if (ctx.current_terminal_index == terminalIndex) {
-            LOG_INFO("接口", "终端切换请求跳过：当前已在终端%d", terminalIndex);
+            LOG_DEBUG("接口", "终端切换请求跳过：当前已在终端%d", terminalIndex);
             return HZCYKJTHardWare_RET_OK;
         }
     }
@@ -1337,7 +1339,7 @@ static int SwitchTerminalBody(int terminalIndex) {
     if (irisRunning) {
         PreviewManager::Instance().StopIrisPreviewRenderer(false);
         IrisPreviewRestoreWorker::Instance().Enqueue(delphiServerUrl, irisRequestId, irisHwnd);
-        LOG_INFO("接口", "终端切换已受理，虹膜预览恢复转入后台队列");
+        LOG_DEBUG("接口", "终端切换已受理，虹膜预览恢复转入后台队列");
     }
 
     LOG_INFO("接口", "终端切换已受理");
@@ -1378,7 +1380,13 @@ static int CheckTerminalStatusBody() {
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     DelphiProxy proxy(ctx.delphi_server_url);
-    return proxy.Ping() ? HZCYKJTHardWare_RET_OK : HZCYKJTHardWare_RET_TERMINAL_UNREACHABLE;
+    if (proxy.Ping()) {
+        LOG_DEBUG("SDK生命周期", "硬件控制程序连通性检查成功");
+        return HZCYKJTHardWare_RET_OK;
+    }
+    LOG_WARN_RATE_LIMITED("SDKLifecycle|proxy_ping", "SDK生命周期",
+                          "硬件控制程序通信服务异常：检查/ping失败");
+    return HZCYKJTHardWare_RET_TERMINAL_UNREACHABLE;
 }
 
 static int StartProcessBody(const char* saveDir) {
@@ -1448,7 +1456,7 @@ static int EndProcessBody() {
 
 static int StartCameraPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "开始摄像头预览");
+    LOG_DEBUG("接口", "开始摄像头预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
@@ -1457,7 +1465,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
-    LOG_INFO("接口", "摄像头预览请求已创建：request_id=%s，third_party_hwnd=%p",
+    LOG_DEBUG("接口", "摄像头预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string delphiServerUrl;
     std::string callbackUrl;
@@ -1517,7 +1525,7 @@ static int StartCameraPreviewBody(void* hwnd) {
 
 static int StopCameraPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "停止摄像头预览");
+    LOG_DEBUG("接口", "停止摄像头预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1555,7 +1563,7 @@ static int StopCameraPreviewBody() {
 
 static int StartFingerprintPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "开始指纹预览");
+    LOG_DEBUG("接口", "开始指纹预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
@@ -1564,7 +1572,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP_PREVIEW");
-    LOG_INFO("接口", "指纹预览请求已创建：request_id=%s，third_party_hwnd=%p",
+    LOG_DEBUG("接口", "指纹预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string delphiServerUrl;
     std::string callbackUrl;
@@ -1623,7 +1631,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
 
 static int StopFingerprintPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "停止指纹预览");
+    LOG_DEBUG("接口", "停止指纹预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1661,7 +1669,7 @@ static int StopFingerprintPreviewBody() {
 
 static int StartIrisPreviewBody(void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "开始虹膜预览");
+    LOG_DEBUG("接口", "开始虹膜预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
@@ -1670,7 +1678,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
 
     std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
-    LOG_INFO("接口", "虹膜预览请求已创建：request_id=%s，third_party_hwnd=%p",
+    LOG_DEBUG("接口", "虹膜预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string rtspUrl;
     std::string delphiServerUrl;
@@ -1743,7 +1751,7 @@ static int StartIrisPreviewBody(void* hwnd) {
 
 static int StopIrisPreviewBody() {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "停止虹膜预览");
+    LOG_DEBUG("接口", "停止虹膜预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
@@ -1773,7 +1781,7 @@ static int StopIrisPreviewBody() {
 
 static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "开始车牌预览");
+    LOG_DEBUG("接口", "开始车牌预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (!hwnd || !IsWindow(reinterpret_cast<HWND>(hwnd))) {
@@ -1786,7 +1794,7 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     const std::string requestPrefix =
         std::string("HZCYKJTHardWare_PLATE_PREVIEW_") + plateName;
     std::string requestId = GenerateSyncRequestId(requestPrefix.c_str());
-    LOG_INFO("接口", "车牌%s预览请求已创建：request_id=%s，third_party_hwnd=%p",
+    LOG_DEBUG("接口", "车牌%s预览请求已创建：request_id=%s，third_party_hwnd=%p",
              plateName, requestId.c_str(), hwnd);
     std::string proxyUrl;
     std::string callbackUrl;
@@ -1841,7 +1849,7 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
 
 static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     using namespace HZCYKJTHardWare;
-    LOG_INFO("接口", "停止车牌预览");
+    LOG_DEBUG("接口", "停止车牌预览");
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 

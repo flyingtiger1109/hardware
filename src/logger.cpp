@@ -896,12 +896,12 @@ void Logger::RecordWriterFailure(const char* reason) {
         if (m_writerFailureBucket.windowStart == 0 ||
             now - m_writerFailureBucket.windowStart >= kRateLimitWindowMs) {
             if (m_writerFailureBucket.count > 0) {
-                windowSummary = "RateLimitWindowEnd key=Logger|writer_failure" +
-                    std::string(" Count=") +
+                windowSummary = "重复故障汇总：类别=Logger|writer_failure" +
+                    std::string("，次数=") +
                     std::to_string(m_writerFailureBucket.count) +
-                    " FirstTime=" + m_writerFailureBucket.firstTime +
-                    " LastTime=" + m_writerFailureBucket.lastTime +
-                    " LastError=" + SanitizeScalar(m_writerFailureBucket.lastError);
+                    "，首次=" + m_writerFailureBucket.firstTime +
+                    "，最近=" + m_writerFailureBucket.lastTime +
+                    "，最近错误=" + SanitizeScalar(m_writerFailureBucket.lastError);
             }
             m_writerFailureBucket.windowStart = now;
             m_writerFailureBucket.lastSeen = now;
@@ -922,12 +922,12 @@ void Logger::RecordWriterFailure(const char* reason) {
         "] [日志管理][错误] " + message + "\n";
     OutputDebugStringW(PathHelper::Utf8ToWide(debugLine).c_str());
 
-    if (!windowSummary.empty()) {
+    if (!windowSummary.empty() && emitCurrent) {
         WriteEmergencyLine("[" + FormatTimestamp() +
-            "] [日志管理][错误] " + windowSummary + "\n",
+            "] [日志管理][错误] " + windowSummary +
+            "，本次错误=" + SanitizeScalar(message) + "\n",
             "writer failure window");
-    }
-    if (emitCurrent) {
+    } else if (emitCurrent) {
         WriteEmergencyLine("[" + FormatTimestamp() +
             "] [日志管理][错误] 日志主写入器失败：原因=" +
             SanitizeScalar(message) + "\n", "writer failure");
@@ -949,11 +949,11 @@ bool Logger::CheckRateLimitLocked(const std::string& key,
     if (bucket.windowStart == 0 ||
         now - bucket.windowStart >= kRateLimitWindowMs) {
         if (bucket.count > 0) {
-            windowSummary = "RateLimitWindowEnd key=" + normalizedKey +
-                " Count=" + std::to_string(bucket.count) +
-                " FirstTime=" + bucket.firstTime +
-                " LastTime=" + bucket.lastTime +
-                " LastError=" + SanitizeScalar(bucket.lastError);
+            windowSummary = "重复故障汇总：类别=" + normalizedKey +
+                "，次数=" + std::to_string(bucket.count) +
+                "，首次=" + bucket.firstTime +
+                "，最近=" + bucket.lastTime +
+                "，最近错误=" + SanitizeScalar(bucket.lastError);
         }
         bucket.windowStart = now;
         bucket.lastSeen = now;
@@ -1033,7 +1033,10 @@ void Logger::LogRateLimited(LogLevel level, const char* module,
     if (!emitCurrent) return;
 
     if (!windowSummary.empty()) {
-        Log(level, module, function, "%s", windowSummary.c_str());
+        const std::string boundaryMessage = windowSummary +
+            "，本次错误=" + SanitizeScalar(message);
+        Log(level, module, function, "%s", boundaryMessage.c_str());
+        return;
     }
     Log(level, module, function, "%s", message.c_str());
 }

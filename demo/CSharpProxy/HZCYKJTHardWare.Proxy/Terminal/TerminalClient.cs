@@ -212,7 +212,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
 
                     Logger.TryLogRateLimited(
                         "terminal|GET|" + path + "|http_" + (int)response.StatusCode,
-                        LogModules.TerminalCommunication, "警告",
+                        LogModules.TerminalCommunication, "调试",
                         "GET失败：" + Logger.FormatContextMessage("GET " + path,
                             result: "失败", errorCode: "http_" + (int)response.StatusCode,
                             durationMs: sw.ElapsedMilliseconds) +
@@ -228,7 +228,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 else
                     Logger.TryLogRateLimited(
                         "terminal|GET|" + path + "|timeout",
-                        LogModules.TerminalCommunication, "错误",
+                        LogModules.TerminalCommunication, "调试",
                         "GET超时：" + Logger.FormatContextMessage("GET " + path,
                             result: "失败", errorCode: "timeout",
                             durationMs: sw.ElapsedMilliseconds));
@@ -239,7 +239,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 sw.Stop();
                 Logger.TryLogRateLimited(
                     "terminal|GET|" + path + "|network_error",
-                    LogModules.TerminalCommunication, "错误",
+                    LogModules.TerminalCommunication, "调试",
                     "GET网络错误：" + Logger.FormatContextMessage("GET " + path,
                         result: "失败", errorCode: "network_error",
                         durationMs: sw.ElapsedMilliseconds) +
@@ -251,7 +251,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 sw.Stop();
                 Logger.TryLogRateLimited(
                     "terminal|GET|" + path + "|exception",
-                    LogModules.TerminalCommunication, "错误",
+                    LogModules.TerminalCommunication, "调试",
                     "GET异常：" + Logger.FormatContextMessage("GET " + path,
                         result: "失败", errorCode: "exception",
                         durationMs: sw.ElapsedMilliseconds) +

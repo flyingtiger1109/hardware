@@ -16,7 +16,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     if (ip.AddressFamily == AddressFamily.InterNetwork &&
                         ip.ToString().StartsWith(subnetPrefix))
                     {
-                        Logger.Info($"检测到局域网IP：{ip}，子网：{subnetPrefix}");
+                        Logger.Debug($"检测到局域网IP：{ip}，子网：{subnetPrefix}");
                         return ip.ToString();
                     }
                 }

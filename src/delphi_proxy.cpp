@@ -148,17 +148,13 @@ DelphiProxy::DelphiProxy(const std::string& baseUrl)
 
 bool DelphiProxy::Ping() {
     std::string response;
-    if (!Get("/ping", response)) {
-        LOG_ERROR("代理服务", "硬件控制程序连通性检查失败：地址=%s",
-                  SanitizeUrlForLog(baseUrl_).c_str());
+    if (!Get("/ping", response, -1, true)) {
         return false;
     }
     if (!IsOkResponse(response)) {
-        LOG_ERROR("代理服务", "硬件控制程序连通性响应无效：%s",
-                  SanitizeLargePayloadForLog(response).c_str());
         return false;
     }
-    LOG_INFO("代理服务", "硬件控制程序连通性检查成功：地址=%s",
+    LOG_DEBUG("代理服务", "硬件控制程序连通性检查成功：地址=%s",
              SanitizeUrlForLog(baseUrl_).c_str());
     return true;
 }
@@ -504,12 +500,13 @@ bool DelphiProxy::Get(const std::string& path, std::string& response,
     int statusCode = 0;
     auto* http = ctx.http_client;
     if (!http) {
-        LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，method=GET，path=%s", path.c_str());
+        if (!quiet)
+            LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：HTTP客户端未初始化，method=GET，path=%s", path.c_str());
         return false;
     }
     std::string url = BuildUrl(path);
     const std::string safeUrl = SanitizeUrlForLog(url);
-    bool ok = http->Get(url, connectTimeout, requestTimeout, response, statusCode);
+    bool ok = http->Get(url, connectTimeout, requestTimeout, response, statusCode, quiet);
     if (!ok) {
         if (!quiet)
             LOG_ERROR("代理服务", "DLL下发硬件控制程序失败：method=GET，url=%s", safeUrl.c_str());

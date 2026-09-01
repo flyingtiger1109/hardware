@@ -105,7 +105,7 @@ int TerminalManager::SwitchTerminalByUrl(const std::string& baseUrl) {
         return HZCYKJTHardWare_RET_INVALID_PARAM;
     }
 
-    LOG_INFO("TerminalMgr", "DLL切换当前终端：target=%s", SanitizeUrlForLog(baseUrl).c_str());
+    LOG_DEBUG("TerminalMgr", "DLL切换当前终端：target=%s", SanitizeUrlForLog(baseUrl).c_str());
 
     auto previewSnapshot = PreviewManager::Instance().CaptureActivePreviewSnapshot();
     PreviewManager::Instance().StopAllForTerminalSwitch();

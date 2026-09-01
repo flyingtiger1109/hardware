@@ -110,7 +110,7 @@ int PreviewManager::StartRendererFromUrl(HWND hwnd, const std::string& rtspUrl,
 
     runningFlag = true;
     storedHwnd = hwnd;
-    LOG_INFO("PreviewMgr", "本进程预览已启动：hwnd=%p", hwnd);
+    LOG_DEBUG("PreviewMgr", "本进程预览已启动：hwnd=%p", hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 

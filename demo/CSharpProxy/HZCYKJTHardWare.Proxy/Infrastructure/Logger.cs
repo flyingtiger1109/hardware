@@ -312,11 +312,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
             var decision = _rateLimiter.Record(key, message, DateTime.UtcNow);
             if (!decision.EmitCurrent) return false;
-            if (!string.IsNullOrEmpty(decision.WindowSummary))
-                Write(normalizedLevel, FormatModuleMessage(module, normalizedLevel,
-                    decision.WindowSummary), levelNumber);
+            var output = string.IsNullOrEmpty(decision.WindowSummary)
+                ? message
+                : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
             Write(normalizedLevel, FormatModuleMessage(module, normalizedLevel,
-                message), levelNumber);
+                output), levelNumber);
             return true;
         }
 
@@ -698,10 +698,12 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
 
             var decision = _writerFailureRateLimiter.Record(
                 "Logger|writer_failure", error, DateTime.UtcNow);
-            if (!string.IsNullOrEmpty(decision.WindowSummary))
-                TryWriteEmergencyLine("[日志管理][错误] " + decision.WindowSummary,
+            if (!string.IsNullOrEmpty(decision.WindowSummary) && decision.EmitCurrent)
+                TryWriteEmergencyLine(
+                    "[日志管理][错误] " + decision.WindowSummary +
+                    "，本次错误=" + decision.CurrentError,
                     "writer failure window");
-            if (decision.EmitCurrent)
+            else if (decision.EmitCurrent)
                 TryWriteEmergencyLine(
                     "[日志管理][错误] 日志主写入器失败：原因=" +
                     JsonHelper.ToLogValue(error.Replace(Environment.NewLine, " | ")),

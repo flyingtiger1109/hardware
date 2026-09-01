@@ -11,7 +11,7 @@ int TerminalStatusChecker::Check(const std::string& baseUrl, int connectTimeoutM
         return HZCYKJTHardWare_RET_TERMINAL_NOT_SELECTED;
     }
 
-    LOG_DEBUG("TerminalChecker", "正在检查终端状态：terminal=%s", SanitizeUrlForLog(baseUrl).c_str());
+    LOG_DEBUG("终端通信", "正在检查终端状态：terminal=%s", SanitizeUrlForLog(baseUrl).c_str());
 
     HttpClient client;
     std::string responseBody;
@@ -25,13 +25,13 @@ int TerminalStatusChecker::Check(const std::string& baseUrl, int connectTimeoutM
 
     if (!ok) {
         const std::string safeTerminal = SanitizeUrlForLog(baseUrl);
-        LOG_WARN_RATE_LIMITED(safeTerminal.c_str(), "TerminalChecker",
-            "终端不可达：terminal=%s", safeTerminal.c_str());
+        LOG_WARN_RATE_LIMITED(safeTerminal.c_str(), "终端通信",
+            "终端连接异常：terminal=%s", safeTerminal.c_str());
         return HZCYKJTHardWare_RET_TERMINAL_UNREACHABLE;
     }
 
     // 任何 HTTP 响应（包括 404）都说明终端在线
-    LOG_DEBUG("TerminalChecker", "终端已响应：terminal=%s，status=%d",
+    LOG_DEBUG("终端通信", "终端已响应：terminal=%s，status=%d",
               SanitizeUrlForLog(baseUrl).c_str(), statusCode);
     return HZCYKJTHardWare_RET_OK;
 }

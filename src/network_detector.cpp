@@ -104,7 +104,7 @@ int NetworkDetector::Detect(const std::string& preferredSubnet) {
             if (prefix == preferredSubnet) {
                 m_selectedIp = ip;
                 m_selectedSubnetPrefix = prefix;
-                LOG_INFO("NetDetector", "本机网卡已选择：ip=%s，subnet=%s",
+                LOG_DEBUG("网络检测", "本机网卡已选择：ip=%s，subnet=%s",
                          ip.c_str(), prefix.c_str());
                 return HZCYKJTHardWare_RET_OK;
             }
@@ -117,7 +117,7 @@ int NetworkDetector::Detect(const std::string& preferredSubnet) {
     if (valid192Ips.size() == 1) {
         m_selectedIp = valid192Ips[0];
         m_selectedSubnetPrefix = GetSubnetPrefix(valid192Ips[0]);
-        LOG_INFO("NetDetector", "本机网卡已自动选择：ip=%s", m_selectedIp.c_str());
+        LOG_DEBUG("网络检测", "本机网卡已自动选择：ip=%s", m_selectedIp.c_str());
         return HZCYKJTHardWare_RET_OK;
     }
 

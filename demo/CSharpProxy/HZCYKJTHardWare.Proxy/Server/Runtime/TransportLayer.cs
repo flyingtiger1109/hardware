@@ -93,7 +93,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             {
                 if (b == null) continue;
                 b.Listener.Start(b.Backlog);
-                _log($"传输层 {b.Name} 已启动监听");
+                _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "调试",
+                    $"传输层{b.Name}已启动监听"));
 
                 // 注册取消回调以强制停止监听器。AcceptTcpClientAsync 不直接响应 CancellationToken，
                 // 因此调用 listener.Stop() 使其抛出 ObjectDisposedException。
@@ -148,7 +149,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                     _log($"[传输层] {b.Name} 停止超时，仍有 {b.ActiveHandlers.Count} 个连接处理任务");
             }
 
-            _log("传输层已停止");
+            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "调试",
+                "传输层已停止"));
         }
 
         /// <summary>
@@ -236,7 +238,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         {
             // UI 仍保留精简摘要；文件日志额外保留 ERROR 级别和完整堆栈。
             Logger.Error(context, ex);
-            _log($"{context}: {ex.Message}");
+            _log(Logger.FormatModuleMessage(LogModules.ServiceListener, "调试",
+                $"{context}: {ex.Message}"));
         }
 
         private static async Task DisposeSlotsWhenIdleAsync(ListenerBinding binding)

@@ -59,7 +59,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         try
                         {
                             Directory.Delete(tempDir, true);
-                            Logger.Info($"已清理上次残留的VLC临时目录: {tempDir}");
+                            Logger.Debug($"已清理上次残留的VLC临时目录: {tempDir}");
                         }
                         catch (Exception ex)
                         {
@@ -69,7 +69,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     Directory.CreateDirectory(tempDir);
 
-                    Logger.Info($"解压 {resourceNames.Length} 个VLC资源到 {tempDir}");
+                    Logger.Debug($"解压 {resourceNames.Length} 个VLC资源到 {tempDir}");
 
                     foreach (var resourceName in resourceNames)
                     {
@@ -97,7 +97,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         _extractedDir = tempDir;
                     }
 
-                    Logger.Info($"VLC已解压到 {_extractedDir}");
+            Logger.Debug($"VLC已解压到 {_extractedDir}");
 
                     // 注册正常退出清理；异常退出遗留内容由下次启动清理
                     AppDomain.CurrentDomain.ProcessExit += (s, e) => Cleanup();
@@ -146,7 +146,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (tempDir != null && Directory.Exists(tempDir))
                 {
                     Directory.Delete(tempDir, true);
-                    Logger.Info($"已清理VLC临时目录: {tempDir}");
+                Logger.Debug($"已清理VLC临时目录: {tempDir}");
                 }
             }
             catch (Exception ex)

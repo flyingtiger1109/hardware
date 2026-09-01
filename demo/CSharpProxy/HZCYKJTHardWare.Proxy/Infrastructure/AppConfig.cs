@@ -104,8 +104,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             var jsonPath = Path.Combine(config.ExeDir, ConfigFile);
             if (!File.Exists(jsonPath))
             {
-                Logger.Warn("DeviceMode配置项所在配置文件不存在，回退到DeviceMode=1");
-                Logger.Warn($"未找到配置文件：{ConfigFile}，将使用默认配置");
+                Logger.Warn(Logger.FormatModuleMessage(LogModules.ConfigManagement, "警告",
+                    $"配置文件未找到：{ConfigFile}，使用默认配置（DeviceMode=1）"));
+                Logger.Debug("DeviceMode配置项所在配置文件不存在，已回退到DeviceMode=1");
                 LogIcCardCallbackConfiguration(config);
                 return config;
             }
@@ -116,7 +117,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var normalizedJson = NormalizeEmptyHostSuffix(json);
                 if (!string.Equals(json, normalizedJson, StringComparison.Ordinal))
                 {
-                    Logger.Info("[终端配置] 检测到空 host_suffix，已按 null 归一化并视为未配置");
+                    Logger.Debug("[终端配置] 检测到空 host_suffix，已按 null 归一化并视为未配置");
                     json = normalizedJson;
                 }
                 var obj = JObject.Parse(json);
@@ -251,7 +252,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 Logger.SetMinLevel(config.LogLevel);
                 LogTerminalConfiguration(config);
                 LogIcCardCallbackConfiguration(config);
-                Logger.Info($"配置文件已加载：{jsonPath}");
+                Logger.Info(Logger.FormatModuleMessage(LogModules.ConfigManagement, "信息",
+                    $"配置加载成功：设备模式={config.DeviceModeName}（{(int)config.DeviceMode}），" +
+                    $"默认终端={config.DefaultTerminalIndex}，IC回调={(config.EnableIcCardCallback ? "启用" : "关闭")}"));
             }
             catch (Exception ex)
             {
@@ -282,17 +285,17 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 $"终端2={(config.Terminal2Configured ? "已配置" : "未配置")}" +
                 $"（名称={config.Terminal2Name}，主机后缀={config.Terminal2HostSuffix}），" +
                 $"默认终端={config.DefaultTerminalIndex}";
-            Logger.Info(summary);
+            Logger.Debug(summary);
 
             if (config.Terminal1Configured != config.Terminal2Configured)
             {
-                Logger.Info("[终端配置] 当前仅配置了一个方向；切换到未配置方向时将拒绝切换并返回 terminal_not_configured");
+                Logger.Warn("[终端配置] 当前仅配置了一个方向；切换到未配置方向时将拒绝切换并返回 terminal_not_configured");
             }
         }
 
         private static void LogIcCardCallbackConfiguration(AppConfig config)
         {
-            Logger.Info($"[IC卡] 第三方回调功能：{(config.EnableIcCardCallback ? "启用" : "关闭")}");
+            Logger.Debug($"[IC卡] 第三方回调功能：{(config.EnableIcCardCallback ? "启用" : "关闭")}");
         }
 
         /// <summary>

@@ -62,10 +62,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
 
             try
             {
-                Logger.Info("[长稳指标] " + BuildSnapshot());
+                Logger.Debug("[长稳指标] " + BuildSnapshot());
                 var queueStats = (_queueManager?.GetAllStats() ?? "无")
                     .Replace("\r", "").Replace("\n", " | ");
-                Logger.Info("[长稳指标] queues=" + queueStats);
+                Logger.Debug("[长稳指标] queues=" + queueStats);
             }
             catch (Exception ex)
             {

@@ -87,7 +87,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             _enabled = enabled;
             if (!_enabled)
             {
-                Logger.Info($"[硬件检测] 队列已禁用：{_name}，设备模式(DeviceMode)=" +
+                Logger.Debug($"[硬件检测] 队列已禁用：{_name}，设备模式(DeviceMode)=" +
                     (int)DeviceCapabilityManager.Instance.Mode);
                 return;
             }
@@ -158,7 +158,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             if (replacedTask != null)
             {
                 TryCompleteTask(replacedTask, "queue_replaced");
-                Logger.Info($"[队列] {_name} 新请求替换等待任务（已替换={replacedCount}）");
+                Logger.Debug($"[队列] {_name} 新请求替换等待任务（已替换={replacedCount}）");
             }
             return true;
         }
@@ -235,7 +235,7 @@ namespace HZCYKJTHardWare.Proxy.Core
                 sw.Stop();
 
                 if (sw.ElapsedMilliseconds > 500 || queueWaitMs > 200)
-                    Logger.Info($"[队列] {_name} 任务完成，执行耗时={sw.ElapsedMilliseconds}ms，排队耗时={queueWaitMs:F0}ms");
+                    Logger.Debug($"[队列] {_name} 任务完成，执行耗时={sw.ElapsedMilliseconds}ms，排队耗时={queueWaitMs:F0}ms");
             }
             catch (Exception ex)
             {
@@ -304,7 +304,7 @@ namespace HZCYKJTHardWare.Proxy.Core
             _worker = null;
             _buffer = null;
             if (Interlocked.Exchange(ref _stopLogged, 1) == 0)
-                Logger.Info($"[队列] {_name} 已停止 " + GetStats());
+                Logger.Debug($"[队列] {_name} 已停止 " + GetStats());
             return true;
         }
 

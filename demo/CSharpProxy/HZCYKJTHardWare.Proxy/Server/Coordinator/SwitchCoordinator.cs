@@ -181,7 +181,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             {
                 CancelEpoch(previousEpoch);
                 _requestRegistry.CancelOlderThan(generation);
-                Logger.Info($"[终端切换] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
+                Logger.Debug($"[终端切换] 下发切换请求，批次={generation}，目标终端={terminalIndex}");
                 return true;
             }
             catch
@@ -204,7 +204,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 var phase = sw.ElapsedMilliseconds;
                 _terminalManager.SwitchTo(terminalIndex);
                 Logger.Debug($"[性能] 终端管理器切换 耗时={sw.ElapsedMilliseconds - phase}ms");
-                _log("[终端切换] 当前终端=" + _terminalManager.CurrentName);
+                _log("[终端切换][调试] 当前终端=" + _terminalManager.CurrentName);
                 NotifyTerminalChanged(_terminalManager.CurrentIndex);
 
                 var restartBaseUrl = _terminalManager.CurrentBaseUrl;
@@ -212,7 +212,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 FinishSwitch();
                 switchFinished = true;
 
-                Logger.Info($"[终端切换] 终端切换完成，已清除切换中标志，批次={generation}，目标终端={_terminalManager.CurrentName}，耗时={switchElapsedMs}ms，预览进入后台恢复");
+                Logger.Info($"[终端切换] 切换完成：当前={_terminalManager.CurrentName}，" +
+                            $"切换耗时={switchElapsedMs}ms，预览进入后台恢复");
                 Logger.Debug($"[性能] 终端切换总耗时={switchElapsedMs}ms");
                 StartPreviewRestartInBackground(restartBaseUrl, generation, switchElapsedMs);
                 return true;
@@ -234,13 +235,13 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             Func<Task> restartWork = async () =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                Logger.Info($"[终端切换] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
+                Logger.Debug($"[终端切换] 预览后台恢复开始，批次={generation}，切换耗时={switchElapsedMs}ms");
                 try
                 {
                     await _previewManager.RestartPreviewsOnTerminalSwitch(
                         terminalBaseUrl,
                         () => _queueManager.IsGenerationValid(generation)).ConfigureAwait(false);
-                    Logger.Info($"[终端切换] 预览后台恢复完成，批次={generation}，耗时={sw.ElapsedMilliseconds}ms");
+                    Logger.Debug($"[终端切换] 预览后台恢复完成，批次={generation}，耗时={sw.ElapsedMilliseconds}ms");
                 }
                 catch (Exception ex)
                 {

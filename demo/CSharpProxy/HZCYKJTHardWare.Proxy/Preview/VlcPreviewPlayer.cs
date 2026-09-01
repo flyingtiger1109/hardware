@@ -184,7 +184,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _fnRelease(instance);
                 }
                 WarmupMs = (int)sw.ElapsedMilliseconds;
-                Logger.Info($"VLC预热完成: {WarmupMs}ms");
+                Logger.Debug($"VLC预热完成: {WarmupMs}ms");
             }
             catch (Exception ex)
             {
@@ -465,7 +465,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 ApplyCoverLayout();
                 Logger.Debug($"VLC播放参数：url={safeUrl}，videoHwnd={_videoHwnd}，parent={parentHwnd}，network_cache={networkCachingMs}ms，live_cache={liveCachingMs}ms，transport={rtspTransport}，visible={visible}，direct={directRenderTarget}");
 
-                Logger.Info($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
+                Logger.Debug($"VLC播放成功: {safeUrl} -> videoHwnd={_videoHwnd}, parent={parentHwnd}");
                 return true;
             }
             catch (Exception ex)

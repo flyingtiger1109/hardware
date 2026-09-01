@@ -630,11 +630,11 @@ namespace HZCYKJTHardWare.Proxy.Server
             var decision = _callbackRateLimiter.Record(key, message, DateTime.UtcNow);
             if (!decision.EmitCurrent || _log == null)
                 return;
-            if (!string.IsNullOrEmpty(decision.WindowSummary))
-                _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, level,
-                    decision.WindowSummary));
+            var output = string.IsNullOrEmpty(decision.WindowSummary)
+                ? message
+                : decision.WindowSummary + "，本次错误=" + decision.CurrentError;
             _log(Logger.FormatModuleMessage(LogModules.TerminalCallback, level,
-                message));
+                output));
         }
 
         private async Task<CallbackRoute> ResolveCallbackAsync(string requestId,

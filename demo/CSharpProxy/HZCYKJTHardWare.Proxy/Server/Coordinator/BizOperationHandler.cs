@@ -150,7 +150,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             if (_terminalManager.IsSameTerminal(index))
                 return $"已在目标终端，无需切换";
 
-            _log("[终端切换] 正在切换到终端" + _terminalManager.CurrentIndex + " -> 终端" + index);
+            _log("[终端切换] 开始切换：" + _terminalManager.CurrentName + " → " +
+                 _terminalManager.GetTerminalName(index));
 
             var ok = await _switchCoordinator.SwitchToAsync(index).ConfigureAwait(false);
             return ok ? $"已切换到终端 {index}" : "切换失败";

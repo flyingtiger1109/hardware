@@ -143,7 +143,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 _currentIndex = index;
                 _routeEpoch++;
             }
-            Logger.Info($"已切换到终端：{CurrentName}");
+            Logger.Debug($"已切换到终端：{CurrentName}");
             return true;
         }
 
