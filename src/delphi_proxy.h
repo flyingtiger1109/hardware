@@ -6,6 +6,8 @@ namespace HZCYKJTHardWare {
 
 struct LatestPlateFrameMetadata {
     std::string source;
+    // Proxy 返回的业务错误码仅用于 DLL 内部日志关联，不参与导出 ABI。
+    std::string proxyErrorCode;
     int width = -1;
     int height = -1;
     long long frameAgeMs = -1;

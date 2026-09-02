@@ -426,20 +426,27 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
     if (metadata) {
         *metadata = LatestPlateFrameMetadata();
     }
+    auto setProxyError = [&](const char* errorCode) {
+        if (metadata)
+            metadata->proxyErrorCode = errorCode ? errorCode : "unknown";
+    };
 
     if (plateCode != "cj" && plateCode != "rj2" && plateCode != "rj3") {
         lastResultCode_ = HZCYKJTHardWare_FRAME_INVALID_CAMERA;
+        setProxyError("invalid_camera");
         return false;
     }
     if (requestId.empty()) {
         lastResultCode_ = HZCYKJTHardWare_RET_INVALID_PARAM;
-        LOG_ERROR("代理服务", "获取最新车牌帧失败：request_id为空，车牌=%s",
+        setProxyError("invalid_request_id");
+        LOG_DEBUG("代理服务", "获取最新车牌帧底层请求失败：request_id为空，车牌=%s",
                   plateCode.c_str());
         return false;
     }
     if (baseUrl_.empty()) {
         lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
-        LOG_ERROR("代理服务", "获取最新车牌帧失败：基础地址为空，车牌=%s，request_id=%s",
+        setProxyError("proxy_url_empty");
+        LOG_DEBUG("代理服务", "获取最新车牌帧底层请求失败：基础地址为空，车牌=%s，request_id=%s",
                   plateCode.c_str(), requestId.c_str());
         return false;
     }
@@ -448,7 +455,8 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
     auto* http = ctx.http_client;
     if (!http) {
         lastResultCode_ = HZCYKJTHardWare_RET_NOT_INITIALIZED;
-        LOG_ERROR("代理服务", "获取最新车牌帧失败：HTTP客户端未初始化，车牌=%s，request_id=%s",
+        setProxyError("http_client_not_initialized");
+        LOG_DEBUG("代理服务", "获取最新车牌帧底层请求失败：HTTP客户端未初始化，车牌=%s，request_id=%s",
                   plateCode.c_str(), requestId.c_str());
         return false;
     }
@@ -483,7 +491,10 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
             lastResultCode_ = HZCYKJTHardWare_RET_TIMEOUT;
         else
             lastResultCode_ = HZCYKJTHardWare_RET_HTTP_FAILED;
-        LOG_ERROR("代理服务", "获取最新车牌帧失败：二进制HTTP请求失败，车牌=%s，"
+        const char* proxyError = statusCode == -1 ? "frame_too_large" :
+            (statusCode == -2 ? "timeout" : "http_failed");
+        setProxyError(proxyError);
+        LOG_DEBUG("代理服务", "获取最新车牌帧底层请求失败：二进制HTTP请求失败，车牌=%s，"
                   "状态=%d，request_id=%s，返回码=%d",
                   plateCode.c_str(), statusCode, requestId.c_str(), lastResultCode_);
         return false;
@@ -494,11 +505,18 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
     const bool jsonLike = !response.empty() && response[0] == '{';
     if (statusCode < 200 || statusCode >= 300 ||
         (jsonLike && HasErrorResponse(response, errorCode, errorMessage))) {
+        if (errorCode.empty())
+            errorCode = statusCode < 200 || statusCode >= 300
+                ? "http_status_error" : "proxy_rejected";
         lastResultCode_ = MapLatestPlateFrameErrorCode(errorCode);
-        LOG_ERROR("代理服务", "获取最新车牌帧被Proxy拒绝：车牌=%s，状态=%d，"
+        if (metadata && (errorCode == "frame_stale" ||
+                         errorCode == "frame_not_ready"))
+            metadata->source = "OnDemandSnapshot";
+        setProxyError(errorCode.c_str());
+        LOG_DEBUG("代理服务", "获取最新车牌帧被Proxy拒绝：车牌=%s，状态=%d，"
                   "request_id=%s，错误码=%s，消息=%s，返回码=%d",
                   plateCode.c_str(), statusCode, requestId.c_str(),
-                  errorCode.empty() ? "unknown" : errorCode.c_str(),
+                  errorCode.c_str(),
                   errorMessage.empty() ? "" : errorMessage.c_str(),
                   lastResultCode_);
         return false;
@@ -508,7 +526,9 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
         lastResultCode_ = response.size() > kMaxJpegBytes
             ? HZCYKJTHardWare_FRAME_TOO_LARGE
             : HZCYKJTHardWare_FRAME_DATA_INVALID;
-        LOG_ERROR("代理服务", "获取最新车牌帧失败：响应不是有效JPEG，车牌=%s，"
+        setProxyError(response.size() > kMaxJpegBytes
+            ? "frame_too_large" : "frame_data_invalid");
+        LOG_DEBUG("代理服务", "获取最新车牌帧底层请求失败：响应不是有效JPEG，车牌=%s，"
                   "request_id=%s，bytes=%zu，返回码=%d",
                   plateCode.c_str(), requestId.c_str(), response.size(),
                   lastResultCode_);

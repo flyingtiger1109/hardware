@@ -70,11 +70,32 @@ const OperationModuleEntry kOperationModuleEntries[] = {
 
 const char* ModuleFromOperation(const char* operation) {
     if (!operation || !*operation) return nullptr;
+    const std::string requested = CanonicalOperationName(operation);
     for (const auto& entry : kOperationModuleEntries) {
-        if (std::strcmp(entry.operation, operation) == 0)
+        // 日志正文通常使用短 Operation，导出入口/回调有时使用完整导出名。
+        // 统一 canonical name 后再匹配，同时覆盖 CaptureFace/Authorize 等历史短别名。
+        if (CanonicalOperationName(entry.operation) == requested)
             return entry.module;
     }
     return nullptr;
+}
+
+std::string OperationFromMessage(const std::string& message) {
+    const std::string marker = "Operation=";
+    const size_t markerPos = message.find(marker);
+    if (markerPos == std::string::npos) return "";
+
+    const size_t valueStart = markerPos + marker.size();
+    size_t valueEnd = valueStart;
+    while (valueEnd < message.size()) {
+        const char ch = message[valueEnd];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' ||
+            ch == ',' || ch == ';') {
+            break;
+        }
+        ++valueEnd;
+    }
+    return message.substr(valueStart, valueEnd - valueStart);
 }
 
 std::string ModuleFromMessage(const std::string& message) {
@@ -149,12 +170,18 @@ std::string NormalizeModule(const char* module, const char* function,
         return operation == "未识别接口" ? "终端回调" : operation;
     }
     if (name == "HTTP请求" || name == "代理服务") {
-        const std::string operation = ModuleFromMessage(text);
-        if (operation != "未识别接口") return operation;
+        const std::string operation = OperationFromMessage(text);
+        const char* operationModule = ModuleFromOperation(operation.c_str());
+        if (operationModule) return operationModule;
+        const std::string inferredModule = ModuleFromMessage(text);
+        if (inferredModule != "未识别接口") return inferredModule;
         return "终端通信";
     }
     if (name == "接口" || name.empty()) {
         const char* operationModule = ModuleFromOperation(function);
+        if (operationModule) return operationModule;
+        const std::string operation = OperationFromMessage(text);
+        operationModule = ModuleFromOperation(operation.c_str());
         if (operationModule) return operationModule;
         return ModuleFromMessage(text);
     }

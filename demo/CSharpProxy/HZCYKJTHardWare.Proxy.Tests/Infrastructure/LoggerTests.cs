@@ -133,6 +133,50 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
+        public void OperationModuleMapping_CoversAllKnownDllExports()
+        {
+            var cases = new[]
+            {
+                new[] { "HZCYKJTHardWare_InitSdk", "SDK生命周期" },
+                new[] { "HZCYKJTHardWare_ReleaseSdk", "SDK生命周期" },
+                new[] { "HZCYKJTHardWare_SwitchTerminal", "终端切换" },
+                new[] { "HZCYKJTHardWare_StartProcess", "流程控制" },
+                new[] { "HZCYKJTHardWare_EndProcess", "流程控制" },
+                new[] { "HZCYKJTHardWare_StartCameraPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StopCameraPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StartFingerprintPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StopFingerprintPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StartIrisPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StopIrisPreview", "预览" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewCJ", "预览" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewCJ", "预览" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewRJ2", "预览" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewRJ2", "预览" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewRJ3", "预览" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewRJ3", "预览" },
+                new[] { "HZCYKJTHardWare_SaveLatestPlateFrame", "车牌抓帧" },
+                new[] { "HZCYKJTHardWare_CaptureCameraImage", "人脸抓拍" },
+                new[] { "HZCYKJTHardWare_CaptureFingerprintImage", "指纹抓拍" },
+                new[] { "HZCYKJTHardWare_CaptureIrisImage", "虹膜抓拍" },
+                new[] { "HZCYKJTHardWare_RequestOCR", "证件识别" },
+                new[] { "HZCYKJTHardWare_RequestNfcCard", "NFC读卡" },
+                new[] { "HZCYKJTHardWare_RequestAuthorize", "授权" },
+                new[] { "HZCYKJTHardWare_RegisterEventCallback", "终端回调" }
+            };
+
+            foreach (var item in cases)
+            {
+                var message = Logger.NormalizeForDisplay(
+                    "[接口][信息] Operation=" + item[0] +
+                    " RequestId=REQ-MAP Result=Success");
+                var expected = "[" + item[1] + "][信息] Operation=" +
+                    Logger.CanonicalOperationName(item[0]) +
+                    " RequestId=REQ-MAP Result=Success";
+                Assert.AreEqual(expected, message, item[0]);
+            }
+        }
+
+        [TestMethod]
         public void BusinessContext_UsesShortOperationAndStableResultFields()
         {
             var fields = Logger.FormatContextMessage(

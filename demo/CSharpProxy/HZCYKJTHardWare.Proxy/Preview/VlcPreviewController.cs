@@ -16,6 +16,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal const int LatestPlateFrameMaxAgeMs = 1000;
         internal const int LatestPlateFrameSnapshotWaitMs = 300;
         internal const int LatestPlateFrameRefreshTimeoutMs = 600;
+        // 首次 frame_stale 只允许一次快速重试，总耗时保持在 1.1 秒预算内。
+        internal const int LatestPlateFrameRetryDelayMs = 75;
+        internal const int LatestPlateFrameRetryBudgetMs = 1100;
+        internal const int LatestPlateFrameMaxRetries = 1;
         internal const int LatestFrameFailureNone = 0;
         internal const int LatestFrameFailureNotReady = 1;
         internal const int LatestFrameFailureDataInvalid = 2;

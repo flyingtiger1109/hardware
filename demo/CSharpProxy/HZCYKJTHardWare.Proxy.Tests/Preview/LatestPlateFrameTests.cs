@@ -123,6 +123,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
+        public void LatestPlateFrameRetry_IsSingleAndWithinBoundedBudget()
+        {
+            Assert.AreEqual(1, VlcPreviewController.LatestPlateFrameMaxRetries);
+            Assert.AreEqual(75, VlcPreviewController.LatestPlateFrameRetryDelayMs);
+            Assert.IsTrue(VlcPreviewController.LatestPlateFrameRetryBudgetMs >=
+                          VlcPreviewController.LatestPlateFrameRefreshTimeoutMs +
+                          VlcPreviewController.LatestPlateFrameRetryDelayMs);
+            Assert.IsTrue(VlcPreviewController.LatestPlateFrameRetryBudgetMs <= 1200);
+        }
+
+        [TestMethod]
         public void DllBinaryResponse_PreservesAndSanitizesFrameMetadataHeaders()
         {
             var headers = new Dictionary<string, string>

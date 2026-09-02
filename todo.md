@@ -2080,3 +2080,44 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 - [ ] 完成真实 CJ/RJ2/RJ3 抓拍与资源指标基线。
 - [ ] 单独评估是否去除临时 Snapshot 文件、改用 VLC Frame Callback 纯内存抓帧，以及 Stop Preview HTTP 12002 超时。
 - [ ] 完成 24 小时稳定性测试后再决定是否扩大缓存/抓帧架构范围。
+
+## 车牌抓帧最终收尾：日志分类与 frame_stale 有限重试（2026-09-02）
+
+### 根因
+
+- [x] Native `src/logger.cpp` 已有完整导出 Operation→Module 表，但 `NormalizeModule` 只用 `__FUNCTION__` 查表；`SaveLatestPlateFrame` 的结构化 Operation 位于日志正文，调用函数名是 `LogLatestPlateFrameOperation`，因此未命中映射并回退为 `[未识别接口]`。
+- [x] `.def` 的 25 个当前导出与 Native 映射表逐项核对；短 Operation、完整导出名及历史抓拍别名统一按 canonical name 匹配。
+
+### 本次完成
+
+- [x] Native Generic `接口` 日志从 `Operation=` 字段读取真实操作，再按确定性映射归类；保留消息关键词作为最后回退，不改变导出接口或 ABI。
+- [x] 车牌 DLL 最终日志改为一条主业务记录，包含中文业务描述、`Operation`、`CaptureRequestId`、`PreviewRequestId`、`Plate`、`Result`、`ReturnCode`、`Stage`、`ProxyError`、路径、尺寸、帧龄和来源；Proxy/DLL 底层重复错误降为 Debug 明细。
+- [x] 对已有合法旧帧且首次刷新返回 `frame_stale` 的同一 Session，重新校验 Session、Generation、RequestId、Player 和 running 状态后等待 75ms，仅重试一次；总预算 1100ms，仍失败返回 `frame_stale`，不返回旧帧。
+- [x] 保持 `Source=Cache|OnDemandSnapshot`，未恢复 200ms 周期 Snapshot，未触碰 Stop Preview HTTP 12002 P1。
+- [x] 新增 Native `.def`/映射表校验脚本及 C# 全导出 Operation→Module 表驱动测试。
+
+### 涉及文件
+
+- `src/logger.cpp`
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`
+- `src/exports.cpp`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewController.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/LatestPlateFrameTests.cs`
+- `scripts/verify_operation_module_map.ps1`
+
+### 验证状态
+
+- [x] Native `Release|Win32/x86`、Native `Release|x64`、C# Proxy `Release|x64`、C# Demo `Release|x86`：0 错误；Native/Proxy/Demo 为 0 警告，测试工程仅有 `NU1900` 网络源警告。
+- [x] Native x86/x64 `dumpbin /exports`：`SaveLatestPlateFrame` 及 CJ/RJ2/RJ3 开始/停止导出存在，导出名与调用约定未变。
+- [x] `git diff --check`：无空白错误；源码检索未发现 200ms 周期 Snapshot，当前 Snapshot 仅由按需刷新信号触发。
+- [x] Operation→Module 校验脚本与新增 C# 日志/重试边界测试：通过；专项测试 26/26。
+- [x] C# Proxy 全量测试：162/174 通过；12 项既有环境/基线失败（10 项 `HttpListener` 平台不支持、ProductVersion 断言、既有回调时序断言），未归因于本轮改动。
+- [ ] CJ/RJ2/RJ3 真实终端各 100 次、并发抓拍、Stop/Restart、OSD 与资源长稳：当前环境无现场硬件，待现场执行。
+
+### 风险与回退
+
+- 风险：Native 日志模块表与 `.def` 仍需随未来新增导出同步更新；硬件瞬时无新帧时最多增加一次 75ms 延迟。
+- 回退：仅回退本节列出的源码、测试、校验脚本和本节记录；不改变 DLL 导出名、参数、调用约定、结构体布局或第三方 HWND 所有权。

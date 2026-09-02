@@ -170,28 +170,38 @@ static void LogLatestPlateFrameOperation(
     const std::string& previewRequestId, const char* plateName,
     const std::string& path, size_t bytes,
     const HZCYKJTHardWare::LatestPlateFrameMetadata& metadata,
-    ULONGLONG durationMs) {
+    ULONGLONG durationMs, const char* stage) {
     const char* result = resultCode == HZCYKJTHardWare_RET_OK
         ? "Success" : "Failed";
     const std::string errorCode = resultCode == HZCYKJTHardWare_RET_OK
         ? "none" : std::to_string(resultCode);
     const std::string source = metadata.source.empty() ? "unknown" : metadata.source;
+    const std::string proxyError = metadata.proxyErrorCode.empty()
+        ? "none" : metadata.proxyErrorCode;
     const char* captureId = captureRequestId.empty() ? "<无>" : captureRequestId.c_str();
     const char* previewId = previewRequestId.empty() ? "<无>" : previewRequestId.c_str();
     const char* plate = (plateName && plateName[0]) ? plateName : "unknown";
+    const char* description = resultCode == HZCYKJTHardWare_RET_OK
+        ? "保存成功" : "保存失败";
+    const char* stageValue = (stage && stage[0]) ? stage : "Unknown";
 
     const char* format =
-        "Operation=SaveLatestPlateFrame RequestId=%s CaptureRequestId=%s "
-        "PreviewRequestId=%s Plate=%s Result=%s ErrorCode=%s DurationMs=%llu "
+        "车牌%s图片%s：Operation=SaveLatestPlateFrame RequestId=%s "
+        "CaptureRequestId=%s PreviewRequestId=%s Plate=%s Result=%s "
+        "ErrorCode=%s ReturnCode=%d Stage=%s ProxyError=%s DurationMs=%llu "
         "Path=%s Bytes=%zu Width=%d Height=%d FrameAgeMs=%lld Source=%s";
     if (resultCode == HZCYKJTHardWare_RET_OK) {
-        LOG_INFO("接口", format, captureId, captureId, previewId, plate, result,
-                 errorCode.c_str(), static_cast<unsigned long long>(durationMs),
+        LOG_INFO("接口", format, plate, description, captureId, captureId,
+                 previewId, plate, result, errorCode.c_str(), resultCode,
+                 stageValue, LogValue(proxyError).c_str(),
+                 static_cast<unsigned long long>(durationMs),
                  LogValue(path).c_str(), bytes, metadata.width, metadata.height,
                  metadata.frameAgeMs, LogValue(source).c_str());
     } else {
-        LOG_ERROR("接口", format, captureId, captureId, previewId, plate, result,
-                  errorCode.c_str(), static_cast<unsigned long long>(durationMs),
+        LOG_ERROR("接口", format, plate, description, captureId, captureId,
+                  previewId, plate, result, errorCode.c_str(), resultCode,
+                  stageValue, LogValue(proxyError).c_str(),
+                  static_cast<unsigned long long>(durationMs),
                   LogValue(path).c_str(), bytes, metadata.width, metadata.height,
                   metadata.frameAgeMs, LogValue(source).c_str());
     }
@@ -2021,11 +2031,12 @@ static int SaveLatestPlateFrameBody(const char* savePath, int cameraType) {
     std::string requestId;
     const char* plateCode = "unknown";
     const char* plateName = "unknown";
+    std::string stage = "SdkState";
     LatestPlateFrameMetadata frameMetadata;
     auto finish = [&](int resultCode, size_t bytes) -> int {
         LogLatestPlateFrameOperation(resultCode, captureRequestId, requestId,
             plateName, normalizedSavePath, bytes, frameMetadata,
-            GetTickCount64() - startedAt);
+            GetTickCount64() - startedAt, stage.c_str());
         return resultCode;
     };
 
@@ -2033,14 +2044,13 @@ static int SaveLatestPlateFrameBody(const char* savePath, int cameraType) {
     if (!ctx.initialized)
         return finish(HZCYKJTHardWare_RET_NOT_INITIALIZED, 0);
     if (!savePath || !savePath[0]) {
-        LOG_ERROR("接口", "保存最新车牌帧失败：保存路径为空");
+        stage = "Validate";
         return finish(HZCYKJTHardWare_RET_INVALID_PARAM, 0);
     }
 
     PlatePreviewChannel channel;
     if (!TryGetPlatePreviewChannel(cameraType, channel)) {
-        LOG_ERROR("接口", "保存最新车牌帧失败：镜头类型无效，camera_type=%d",
-                  cameraType);
+        stage = "Validate";
         return finish(HZCYKJTHardWare_FRAME_INVALID_CAMERA, 0);
     }
 
@@ -2060,29 +2070,29 @@ static int SaveLatestPlateFrameBody(const char* savePath, int cameraType) {
             capability = DeviceCapability::PlateCJ;
             break;
     }
+    stage = "Capability";
     const int capabilityResult = RequireCapability(__FUNCTION__, capability);
     if (capabilityResult != HZCYKJTHardWare_RET_OK)
         return finish(capabilityResult, 0);
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "保存最新车牌帧被终端切换拦截：camera_type=%d", cameraType);
+        stage = "TerminalSwitch";
         return finish(HZCYKJTHardWare_RET_DEVICE_BUSY, 0);
     }
 
+    stage = "Validate";
     if (!PathHelper::NormalizeExternalTextToUtf8(
             savePath, GetThirdPartyInputEncoding(), normalizedSavePath) ||
         normalizedSavePath.empty()) {
-        LOG_ERROR("接口", "保存最新车牌帧失败：保存路径编码无效");
         return finish(HZCYKJTHardWare_RET_INVALID_PARAM, 0);
     }
 
+    stage = "PreviewState";
     std::string proxyUrl;
     {
         auto lock = ReadLock();
         const PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
         if (!plateState.running || plateState.request_id.empty()) {
-            LOG_WARN("接口", "保存最新车牌帧失败：车牌%s预览未运行",
-                     plateName);
             return finish(HZCYKJTHardWare_RET_PREVIEW_NOT_RUNNING, 0);
         }
         requestId = plateState.request_id;
@@ -2091,30 +2101,26 @@ static int SaveLatestPlateFrameBody(const char* savePath, int cameraType) {
     SetExportRequestId(requestId);
 
     if (proxyUrl.empty()) {
-        LOG_ERROR("接口", "保存最新车牌帧失败：C# Proxy地址为空，车牌%s，request_id=%s",
-                  plateName, requestId.c_str());
+        stage = "ProxyConfig";
         return finish(HZCYKJTHardWare_RET_HTTP_FAILED, 0);
     }
 
+    stage = "GetLatestFrame";
     DelphiProxy proxy(proxyUrl);
     std::vector<unsigned char> jpegData;
     if (!proxy.GetLatestPlateFrame(plateCode, requestId, jpegData, 5000,
                                    captureRequestId, &frameMetadata)) {
         const int proxyCode = proxy.LastResultCode();
-        LOG_ERROR("接口", "保存最新车牌帧失败：车牌%s，request_id=%s，返回码=%d",
-                  plateName, requestId.c_str(), proxyCode);
         const int resultCode = proxyCode == HZCYKJTHardWare_RET_OK
             ? HZCYKJTHardWare_RET_HTTP_FAILED : proxyCode;
         return finish(resultCode, jpegData.size());
     }
 
+    stage = "SaveFile";
     const int saveResult = ImageSaver::SaveJpegFileAtomic(
         normalizedSavePath, jpegData);
-    if (saveResult != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("接口", "保存最新车牌帧失败：车牌%s，path=%s，request_id=%s，返回码=%d",
-                  plateName, normalizedSavePath.c_str(), requestId.c_str(), saveResult);
+    if (saveResult != HZCYKJTHardWare_RET_OK)
         return finish(saveResult, jpegData.size());
-    }
 
     return finish(HZCYKJTHardWare_RET_OK, jpegData.size());
 }

@@ -324,14 +324,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         /// <summary>
         /// 读取 DLL 对应的外部车牌预览会话中的最新完整 JPEG。
-        /// 没有帧或缓存已过期时，只向同一播放器请求一次有界刷新，不创建新播放器。
+        /// 没有帧或缓存已过期时，只向同一播放器请求有界刷新；已有旧帧且首次
+        /// 刷新返回 frame_stale 时，最多再快速重试一次，不创建新播放器。
         /// </summary>
         internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
             string requestId, out LatestPlateFrameSnapshot snapshot,
             out string errorCode, out string errorMessage)
         {
             return TryGetLatestPlateFrame(resType, requestId, out snapshot,
-                out errorCode, out errorMessage, out _, out _);
+                out errorCode, out errorMessage, out _, out _, out _);
         }
 
         internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
@@ -339,11 +340,22 @@ namespace HZCYKJTHardWare.Proxy.Preview
             out string errorCode, out string errorMessage,
             out string source, out long frameAgeMs)
         {
+            return TryGetLatestPlateFrame(resType, requestId, out snapshot,
+                out errorCode, out errorMessage, out source, out frameAgeMs,
+                out _);
+        }
+
+        internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
+            string requestId, out LatestPlateFrameSnapshot snapshot,
+            out string errorCode, out string errorMessage,
+            out string source, out long frameAgeMs, out int retryCount)
+        {
             snapshot = null;
             errorCode = "frame_not_ready";
             errorMessage = "车牌视频尚未产生可用帧";
             source = "unknown";
             frameAgeMs = -1;
+            retryCount = 0;
 
             if (!IsPlateResource(resType))
             {
@@ -403,6 +415,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
                     VlcPreviewController.LatestPlateFrameMaxAgeMs,
                     out snapshot, out refreshedBySnapshot);
+                if (hasSnapshot &&
+                    !IsLatestPlateFrameSessionCurrent(key, session, vlc, requestId))
+                {
+                    snapshot = null;
+                    hasSnapshot = false;
+                }
                 if (hasSnapshot)
                     source = refreshedBySnapshot ? "OnDemandSnapshot" : "Cache";
             }
@@ -457,16 +475,63 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!IsLatestPlateFrameFresh(snapshot, DateTime.UtcNow))
             {
                 source = "OnDemandSnapshot";
+                var refreshStopwatch = Stopwatch.StartNew();
                 if (vlc.TryRefreshLatestFrame(
                     VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
                     VlcPreviewController.LatestPlateFrameMaxAgeMs,
                     out var refreshed, out var refreshedBySnapshot2) &&
-                    IsLatestPlateFrameFresh(refreshed, DateTime.UtcNow))
+                    IsLatestPlateFrameFresh(refreshed, DateTime.UtcNow) &&
+                    IsLatestPlateFrameSessionCurrent(key, session, vlc, requestId))
                 {
                     snapshot = refreshed;
                     source = refreshedBySnapshot2 ? "OnDemandSnapshot" : "Cache";
                     frameAgeMs = GetFrameAgeMs(snapshot);
                     return true;
+                }
+
+                // 仅对“已有合法旧帧但本次刷新未及时产出”的 frame_stale 做一次有限容错。
+                // 重试前后都重新确认同一 session/generation/player 仍有效，避免 Stop 或
+                // 终端切换后的旧请求把新会话的帧误返回给 DLL。
+                if (retryCount < VlcPreviewController.LatestPlateFrameMaxRetries &&
+                    vlc.LatestFrameFailure ==
+                        VlcPreviewController.LatestFrameFailureNotReady &&
+                    IsLatestPlateFrameSessionCurrent(key, session, vlc, requestId))
+                {
+                    var elapsedMs = (int)Math.Min(int.MaxValue,
+                        refreshStopwatch.ElapsedMilliseconds);
+                    var remainingMs = VlcPreviewController.LatestPlateFrameRetryBudgetMs -
+                        elapsedMs;
+                    if (remainingMs > 0)
+                    {
+                        Thread.Sleep(Math.Min(
+                            VlcPreviewController.LatestPlateFrameRetryDelayMs,
+                            remainingMs));
+
+                        if (IsLatestPlateFrameSessionCurrent(key, session, vlc, requestId))
+                        {
+                            retryCount = 1;
+                            elapsedMs = (int)Math.Min(int.MaxValue,
+                                refreshStopwatch.ElapsedMilliseconds);
+                            remainingMs = VlcPreviewController.LatestPlateFrameRetryBudgetMs -
+                                elapsedMs;
+                            if (remainingMs > 0 &&
+                                vlc.TryRefreshLatestFrame(
+                                    Math.Min(
+                                        VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
+                                        remainingMs),
+                                    VlcPreviewController.LatestPlateFrameMaxAgeMs,
+                                    out var retried, out var retriedBySnapshot) &&
+                                IsLatestPlateFrameFresh(retried, DateTime.UtcNow) &&
+                                IsLatestPlateFrameSessionCurrent(key, session, vlc, requestId))
+                            {
+                                snapshot = retried;
+                                source = retriedBySnapshot
+                                    ? "OnDemandSnapshot" : "Cache";
+                                frameAgeMs = GetFrameAgeMs(snapshot);
+                                return true;
+                            }
+                        }
+                    }
                 }
 
                 errorCode = "frame_stale";
@@ -485,6 +550,23 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 source = "Cache";
             frameAgeMs = GetFrameAgeMs(snapshot);
             return true;
+        }
+
+        private bool IsLatestPlateFrameSessionCurrent(string key,
+            PreviewSession expectedSession, VlcPreviewController expectedPlayer,
+            string requestId)
+        {
+            if (!_sessions.TryGetValue(key, out var currentSession) ||
+                currentSession == null ||
+                !ReferenceEquals(currentSession, expectedSession) ||
+                !ReferenceEquals(currentSession.Player, expectedPlayer))
+                return false;
+
+            return currentSession.Generation == expectedSession.Generation &&
+                   string.Equals(currentSession.RequestId, requestId,
+                       StringComparison.Ordinal) &&
+                   currentSession.IsRunning &&
+                   expectedPlayer.IsLatestFrameSourceRunning;
         }
 
         private static void LogLatestFrameLookupDiagnostic(
