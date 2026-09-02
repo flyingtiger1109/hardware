@@ -32,6 +32,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="_codex_build\**\*.cs" />
     <EmbeddedResource Remove="_codex_build\**\*" />
     <None Remove="_codex_build\**\*" />

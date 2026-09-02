@@ -324,7 +324,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         /// <summary>
         /// 读取 DLL 对应的外部车牌预览会话中的最新完整 JPEG。
-        /// 该方法只读取已缓存帧，不启动、重连或创建新的播放器。
+        /// 没有帧或缓存已过期时，只向同一播放器请求一次有界刷新，不创建新播放器。
         /// </summary>
         internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
             string requestId, out LatestPlateFrameSnapshot snapshot,
@@ -362,15 +362,29 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             var vlc = session.Player as VlcPreviewController;
-            if (vlc == null || !vlc.TryGetLatestFrame(out snapshot))
+            if (vlc == null)
             {
-                if (vlc != null && vlc.LatestFrameFailure ==
+                snapshot = null;
+                return false;
+            }
+
+            var hasSnapshot = vlc.TryGetLatestFrame(out snapshot);
+            if (!hasSnapshot && vlc.IsLatestFrameSourceRunning)
+            {
+                hasSnapshot = vlc.TryRefreshLatestFrame(
+                    VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
+                    out snapshot);
+            }
+
+            if (!hasSnapshot)
+            {
+                if (vlc.LatestFrameFailure ==
                     VlcPreviewController.LatestFrameFailureTooLarge)
                 {
                     errorCode = "frame_too_large";
                     errorMessage = "车牌视频JPEG超过8MB限制";
                 }
-                else if (vlc != null && vlc.LatestFrameFailure ==
+                else if (vlc.LatestFrameFailure ==
                     VlcPreviewController.LatestFrameFailureDataInvalid)
                 {
                     errorCode = "frame_data_invalid";
@@ -385,9 +399,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return false;
             }
 
-            var ageMs = (DateTime.UtcNow - snapshot.CapturedUtc).TotalMilliseconds;
-            if (!session.IsRunning || !vlc.IsLatestFrameSourceRunning || ageMs < 0 ||
-                ageMs > VlcPreviewController.LatestPlateFrameMaxAgeMs)
+            if (!session.IsRunning || !vlc.IsLatestFrameSourceRunning)
             {
                 errorCode = "frame_stale";
                 errorMessage = "车牌视频帧已过期或视频已断开";
@@ -395,7 +407,36 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return false;
             }
 
+            if (!IsLatestPlateFrameFresh(snapshot, DateTime.UtcNow))
+            {
+                if (vlc.TryRefreshLatestFrame(
+                    VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
+                    out var refreshed) &&
+                    IsLatestPlateFrameFresh(refreshed, DateTime.UtcNow))
+                {
+                    snapshot = refreshed;
+                    return true;
+                }
+
+                errorCode = "frame_stale";
+                errorMessage = "车牌视频帧已过期或视频已断开";
+                snapshot = null;
+                return false;
+            }
+
             return true;
+        }
+
+        internal static bool IsLatestPlateFrameFresh(
+            LatestPlateFrameSnapshot snapshot, DateTime nowUtc)
+        {
+            if (snapshot == null || snapshot.Jpeg == null || snapshot.Jpeg.Length == 0 ||
+                snapshot.Width <= 0 || snapshot.Height <= 0 ||
+                !string.Equals(snapshot.Format, "jpeg", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var ageMs = (nowUtc - snapshot.CapturedUtc).TotalMilliseconds;
+            return ageMs >= 0 && ageMs <= VlcPreviewController.LatestPlateFrameMaxAgeMs;
         }
 
         private static string PreviewUrlCacheKey(PreviewResourceType resType, string terminalBaseUrl)

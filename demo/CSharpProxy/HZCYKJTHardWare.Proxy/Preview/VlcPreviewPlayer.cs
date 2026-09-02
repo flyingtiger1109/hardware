@@ -94,6 +94,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
         /// </summary>
         internal bool TryTakeSnapshot(string path, int width = 0, int height = 0)
         {
+            int snapshotReturnCode;
+            return TryTakeSnapshot(path, width, height, out snapshotReturnCode);
+        }
+
+        internal bool TryTakeSnapshot(string path, int width, int height,
+            out int snapshotReturnCode)
+        {
+            snapshotReturnCode = -1;
             if (string.IsNullOrWhiteSpace(path) || _mediaPlayer == IntPtr.Zero ||
                 _fnVideoTakeSnapshot == null)
                 return false;
@@ -104,8 +112,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 pathPtr = Marshal.StringToHGlobalAnsi(path);
-                return _fnVideoTakeSnapshot(_mediaPlayer, 0, pathPtr,
-                    (uint)width, (uint)height) == 0;
+                snapshotReturnCode = _fnVideoTakeSnapshot(_mediaPlayer, 0, pathPtr,
+                    (uint)width, (uint)height);
+                return snapshotReturnCode == 0;
             }
             catch (Exception ex)
             {
@@ -117,6 +126,25 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (pathPtr != IntPtr.Zero)
                     Marshal.FreeHGlobal(pathPtr);
             }
+        }
+
+        internal static List<string> BuildLibVlcArguments(string pluginsPath)
+        {
+            var args = new List<string>
+            {
+                "--no-video-title-show",
+                "--no-xlib",
+                "--quiet",
+                "--no-plugins-cache",
+                // 禁止 libVLC 把 take_snapshot 的结果绘制到视频窗口左上角。
+                "--no-snapshot-preview",
+                // 作为 VLC 侧首选输出；读取端仍按 magic/decode 判定实际格式。
+                "--snapshot-format=jpg"
+            };
+
+            if (!string.IsNullOrWhiteSpace(pluginsPath) && Directory.Exists(pluginsPath))
+                args.Add("--plugin-path=" + pluginsPath);
+            return args;
         }
 
         /// <summary>读取 VLC 当前视频轨道的实际尺寸，读取不到时由调用方回退。</summary>
@@ -332,15 +360,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             try
             {
-                // 1）使用与 Delphi 完全一致的参数创建 VLC 实例
-                var args = new List<string>
-                {
-                    "--no-video-title-show", "--no-xlib", "--quiet", "--no-plugins-cache"
-                };
-
                 var pluginsPath = Path.Combine(_vlcDir ?? "", "plugins");
-                if (Directory.Exists(pluginsPath))
-                    args.Add("--plugin-path=" + pluginsPath);
+                // 1）创建实际执行车牌 take_snapshot 的 VLC 实例。
+                var args = BuildLibVlcArguments(pluginsPath);
 
                 var argPtrs = new IntPtr[args.Count];
                 for (int i = 0; i < args.Count; i++)

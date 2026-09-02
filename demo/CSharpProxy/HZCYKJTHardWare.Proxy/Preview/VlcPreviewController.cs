@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +14,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal const int LatestPlateFrameCaptureIntervalMs = 200;
         internal const int LatestPlateFrameMaxBytes = 8 * 1024 * 1024;
         internal const int LatestPlateFrameMaxAgeMs = 3000;
+        internal const int LatestPlateFrameSnapshotWaitMs = 300;
+        internal const int LatestPlateFrameRefreshTimeoutMs = 600;
         internal const int LatestFrameFailureNone = 0;
         internal const int LatestFrameFailureNotReady = 1;
         internal const int LatestFrameFailureDataInvalid = 2;
@@ -38,7 +41,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private readonly string _requestId;
         private readonly bool _captureLatestFrame;
         private readonly string _latestFrameTempPath;
-        private readonly object _latestFrameLock = new object();
+        private readonly LatestPlateFrameCache _latestFrameCache =
+            new LatestPlateFrameCache();
 
         private volatile bool _abandoned;
         private volatile bool _running;
@@ -50,12 +54,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _streamFaulted;
         private long _lastMediaTimeMs;
         private DateTime _lastMediaUpdateUtc;
-        private byte[] _latestJpeg;
-        private int _latestFrameWidth;
-        private int _latestFrameHeight;
-        private long _latestFrameSequence;
-        private DateTime _latestFrameCapturedUtc;
         private int _snapshotFailureCount;
+        private string _lastSnapshotFailureCode;
+        private int _snapshotRefreshRequested;
         private int _latestFrameFailure;
 
         private static int _createdThreadCount;
@@ -105,21 +106,42 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         internal bool TryGetLatestFrame(out LatestPlateFrameSnapshot snapshot)
         {
-            lock (_latestFrameLock)
+            return _latestFrameCache.TryGet(out snapshot);
+        }
+
+        /// <summary>
+        /// 对已过期或尚未产生帧的会话请求一次有界刷新，不创建新的播放器。
+        /// </summary>
+        internal bool TryRefreshLatestFrame(int timeoutMs,
+            out LatestPlateFrameSnapshot snapshot)
+        {
+            snapshot = null;
+            if (!IsLatestFrameSourceRunning)
+                return false;
+
+            long previousSequence = 0;
+            _latestFrameCache.TryGetSequence(out previousSequence);
+
+            Interlocked.Exchange(ref _snapshotRefreshRequested, 1);
+            var stopwatch = Stopwatch.StartNew();
+            var waitMs = Math.Max(1, timeoutMs);
+            while (!_stopRequested && stopwatch.ElapsedMilliseconds < waitMs)
             {
-                if (_latestJpeg == null || _latestJpeg.Length == 0)
+                if (_latestFrameCache.TryGetSequence(out var currentSequence) &&
+                    currentSequence > previousSequence &&
+                    TryGetLatestFrame(out var current))
                 {
-                    snapshot = null;
-                    return false;
+                    snapshot = current;
+                    return true;
                 }
 
-                var copy = new byte[_latestJpeg.Length];
-                Buffer.BlockCopy(_latestJpeg, 0, copy, 0, _latestJpeg.Length);
-                snapshot = new LatestPlateFrameSnapshot(
-                    copy, _latestFrameWidth, _latestFrameHeight,
-                    _latestFrameSequence, _latestFrameCapturedUtc);
-                return true;
+                Thread.Sleep(Math.Min(10,
+                    Math.Max(1, waitMs - (int)stopwatch.ElapsedMilliseconds)));
             }
+
+            return _latestFrameCache.TryGetSequence(out var finalSequence) &&
+                   finalSequence > previousSequence &&
+                   TryGetLatestFrame(out snapshot);
         }
 
         internal void SetStreamFaultHandler(Action<VlcPreviewController, string> handler)
@@ -226,7 +248,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastMediaUpdateUtc = DateTime.UtcNow;
 
                 var nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
-                var nextSnapshotUtc = DateTime.UtcNow;
+                var nextSnapshotUtc = DateTime.UtcNow.AddMilliseconds(
+                    LatestPlateFrameCaptureIntervalMs);
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
@@ -236,7 +259,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         _player.ApplyCoverLayout();
                         nextLayoutRefreshUtc = nowUtc.AddMilliseconds(LayoutRefreshIntervalMs);
                     }
-                    if (_captureLatestFrame && nowUtc >= nextSnapshotUtc && !_stopRequested)
+                    var refreshRequested = Interlocked.Exchange(
+                        ref _snapshotRefreshRequested, 0) != 0;
+                    if (_captureLatestFrame && !_stopRequested &&
+                        (nowUtc >= nextSnapshotUtc || refreshRequested))
                     {
                         CaptureLatestFrame();
                         nextSnapshotUtc = DateTime.UtcNow.AddMilliseconds(
@@ -277,113 +303,191 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 string.IsNullOrWhiteSpace(_latestFrameTempPath))
             {
                 SetLatestFrameFailure(LatestFrameFailureNotReady);
+                RecordSnapshotFailure("player_not_ready", "VLC播放器尚未就绪");
                 return;
             }
 
+            var playerState = -1;
+            var snapshotReturnCode = -1;
+            var fileBytes = 0L;
+            var detectedFormat = "unknown";
+            var videoWidth = 0;
+            var videoHeight = 0;
             try
             {
                 if (File.Exists(_latestFrameTempPath))
                     File.Delete(_latestFrameTempPath);
 
-                var hasVideoSize = player.TryGetVideoSize(out var videoWidth,
-                    out var videoHeight);
-                if (!player.TryTakeSnapshot(_latestFrameTempPath,
-                    hasVideoSize ? videoWidth : 0,
-                    hasVideoSize ? videoHeight : 0))
+                playerState = player.MediaState;
+                if (playerState != LibvlcPlaying)
                 {
                     SetLatestFrameFailure(LatestFrameFailureNotReady);
-                    RecordSnapshotFailure("libVLC未返回快照");
+                    RecordSnapshotFailure("player_not_playing",
+                        "VLC视频尚未进入Playing状态", playerState,
+                        snapshotReturnCode, detectedFormat, fileBytes,
+                        videoWidth, videoHeight);
                     return;
                 }
 
-                if (!TryReadSnapshotFile(_latestFrameTempPath, out var jpeg))
+                if (!player.TryGetVideoSize(out videoWidth, out videoHeight))
+                {
+                    SetLatestFrameFailure(LatestFrameFailureNotReady);
+                    RecordSnapshotFailure("video_track_not_ready",
+                        "VLC视频轨道尺寸尚未可用", playerState,
+                        snapshotReturnCode, detectedFormat, fileBytes,
+                        videoWidth, videoHeight);
                     return;
+                }
 
-                if (!JpegFrameValidator.TryGetDimensions(jpeg, out var width, out var height))
+                if (!player.TryTakeSnapshot(_latestFrameTempPath, videoWidth,
+                    videoHeight, out snapshotReturnCode))
+                {
+                    SetLatestFrameFailure(LatestFrameFailureNotReady);
+                    RecordSnapshotFailure("snapshot_call_failed",
+                        "libVLC未返回快照", playerState, snapshotReturnCode,
+                        detectedFormat, fileBytes, videoWidth, videoHeight);
+                    return;
+                }
+
+                if (!TryReadSnapshotFile(_latestFrameTempPath, out var rawSnapshot,
+                    out fileBytes, out var fileFailureReason))
+                {
+                    SetLatestFrameFailure(fileFailureReason == "snapshot_file_too_large"
+                        ? LatestFrameFailureTooLarge : LatestFrameFailureNotReady);
+                    RecordSnapshotFailure(fileFailureReason,
+                        "快照文件未在限定时间内稳定可读", playerState,
+                        snapshotReturnCode, detectedFormat, fileBytes,
+                        videoWidth, videoHeight);
+                    return;
+                }
+
+                if (!SnapshotImageNormalizer.TryNormalizeToJpeg(rawSnapshot,
+                    out var jpeg, out detectedFormat, out var width,
+                    out var height, out var normalizeFailureReason))
                 {
                     SetLatestFrameFailure(LatestFrameFailureDataInvalid);
-                    RecordSnapshotFailure("快照不是有效JPEG或缺少实际尺寸");
+                    RecordSnapshotFailure(normalizeFailureReason ?? "snapshot_data_invalid",
+                        "快照无法解码为有效JPEG", playerState,
+                        snapshotReturnCode, detectedFormat, fileBytes,
+                        width, height);
                     return;
                 }
 
-                lock (_latestFrameLock)
+                if (jpeg.Length > LatestPlateFrameMaxBytes)
                 {
-                    if (_stopRequested)
-                        return;
-                    _latestJpeg = jpeg;
-                    _latestFrameWidth = width;
-                    _latestFrameHeight = height;
-                    _latestFrameSequence++;
-                    _latestFrameCapturedUtc = DateTime.UtcNow;
+                    SetLatestFrameFailure(LatestFrameFailureTooLarge);
+                    RecordSnapshotFailure("snapshot_jpeg_too_large",
+                        "规范化后的JPEG超过8MB限制", playerState,
+                        snapshotReturnCode, detectedFormat, jpeg.Length,
+                        width, height);
+                    return;
                 }
+
+                if (_stopRequested)
+                    return;
+                _latestFrameCache.Publish(jpeg, width, height, "jpeg", DateTime.UtcNow);
                 SetLatestFrameFailure(LatestFrameFailureNone);
 
                 var previousFailures = Interlocked.Exchange(ref _snapshotFailureCount, 0);
+                var previousFailureCode = _lastSnapshotFailureCode;
+                _lastSnapshotFailureCode = null;
                 if (previousFailures > 0)
-                    Logger.Info($"VLC车牌最新帧已恢复：{_description}，尺寸={width}x{height}");
+                {
+                    Logger.Info($"VLC车牌最新帧已恢复：{_description}，尺寸={width}x{height}，" +
+                                $"DetectedFormat={detectedFormat}，上次故障={previousFailureCode}");
+                }
             }
             catch (Exception ex)
             {
                 SetLatestFrameFailure(LatestFrameFailureNotReady);
-                RecordSnapshotFailure(ex.Message);
+                RecordSnapshotFailure("snapshot_exception", ex.Message, playerState,
+                    snapshotReturnCode, detectedFormat, fileBytes,
+                    videoWidth, videoHeight);
             }
         }
 
-        private bool TryReadSnapshotFile(string path, out byte[] jpeg)
+        private bool TryReadSnapshotFile(string path, out byte[] data,
+            out long fileBytes, out string failureReason)
         {
-            jpeg = null;
-            var fileInfo = new FileInfo(path);
-            if (!fileInfo.Exists || fileInfo.Length <= 0)
+            return SnapshotFileReader.TryReadStable(path, LatestPlateFrameMaxBytes,
+                LatestPlateFrameSnapshotWaitMs, () => _stopRequested, out data,
+                out fileBytes, out failureReason);
+        }
+
+        private void RecordSnapshotFailure(string failureCode, string reason,
+            int playerState = -1, int snapshotReturnCode = -1,
+            string detectedFormat = "unknown", long fileBytes = 0,
+            int width = 0, int height = 0)
+        {
+            if (!string.Equals(_lastSnapshotFailureCode, failureCode,
+                StringComparison.Ordinal))
             {
-                SetLatestFrameFailure(LatestFrameFailureNotReady);
-                RecordSnapshotFailure("快照文件为空");
-                return false;
-            }
-            if (fileInfo.Length > LatestPlateFrameMaxBytes || fileInfo.Length > int.MaxValue)
-            {
-                SetLatestFrameFailure(LatestFrameFailureTooLarge);
-                RecordSnapshotFailure("快照文件超过8MB限制");
-                return false;
+                _lastSnapshotFailureCode = failureCode;
+                Interlocked.Exchange(ref _snapshotFailureCount, 0);
             }
 
-            var buffer = new byte[(int)fileInfo.Length];
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete))
+            var count = Interlocked.Increment(ref _snapshotFailureCount);
+            var message = BuildSnapshotFailureMessage(failureCode, reason, count,
+                playerState, snapshotReturnCode, detectedFormat, fileBytes,
+                width, height);
+            if (count == 1)
             {
-                var offset = 0;
-                while (offset < buffer.Length)
+                Logger.Warn(message);
+            }
+            else
+            {
+                Logger.TryLogRateLimited(
+                    "VlcPlateSnapshot|debug|" + _description + "|" + failureCode,
+                    LogModules.Preview, "调试", message);
+                if (count % 50 == 0)
                 {
-                    var read = stream.Read(buffer, offset, buffer.Length - offset);
-                    if (read <= 0)
-                    {
-                        SetLatestFrameFailure(LatestFrameFailureNotReady);
-                        RecordSnapshotFailure("快照文件读取不完整");
-                        return false;
-                    }
-                    offset += read;
+                    Logger.TryLogRateLimited(
+                        "VlcPlateSnapshot|aggregate|" + _description + "|" + failureCode,
+                        LogModules.Preview, "警告", message);
                 }
             }
-
-            jpeg = buffer;
-            return true;
         }
 
-        private void RecordSnapshotFailure(string reason)
+        private string BuildSnapshotFailureMessage(string failureCode, string reason,
+            int count, int playerState, int snapshotReturnCode,
+            string detectedFormat, long fileBytes, int width, int height)
         {
-            var count = Interlocked.Increment(ref _snapshotFailureCount);
-            if (count == 1 || count % 50 == 0)
-                Logger.Warn($"VLC车牌最新帧获取失败：{_description}，次数={count}，原因={reason}");
+            return $"VLC车牌最新帧获取失败：Plate={GetPlateCodeForLog()}，" +
+                   $"RequestId={_requestId ?? "<无>"}，资源={_description}，" +
+                   $"Failure={failureCode}，PlayerState={playerState}，" +
+                   $"SnapshotRet={snapshotReturnCode}，DetectedFormat={detectedFormat ?? "unknown"}，" +
+                   $"FileBytes={fileBytes}，Width={width}，Height={height}，" +
+                   $"LastGoodFrameAgeMs={GetLastGoodFrameAgeMs()}，次数={count}，原因={reason}";
+        }
+
+        private long GetLastGoodFrameAgeMs()
+        {
+            if (!_latestFrameCache.TryGetCapturedUtc(out var capturedUtc))
+                return -1;
+
+            var ageMs = (DateTime.UtcNow - capturedUtc).TotalMilliseconds;
+            return ageMs < 0 ? 0 : (long)ageMs;
+        }
+
+        private string GetPlateCodeForLog()
+        {
+            if (_description != null && _description.IndexOf("RJ2",
+                StringComparison.OrdinalIgnoreCase) >= 0)
+                return "RJ2";
+            if (_description != null && _description.IndexOf("RJ3",
+                StringComparison.OrdinalIgnoreCase) >= 0)
+                return "RJ3";
+            if (_description != null && _description.IndexOf("CJ",
+                StringComparison.OrdinalIgnoreCase) >= 0)
+                return "CJ";
+            return "unknown";
         }
 
         private void ClearLatestFrame()
         {
-            lock (_latestFrameLock)
-            {
-                _latestJpeg = null;
-                _latestFrameWidth = 0;
-                _latestFrameHeight = 0;
-                _latestFrameCapturedUtc = default(DateTime);
-            }
+            _latestFrameCache.Clear();
+            Interlocked.Exchange(ref _snapshotRefreshRequested, 0);
+            _lastSnapshotFailureCode = null;
             SetLatestFrameFailure(LatestFrameFailureNone);
         }
 

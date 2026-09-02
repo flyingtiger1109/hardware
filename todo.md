@@ -1931,3 +1931,44 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 - [ ] 在 Windows 10 x64 现场完成第三方 Delphi7、真实终端、真实 EXE/DLL 日志与上述异常/恢复场景验证。
 - [ ] 完成 2 小时/24 小时长稳，确认 INFO/WARN/ERROR 数量、Recovery Episode、generation、句柄/线程/队列和磁盘治理结果。
 - [ ] 单独处理 `HttpListener` 测试宿主、ProductVersion 断言和既有路由断言，不混入 Task L8。
+
+## 车牌视频最新帧抓拍修复（2026-09-02）
+
+### 问题与根因
+
+- [x] 已确认调用链：Native `HZCYKJTHardWare_SaveLatestPlateFrame` → `SaveLatestPlateFrameBody` → `DelphiProxy.GetLatestPlateFrame` → C# `/preview/plate/{cj|rj2|rj3}/latest-frame` → `DllCommandHandler` → `PreviewManager.TryGetLatestPlateFrame` → `VlcPreviewController.CaptureLatestFrame` → `VlcPreviewPlayer.TryTakeSnapshot`。
+- [x] 实际车牌 LibVLC 实例缺少 `--no-snapshot-preview`；本地 LibVLC 3.0.23 包含将快照预览显示到视频窗口左上角的功能，且车牌外部预览直接使用第三方 HWND。
+- [x] 本地 LibVLC 3.0.23 默认快照格式为 PNG；原代码只按 JPEG SOI/EOI/SOF 校验，导致有效 PNG 被映射为 `frame_data_invalid`，Native 保持既有 `-33`。
+- [x] 原代码在 `take_snapshot` 后立即单次读取文件，并在 `Play` 返回后未等待 `Playing`、视频轨道和实际宽高，存在空文件、半写文件和首帧未就绪竞态。
+
+### 本次修改
+
+- [x] `VlcPreviewPlayer` 的实际 `libvlc_new` 参数加入 `--no-snapshot-preview` 和 `--snapshot-format=jpg`；读取端仍按 magic/decode 判断，不依赖扩展名。
+- [x] 新增实际格式识别、GDI+ 解码和统一 JPEG 编码；新增稳定文件读取（创建、大小/写入时间连续稳定、完整读取后再次确认）。
+- [x] `VlcPreviewController` 在 `Playing` 且视频宽高大于 0 后才抓帧；保持 200ms 周期；失败不清空 LastGoodFrame；增加同一播放器的一次有界主动刷新。
+- [x] `LatestPlateFrameCache` 对发布/读取复制字节并带有格式、宽高、序号、时间戳；日志按首次 WARN、后续限频 DEBUG、持续故障聚合 WARN 输出 `Plate/RequestId/PlayerState/SnapshotRet/DetectedFormat/FileBytes/Width/Height/LastGoodFrameAgeMs`。
+- [x] 新增 PNG、真实 JPEG、半写文件、实际尺寸、LastGoodFrame、过期判断和 CJ/RJ2/RJ3 路由测试。
+
+### 涉及文件与兼容性
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/LatestPlateFrame.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewPlayer.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewController.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/LatestPlateFrameTests.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/HZCYKJTHardWare.Proxy.Tests.csproj`
+- 未修改 Native 导出、参数、调用约定、结构体、错误码、`.def`、Delphi 代码、第三方 HWND 所有权和终端协议。
+
+### 验证状态
+
+- [x] Native `Release|Win32/x86` 编译：0 警告、0 错误；`dumpbin` 确认 `HZCYKJTHardWare_SaveLatestPlateFrame` 仍为 `_...@8`，车牌开始/停止导出仍存在。
+- [x] C# Proxy `Release|x64` 编译：0 警告、0 错误；PE machine 为 `x64`。
+- [x] 车牌快照专项 VSTest：10/10 通过。
+- [x] `git diff --check`：无空白错误。
+- [ ] 真实 Windows 10/11 + Delphi7 x86 + 真实终端现场验证、CJ/RJ2/RJ3 连续 100 次抓拍、启动/停止/重启、HWND 生命周期、30 分钟/2 小时长稳：待现场执行。
+- [ ] 全量测试仍有 12 项基线/环境失败：10 项 `HttpListener` 平台不支持，1 项 ProductVersion 期望值不一致，1 项既有回调路由时序断言失败；未归因于本次快照修复。
+
+### 后续方案
+
+- [ ] 现场确认固定快照方案 A 的 CPU、GDI 句柄、临时文件残留和实际帧延迟指标。
+- [ ] 如固定快照长期资源开销不达标，再评估方案 B（按需内存快照）或方案 C（SDK 帧回调）；本轮不改变现有对外 ABI。
