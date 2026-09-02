@@ -1972,3 +1972,46 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 
 - [ ] 现场确认固定快照方案 A 的 CPU、GDI 句柄、临时文件残留和实际帧延迟指标。
 - [ ] 如固定快照长期资源开销不达标，再评估方案 B（按需内存快照）或方案 C（SDK 帧回调）；本轮不改变现有对外 ABI。
+
+## 车牌最新帧 not_found/-6 回归调查与最小修复（2026-09-02）
+
+### 问题与根因
+
+- [x] 已确认现场 `not_found` 的原始返回位置是 `DllCommandHandler.HandleAsync` 的普通路由 `default` 分支；该响应消息为空，与现场日志一致。
+- [x] 已确认 `DelphiProxy.MapLatestPlateFrameErrorCode("not_found")` 按既有兼容规则映射为 `HZCYKJTHardWare_RET_HTTP_FAILED = -6`。
+- [x] 已确认当前源码的 CJ/cj、RJ2/rj2、RJ3/rj3 均先进入枚举资源，再使用一致的 `Plate*_External` Session Key，不存在大小写字符串 Dictionary Key 回归。
+- [x] 已确认上一提交 `b8ce0b75` 未删除 LatestFrame Producer；200ms 周期 Snapshot、稳定文件读取、JPEG/PNG 规范化及 LastGoodFrame 仍在运行链路中。
+- [x] 高概率根因：现场运行了旧的或错误目录下的 C# Proxy 输出；当前 x64 Release 包含 `latest-frame` 路由，而旧 `bin\Release\net46` 等产物不包含该路由。非规范 Request-Target 需通过新诊断日志进一步区分。
+
+### 本次最小修改
+
+- [x] `DllCommandHandler` 在最新帧入口统一规范化大小写、查询串、首尾空格、绝对 URI、编码字符和尾斜杠；能力判断使用规范化后的 canonical path。
+- [x] `ProxyServer` 增加一次性 `LatestFrameDiagnostic` 路由未命中日志，区分 `RouteDispatch=generic` 与二进制专用路由。
+- [x] `PreviewManager` 对 Session、RequestId、Player、LastGoodFrame、Producer、帧有效性、年龄、Generation 和 Cache Key 增加限频结构化 Lookup 诊断；不改变既有 Proxy ErrorCode 或 Native 负错误码。
+- [x] 增补 CJ/RJ2/RJ3 大小写、查询串、绝对 URI、编码路径和尾斜杠路由测试。
+
+### 涉及文件与兼容性
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/LatestPlateFrameTests.cs`
+- Native DLL 导出名、参数数量/顺序/类型、`extern "C"`、`__stdcall`、结构体、callback ABI、第三方 HWND 所有权和错误码均未修改。
+
+### 验证状态
+
+- [x] Native `Release|Win32/x86` 编译：0 警告、0 错误；PE machine 为 x86。
+- [x] C# Proxy `Release|x64` 编译：0 警告、0 错误；PE machine 为 x64。
+- [x] C# Demo 实际目标架构 `Release|x86` 编译：0 警告、0 错误。
+- [x] Native DLL `dumpbin /exports`：`HZCYKJTHardWare_SaveLatestPlateFrame = _HZCYKJTHardWare_SaveLatestPlateFrame@8`，CJ/RJ2/RJ3 开始/停止导出均存在，ABI 未变化。
+- [x] 测试工程 `Release|x64` 编译：0 错误；出现 1 个 `NU1900` 网络漏洞源检查警告，不影响本地编译和测试执行。
+- [x] 车牌最新帧专项 VSTest：10/10 通过。
+- [x] 全量 C# Proxy 测试执行：159/161 通过；2 项既有基线失败（ProductVersion 期望值、切换后回调时序），未归因于本次修改。
+- [x] `git diff --check`：无空白错误；仅有工作区 LF/CRLF 提示。
+- [ ] CJ/RJ2/RJ3 真实终端抓帧、连续 100 次、Stop/Restart、并行隔离及左上角 Snapshot Preview 回归：待现场执行。
+
+### 回退与后续
+
+- 回退方式：回退本节涉及的 4 个源文件到修改前版本；不需要改动 DLL ABI 或现场数据。
+- 现场部署必须停止旧 Proxy 进程，使用 `Release|x64` 输出和统一配置端口 `8089`，再重新启动验证。
+- 后续仅在实机指标不足时评估 200ms Snapshot、LastGoodFrame 和纯内存帧缓存优化；本次不扩大预览系统重构范围。

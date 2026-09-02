@@ -165,16 +165,26 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
-        public void LatestPlateFrameRoutes_AreRecognizedWithoutQueryString()
+        public void LatestPlateFrameRoutes_NormalizePlateCaseAndRequestTarget()
         {
             Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
                 "/preview/plate/cj/latest-frame?trace=1"));
             Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
+                "/preview/plate/CJ/latest-frame"));
+            Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
+                "  /preview/plate/Cj/latest-frame/?trace=1  "));
+            Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
                 "/preview/plate/rj2/latest-frame"));
             Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
+                "http://127.0.0.1:8089/preview/plate/RJ2/latest-frame"));
+            Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
                 "/preview/plate/rj3/latest-frame"));
+            Assert.IsTrue(DllCommandHandler.IsLatestPlateFramePath(
+                "/preview/plate/RJ3/latest%2Dframe"));
             Assert.IsFalse(DllCommandHandler.IsLatestPlateFramePath(
                 "/preview/plate/cj/start"));
+            Assert.IsFalse(DllCommandHandler.IsLatestPlateFramePath(
+                "/preview/plate/unknown/latest-frame"));
         }
 
         private static byte[] CreateImageBytes(ImageFormat format)

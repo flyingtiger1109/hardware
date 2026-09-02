@@ -244,12 +244,57 @@ namespace HZCYKJTHardWare.Proxy.Server
                 out _, out _);
         }
 
+        /// <summary>
+        /// 判断请求是否看起来像最新车牌帧路由但没有通过规范化匹配。
+        /// 仅用于诊断，不能把未知 Plate 路由误当成有效路由。
+        /// </summary>
+        internal static bool IsLatestPlateFrameCandidatePath(string path)
+        {
+            var normalizedPath = NormalizeLatestPlateFramePath(path);
+            return normalizedPath.IndexOf("/preview/plate/",
+                       StringComparison.OrdinalIgnoreCase) >= 0 &&
+                   normalizedPath.IndexOf("/latest-frame",
+                       StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// 在最新帧入口统一处理 Request-Target 的常见变体。
+        /// Native 正常发送的是 origin-form 小写路径；这里额外兼容大小写、查询串、
+        /// 首尾空格、绝对 URI 和单个尾斜杠，避免路由分派与业务处理使用不同约定。
+        /// </summary>
+        internal static string NormalizeLatestPlateFramePath(string path)
+        {
+            var normalizedPath = (path ?? string.Empty).Trim();
+            var queryIndex = normalizedPath.IndexOf('?');
+            if (queryIndex >= 0)
+                normalizedPath = normalizedPath.Substring(0, queryIndex);
+
+            if (normalizedPath.IndexOf("://", StringComparison.Ordinal) >= 0 &&
+                Uri.TryCreate(normalizedPath, UriKind.Absolute, out var absoluteUri))
+            {
+                normalizedPath = absoluteUri.AbsolutePath;
+            }
+
+            try
+            {
+                normalizedPath = Uri.UnescapeDataString(normalizedPath);
+            }
+            catch (UriFormatException)
+            {
+                // 保留原始值，让后续严格路由匹配自然失败。
+            }
+
+            return normalizedPath.Length > 1
+                ? normalizedPath.TrimEnd('/')
+                : normalizedPath;
+        }
+
         private static bool TryGetLatestPlateFrameRoute(string path,
             out PreviewResourceType resourceType, out string plateCode)
         {
             resourceType = default(PreviewResourceType);
             plateCode = null;
-            var normalizedPath = (path ?? string.Empty).Split('?')[0];
+            var normalizedPath = NormalizeLatestPlateFramePath(path);
             switch (normalizedPath.ToLowerInvariant())
             {
                 case "/preview/plate/cj/latest-frame":
@@ -288,14 +333,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return BuildLatestPlateFrameError("not_found", "未知车牌最新帧路由");
             }
 
+            var canonicalPath = "/preview/plate/" + plateCode + "/latest-frame";
+
             if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
                 return BuildLatestPlateFrameError("invalid_method", "最新车牌帧接口只支持POST");
 
-            if (_capabilities.TryGetRequiredCapability(path, out var required) &&
+            if (_capabilities.TryGetRequiredCapability(canonicalPath, out var required) &&
                 !_capabilities.IsSupported(required))
             {
                 return DllBinaryResponse.Json(
-                    _capabilities.BuildNotSupportedResult(path, required));
+                    _capabilities.BuildNotSupportedResult(canonicalPath, required));
             }
 
             var request = ParsedJsonBody.Parse(bodyUtf8);

@@ -338,12 +338,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 errorCode = "invalid_camera";
                 errorMessage = "不是车牌镜头资源";
+                LogLatestFrameLookupDiagnostic(resType, requestId, "<not-created>",
+                    "PlateLookup", errorCode, false, false, false, false,
+                    false, -1, -1, "not_plate", false);
                 return false;
             }
             if (string.IsNullOrWhiteSpace(requestId))
             {
                 errorCode = "invalid_request_id";
                 errorMessage = "request_id为空";
+                LogLatestFrameLookupDiagnostic(resType, requestId, "<not-created>",
+                    "RequestIdValidation", errorCode, false, false, false, false,
+                    false, -1, -1, "unknown", false);
                 return false;
             }
 
@@ -352,12 +358,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 errorCode = "preview_not_running";
                 errorMessage = "对应车牌预览未运行";
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "SessionLookup", errorCode, false, false, false, false,
+                    false, -1, -1, "missing", false);
                 return false;
             }
             if (!string.Equals(session.RequestId, requestId, StringComparison.Ordinal))
             {
                 errorCode = "preview_not_running";
                 errorMessage = "车牌预览请求已变更或已停止";
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "RequestIdLookup", errorCode, true, false, false, false,
+                    false, -1, session.Generation, "request_id_mismatch", false);
                 return false;
             }
 
@@ -365,6 +377,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (vlc == null)
             {
                 snapshot = null;
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "PlayerLookup", errorCode, true, true, false, false,
+                    false, -1, session.Generation, "not_vlc", false);
                 return false;
             }
 
@@ -395,6 +410,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     errorCode = "frame_not_ready";
                     errorMessage = "车牌视频尚未产生完整JPEG帧";
                 }
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "LatestFrameLookup", errorCode, true, true, true,
+                    hasSnapshot, IsFrameStructurallyValid(snapshot),
+                    GetFrameAgeMs(snapshot), session.Generation,
+                    vlc.IsRunning ? "running" : "stopped",
+                    vlc.IsLatestFrameSourceRunning);
                 snapshot = null;
                 return false;
             }
@@ -403,6 +424,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 errorCode = "frame_stale";
                 errorMessage = "车牌视频帧已过期或视频已断开";
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "ProducerState", errorCode, true, true, true, true,
+                    IsFrameStructurallyValid(snapshot), GetFrameAgeMs(snapshot),
+                    session.Generation, vlc.IsRunning ? "running" : "stopped",
+                    vlc.IsLatestFrameSourceRunning);
                 snapshot = null;
                 return false;
             }
@@ -420,11 +446,71 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 errorCode = "frame_stale";
                 errorMessage = "车牌视频帧已过期或视频已断开";
+                LogLatestFrameLookupDiagnostic(resType, requestId, key,
+                    "FreshnessValidation", errorCode, true, true, true, true,
+                    IsFrameStructurallyValid(snapshot), GetFrameAgeMs(snapshot),
+                    session.Generation, vlc.IsRunning ? "running" : "stopped",
+                    vlc.IsLatestFrameSourceRunning);
                 snapshot = null;
                 return false;
             }
 
             return true;
+        }
+
+        private static void LogLatestFrameLookupDiagnostic(
+            PreviewResourceType resType, string requestId, string cacheKey,
+            string stage, string errorCode, bool sessionFound,
+            bool requestIdMatched, bool frameStateFound, bool lastGoodFrameFound,
+            bool frameValid, long frameAgeMs, long generation,
+            string playerState, bool producerStatus)
+        {
+            var plateCode = PlateCodeForLatestFrame(resType);
+            Logger.TryLogRateLimited(
+                "LatestFrameLookup|" + resType + "|" + errorCode,
+                LogModules.PlateCapture, "警告",
+                "LatestFrameDiagnostic " +
+                "RouteMatched=true RouteDispatch=binary " +
+                $"PlateInput={plateCode.ToLowerInvariant()} " +
+                $"NormalizedPlate={plateCode} " +
+                $"RequestId={FormatRequestId(requestId)} " +
+                $"SessionFound={sessionFound.ToString().ToLowerInvariant()} " +
+                $"RequestIdMatched={requestIdMatched.ToString().ToLowerInvariant()} " +
+                $"FrameStateFound={frameStateFound.ToString().ToLowerInvariant()} " +
+                $"LastGoodFrameFound={lastGoodFrameFound.ToString().ToLowerInvariant()} " +
+                $"FrameValid={frameValid.ToString().ToLowerInvariant()} " +
+                $"FrameAgeMs={frameAgeMs} Generation={generation} " +
+                $"PlayerState={playerState} CacheKey={cacheKey} " +
+                $"ProducerStatus={producerStatus.ToString().ToLowerInvariant()} " +
+                $"Stage={stage} Error={errorCode}");
+        }
+
+        private static string PlateCodeForLatestFrame(PreviewResourceType resType)
+        {
+            switch (resType)
+            {
+                case PreviewResourceType.PlateCJ: return "CJ";
+                case PreviewResourceType.PlateRJ2: return "RJ2";
+                case PreviewResourceType.PlateRJ3: return "RJ3";
+                default: return "unknown";
+            }
+        }
+
+        private static bool IsFrameStructurallyValid(LatestPlateFrameSnapshot snapshot)
+        {
+            return snapshot != null && snapshot.Jpeg != null &&
+                   snapshot.Jpeg.Length > 0 && snapshot.Width > 0 &&
+                   snapshot.Height > 0 &&
+                   string.Equals(snapshot.Format, "jpeg",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static long GetFrameAgeMs(LatestPlateFrameSnapshot snapshot)
+        {
+            if (snapshot == null)
+                return -1;
+            var ageMs = (DateTime.UtcNow - snapshot.CapturedUtc).TotalMilliseconds;
+            return ageMs < 0 ? 0 : (long)ageMs;
         }
 
         internal static bool IsLatestPlateFrameFresh(

@@ -59,6 +59,7 @@ namespace HZCYKJTHardWare.Proxy.Server
         private int _started;
         private int _stopped;
         private int _disposed;
+        private int _latestFrameRouteDiagnosticLogged;
 
         public string LanIp => _lanIp;
         public QueueManager QueueManager => _queueManager;
@@ -400,7 +401,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                             $" BodyChars={(body ?? "").Length}"));
                     }
 
-                    if (DllCommandHandler.IsLatestPlateFramePath(requestPath))
+                    var isLatestPlateFramePath =
+                        DllCommandHandler.IsLatestPlateFramePath(requestPath);
+                    if (isLatestPlateFramePath)
                     {
                         var binaryResponse = await _commandHandler
                             .HandleLatestPlateFrameAsync(method, path, body)
@@ -430,6 +433,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         return;
                     }
 
+                    LogLatestFrameRouteMissIfNeeded(requestPath, requestLogId);
                     var result = await _commandHandler.HandleAsync(method, path, body);
                     await WriteHttpResponseWithDeadlineAsync(client, stream, 200,
                         result, 2000).ConfigureAwait(false);
@@ -471,6 +475,25 @@ namespace HZCYKJTHardWare.Proxy.Server
                         $"耗时={requestSw.ElapsedMilliseconds}毫秒"), ex);
                 }
             }
+        }
+
+        private void LogLatestFrameRouteMissIfNeeded(string path, string requestId)
+        {
+            if (!DllCommandHandler.IsLatestPlateFrameCandidatePath(path) ||
+                Interlocked.Exchange(ref _latestFrameRouteDiagnosticLogged, 1) != 0)
+                return;
+
+            var normalizedPath = DllCommandHandler.NormalizeLatestPlateFramePath(path);
+            _log(Logger.FormatModuleMessage(LogModules.PlateCapture, "警告",
+                "LatestFrameDiagnostic " +
+                "RouteMatched=false RouteDispatch=generic " +
+                $"RawPath={JsonHelper.ToLogValue(path)} " +
+                $"NormalizedPath={JsonHelper.ToLogValue(normalizedPath)} " +
+                "PlateInput=unknown NormalizedPlate=unknown " +
+                $"RequestId={requestId} SessionFound=unknown FrameStateFound=unknown " +
+                "LastGoodFrameFound=unknown FrameValid=unknown FrameAgeMs=-1 " +
+                "Generation=unknown PlayerState=unknown CacheKey=unknown " +
+                "ProducerStatus=unknown Stage=RouteDispatch"));
         }
 
         private static bool IsSuccessfulPingResponse(string result)
