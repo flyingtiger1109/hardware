@@ -125,10 +125,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         public void KnownOperationInLegacyInterfaceMessage_UsesConcreteModule()
         {
             var message = Logger.NormalizeForDisplay(
-                "[接口][信息] Operation=HZCYKJTHardWare_CaptureCameraImage RequestId=REQ-1 Result=Success");
+                "[接口][调试] Operation=HZCYKJTHardWare_CaptureCameraImage RequestId=REQ-1 Result=Success");
 
             Assert.AreEqual(
-                "[人脸抓拍][信息] Operation=CaptureFace RequestId=REQ-1 Result=Success",
+                "[人脸抓拍][调试] Operation=CaptureFace RequestId=REQ-1 Result=Success",
                 message);
         }
 
@@ -167,13 +167,119 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             foreach (var item in cases)
             {
                 var message = Logger.NormalizeForDisplay(
-                    "[接口][信息] Operation=" + item[0] +
+                    "[接口][调试] Operation=" + item[0] +
                     " RequestId=REQ-MAP Result=Success");
-                var expected = "[" + item[1] + "][信息] Operation=" +
+                var expected = "[" + item[1] + "][调试] Operation=" +
                     Logger.CanonicalOperationName(item[0]) +
                     " RequestId=REQ-MAP Result=Success";
                 Assert.AreEqual(expected, message, item[0]);
             }
+        }
+
+        [TestMethod]
+        public void ProductionInfo_OnlyKeepsChineseResultAndRequestId()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[接口][信息] 人脸图片抓拍成功：Operation=CaptureFace " +
+                "RequestId=FACE-1 Result=Success ErrorCode=none DurationMs=18 " +
+                "Stage=SaveFile Bytes=123 Width=640 Height=480 FrameAgeMs=2 Source=Cache");
+
+            Assert.AreEqual(
+                "[人脸抓拍][信息] 人脸图片抓拍成功：RequestId=FACE-1",
+                message);
+            Assert.IsFalse(message.Contains("Operation="));
+            Assert.IsFalse(message.Contains("Result=Success"));
+            Assert.IsFalse(message.Contains("ErrorCode=none"));
+            Assert.IsFalse(message.Contains("DurationMs="));
+            Assert.IsFalse(message.Contains("Stage="));
+            Assert.IsFalse(message.Contains("Bytes="));
+            Assert.IsFalse(message.Contains("Width="));
+            Assert.IsFalse(message.Contains("Height="));
+            Assert.IsFalse(message.Contains("FrameAgeMs="));
+            Assert.IsFalse(message.Contains("Source="));
+        }
+
+        [TestMethod]
+        public void ProductionFailure_OnlyKeepsRequestIdAndErrorCode()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[预览][错误] 摄像头预览启动失败：Operation=StartCameraPreview " +
+                "RequestId=PREVIEW-1 Result=Failed ErrorCode=12029 DurationMs=2000 " +
+                "Stage=StartPlayer StackTrace=hidden");
+
+            Assert.AreEqual(
+                "[预览][错误] 摄像头预览启动失败：RequestId=PREVIEW-1 ErrorCode=12029",
+                message);
+            Assert.IsFalse(message.Contains("DurationMs="));
+            Assert.IsFalse(message.Contains("Stage="));
+            Assert.IsFalse(message.Contains("StackTrace="));
+        }
+
+        [TestMethod]
+        public void DebugRetainsTechnicalFieldsAndCanonicalOperation()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[接口][调试] Operation=HZCYKJTHardWare_SaveLatestPlateFrame " +
+                "RequestId=CAP-1 CaptureRequestId=CAP-1 PreviewRequestId=PRE-1 " +
+                "Result=Success ErrorCode=none DurationMs=32 Stage=GetLatestFrame " +
+                "Bytes=2048 Width=1920 Height=1080 FrameAgeMs=20 Source=Cache");
+
+            StringAssert.Contains(message, "[车牌抓帧][调试]");
+            StringAssert.Contains(message, "Operation=SaveLatestPlateFrame");
+            StringAssert.Contains(message, "CaptureRequestId=CAP-1");
+            StringAssert.Contains(message, "PreviewRequestId=PRE-1");
+            StringAssert.Contains(message, "DurationMs=32");
+            StringAssert.Contains(message, "Stage=GetLatestFrame");
+            StringAssert.Contains(message, "Bytes=2048");
+            StringAssert.Contains(message, "Width=1920");
+            StringAssert.Contains(message, "Height=1080");
+            StringAssert.Contains(message, "FrameAgeMs=20");
+            StringAssert.Contains(message, "Source=Cache");
+        }
+
+        [TestMethod]
+        public void ProductionInfo_DoesNotDuplicateCaptureRequestId()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[车牌抓帧][信息] 车牌CJ图片保存成功：Operation=SaveLatestPlateFrame " +
+                "RequestId=CAP-1 CaptureRequestId=CAP-1 PreviewRequestId=PRE-1 " +
+                "Result=Success DurationMs=32");
+
+            Assert.AreEqual(
+                "[车牌抓帧][信息] 车牌CJ图片保存成功：RequestId=CAP-1",
+                message);
+            Assert.AreEqual(1, CountOccurrences(message, "RequestId=CAP-1"));
+            Assert.IsFalse(message.Contains("CaptureRequestId="));
+            Assert.IsFalse(message.Contains("PreviewRequestId="));
+        }
+
+        [TestMethod]
+        public void RecoveryAggregateRetainsEpisodeCountDurationAndErrorCode()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[预览][错误] 摄像头预览恢复失败：Operation=RecoverCameraPreview " +
+                "RequestId=PRE-1 RecoveryEpisodeId=7 Attempts=5 Result=Failed " +
+                "ErrorCode=recovery_exhausted DurationMs=12000");
+
+            StringAssert.Contains(message, "RecoveryEpisodeId=7");
+            StringAssert.Contains(message, "Attempts=5");
+            StringAssert.Contains(message, "ErrorCode=recovery_exhausted");
+            StringAssert.Contains(message, "DurationMs=12000");
+        }
+
+        [TestMethod]
+        public void TelemetryMessage_RetainsLongRunFields()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[日志管理][信息] 长稳遥测：Telemetry PrivateBytes=128 " +
+                "WorkingSet=256 Threads=12 Handles=88 LogQueue=3");
+
+            StringAssert.Contains(message, "Telemetry");
+            StringAssert.Contains(message, "PrivateBytes=128");
+            StringAssert.Contains(message, "WorkingSet=256");
+            StringAssert.Contains(message, "Threads=12");
+            StringAssert.Contains(message, "Handles=88");
+            StringAssert.Contains(message, "LogQueue=3");
         }
 
         [TestMethod]

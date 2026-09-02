@@ -240,7 +240,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 .ConfigureAwait(false);
             if (!workerStarted)
             {
-                Logger.Warn($"HTTP MJPEG工作线程启动超时：{description}，超时={timeoutMs}ms");
+                Logger.Debug($"HTTP MJPEG工作线程启动超时：{description}，超时={timeoutMs}ms");
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
                 return null;
             }
@@ -317,7 +317,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             await PauseAsync(Math.Min(1000, Math.Max(1, timeoutMs))).ConfigureAwait(false);
-            Logger.Warn($"HTTP MJPEG预览启动超时：{_description}，超时={timeoutMs}ms，地址={Logger.SanitizeUrlForLog(url)}");
+            Logger.Debug($"HTTP MJPEG预览启动超时：{_description}，超时={timeoutMs}ms，地址={Logger.SanitizeUrlForLog(url)}");
             return false;
         }
 
@@ -359,7 +359,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed == pause.Task)
                 return true;
 
-            Logger.Warn($"HTTP MJPEG工作线程暂停超时：{_description}，超时={timeoutMs}ms");
+            Logger.Debug($"HTTP MJPEG工作线程暂停超时：{_description}，超时={timeoutMs}ms");
             return false;
         }
 
@@ -373,7 +373,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 .ConfigureAwait(false);
             if (completed != allExited)
             {
-                Logger.Warn($"HTTP MJPEG工作线程停止超时：{_description}，超时={timeoutMs}ms，" +
+                Logger.Debug($"HTTP MJPEG工作线程停止超时：{_description}，超时={timeoutMs}ms，" +
                             $"渲染线程已退出={_renderExitTcs.Task.IsCompleted}，读取线程已退出={_readerExitTcs.Task.IsCompleted}");
                 ScheduleDeferredCleanup();
                 return;
@@ -408,7 +408,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"HTTP MJPEG资源延迟释放失败：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"HTTP MJPEG资源延迟释放失败：{_description}，错误={ex}");
             }
         }
 
@@ -438,7 +438,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"HTTP MJPEG预览线程异常：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"HTTP MJPEG预览线程异常：{_description}，错误={ex}");
                 _workerStartTcs.TrySetResult(false);
             }
             finally
@@ -460,7 +460,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd))
             {
-                Logger.Error($"HTTP MJPEG预览父HWND无效：{_description}，" +
+                Logger.Debug($"HTTP MJPEG预览父HWND无效：{_description}，" +
                              $"HWND={PreviewManager.FormatHwnd(parentHwnd)}");
                 return false;
             }
@@ -486,7 +486,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 0, 0, 1, 1, parentHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
             if (_videoHwnd == IntPtr.Zero)
             {
-                Logger.Error($"HTTP MJPEG预览创建子窗口失败：{_description}");
+                Logger.Debug($"HTTP MJPEG预览创建子窗口失败：{_description}");
                 return false;
             }
 
@@ -507,7 +507,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG预览窗口销毁失败：{_description}，错误={ex.Message}");
+                Logger.Debug($"HTTP MJPEG预览窗口销毁失败：{_description}，错误={ex.Message}");
             }
             finally
             {
@@ -696,7 +696,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"HTTP MJPEG故障回调失败：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"HTTP MJPEG故障回调失败：{_description}，错误={ex}");
             }
         }
 
@@ -1041,7 +1041,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"HTTP MJPEG填充布局应用失败：{_description}，错误={ex.Message}");
+                Logger.Debug($"HTTP MJPEG填充布局应用失败：{_description}，错误={ex.Message}");
             }
         }
 

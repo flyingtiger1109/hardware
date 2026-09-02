@@ -72,6 +72,19 @@ struct EventTerminalContext {
     std::string terminal_base_url;
 };
 
+static const char* OperationForResource(const std::string& resourceType) {
+    if (resourceType == HZCYKJTHardWare_RESOURCE_FACE_IMAGE) return "CaptureFace";
+    if (resourceType == HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE) {
+        return "CaptureFingerprint";
+    }
+    if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) return "CaptureIris";
+    if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) return "RequestOCR";
+    if (resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD) return "RequestNfcCard";
+    if (resourceType == HZCYKJTHardWare_RESOURCE_AUTHORIZATION) return "Authorize";
+    if (resourceType == HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) return "PreviewReady";
+    return "RegisterEventCallback";
+}
+
 static EventTerminalContext ResolveEventTerminalContext(
     const std::string& requestId) {
     EventTerminalContext result;
@@ -470,14 +483,25 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
                 if (isError) {
+                    LOG_ERROR("事件分发",
+                              "OCR识别失败：Operation=RequestOCR RequestId=%s "
+                              "Result=Failed ErrorCode=%s",
+                              requestId.c_str(),
+                              LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+                    LOG_DEBUG("事件分发", "OCR回调失败技术字段：RequestId=%s，消息=%s，%s",
+                              requestId.c_str(), LogValue(errorMsg).c_str(),
+                              SanitizeLargePayloadForLog(body, requestId).c_str());
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_OCR_FAILED,
                               HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                               nullptr, body.c_str());
                 } else {
                     std::string mrz = JsonHelper::GetString(body, "mrz");
                     std::string savePath = JsonHelper::GetString(body, "save_path");
-                    LOG_INFO("事件分发", "OCR回调完成：request_id=%s，MRZ=%s",
-                             requestId.c_str(), mrz.c_str());
+                    LOG_INFO("事件分发",
+                             "OCR识别完成：Operation=RequestOCR RequestId=%s Result=Success",
+                             requestId.c_str());
+                    LOG_DEBUG("事件分发", "OCR回调技术字段：RequestId=%s，MRZ=%s",
+                              requestId.c_str(), LogValue(mrz).c_str());
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
                               HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
                               savePath.empty() ? nullptr : savePath.c_str(), body.c_str(),
@@ -489,6 +513,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD) {
                 if (isError) {
+                    LOG_ERROR("NFC",
+                              "IC卡读取失败：Operation=RequestNfcCard RequestId=%s "
+                              "Result=Failed ErrorCode=%s",
+                              requestId.c_str(),
+                              LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+                    LOG_DEBUG("NFC", "IC卡回调失败技术字段：RequestId=%s，消息=%s，%s",
+                              requestId.c_str(), LogValue(errorMsg).c_str(),
+                              SanitizeLargePayloadForLog(body, requestId).c_str());
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                               HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                               nullptr, body.c_str());
@@ -498,12 +530,21 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
                         cardText = JsonHelper::GetString(body, "ic_number");
                     }
                     if (cardText.empty()) {
+                        LOG_ERROR("NFC",
+                                  "IC卡读取失败：Operation=RequestNfcCard RequestId=%s "
+                                  "Result=Failed ErrorCode=card_text_missing",
+                                  requestId.c_str());
+                        LOG_DEBUG("NFC", "IC卡回调技术字段：RequestId=%s，%s",
+                                  requestId.c_str(), SanitizeLargePayloadForLog(body, requestId).c_str());
                         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "",
                                   "IC卡回调缺少card_text", nullptr, body.c_str());
                     } else {
-                        LOG_INFO("NFC", "IC卡回调完成：request_id=%s，卡号=%s",
-                                 requestId.c_str(), cardText.c_str());
+                        LOG_INFO("NFC",
+                                 "IC卡读取完成：Operation=RequestNfcCard RequestId=%s Result=Success",
+                                 requestId.c_str());
+                        LOG_DEBUG("NFC", "IC卡回调技术字段：RequestId=%s，卡号=%s",
+                                  requestId.c_str(), LogValue(cardText).c_str());
                         SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
                                   HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(),
                                   cardText.c_str());
@@ -515,6 +556,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
             if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
                 if (isError) {
+                    LOG_ERROR("事件分发",
+                              "虹膜抓拍失败：Operation=CaptureIris RequestId=%s "
+                              "Result=Failed ErrorCode=%s",
+                              requestId.c_str(),
+                              LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+                    LOG_DEBUG("事件分发", "虹膜回调失败技术字段：RequestId=%s，消息=%s，%s",
+                              requestId.c_str(), LogValue(errorMsg).c_str(),
+                              SanitizeLargePayloadForLog(body, requestId).c_str());
                     SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                               HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                               nullptr, body.c_str());
@@ -549,6 +598,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
 
     if (resourceType == HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT) {
         if (isError) {
+            LOG_ERROR("事件分发",
+                      "OCR识别失败：Operation=RequestOCR RequestId=%s "
+                      "Result=Failed ErrorCode=%s",
+                      requestId.c_str(),
+                      LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+            LOG_DEBUG("事件分发", "OCR回调失败技术字段：RequestId=%s，消息=%s，%s",
+                      requestId.c_str(), LogValue(errorMsg).c_str(),
+                      SanitizeLargePayloadForLog(body, requestId).c_str());
             SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_OCR_FAILED,
                       HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                       nullptr, body.c_str());
@@ -557,6 +614,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         }
     } else if (resourceType == HZCYKJTHardWare_RESOURCE_IRIS_IMAGE) {
         if (isError) {
+            LOG_ERROR("事件分发",
+                      "虹膜抓拍失败：Operation=CaptureIris RequestId=%s "
+                      "Result=Failed ErrorCode=%s",
+                      requestId.c_str(),
+                      LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+            LOG_DEBUG("事件分发", "虹膜回调失败技术字段：RequestId=%s，消息=%s，%s",
+                      requestId.c_str(), LogValue(errorMsg).c_str(),
+                      SanitizeLargePayloadForLog(body, requestId).c_str());
             SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                       HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                       nullptr, body.c_str());
@@ -565,6 +630,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         }
     } else if (resourceType == HZCYKJTHardWare_RESOURCE_NFC_CARD) {
         if (isError) {
+            LOG_ERROR("NFC",
+                      "IC卡读取失败：Operation=RequestNfcCard RequestId=%s "
+                      "Result=Failed ErrorCode=%s",
+                      requestId.c_str(),
+                      LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+            LOG_DEBUG("NFC", "IC卡回调失败技术字段：RequestId=%s，消息=%s，%s",
+                      requestId.c_str(), LogValue(errorMsg).c_str(),
+                      SanitizeLargePayloadForLog(body, requestId).c_str());
             SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                       HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                       nullptr, body.c_str());
@@ -573,6 +646,14 @@ void EventDispatcher::ProcessCallback(const CallbackData& cbData) {
         }
     } else if (resourceType == HZCYKJTHardWare_RESOURCE_AUTHORIZATION) {
         if (isError) {
+            LOG_ERROR("授权",
+                      "授权处理失败：Operation=Authorize RequestId=%s "
+                      "Result=Failed ErrorCode=%s",
+                      requestId.c_str(),
+                      LogValue(errorCode.empty() ? "terminal_error" : errorCode).c_str());
+            LOG_DEBUG("授权", "授权回调失败技术字段：RequestId=%s，消息=%s，%s",
+                      requestId.c_str(), LogValue(errorMsg).c_str(),
+                      SanitizeLargePayloadForLog(body, requestId).c_str());
             SendEvent(requestId, resourceType, HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
                       HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
                       nullptr, body.c_str());
@@ -694,6 +775,10 @@ void EventDispatcher::ProcessFaceCallback(const std::string& requestId,
                                            const RequestSession& session) {
     auto faceResult = ResultParser::ParseFaceResult(body);
     if (!faceResult.valid) {
+        LOG_ERROR("事件分发",
+                  "人脸抓拍失败：Operation=CaptureFace RequestId=%s "
+                  "Result=Failed ErrorCode=parse_json_failed",
+                  requestId.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FACE_IMAGE, HZCYKJTHardWare_EVENT_FACE_CAPTURE_FAILED,
                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "人脸抓拍结果解析失败");
         return;
@@ -721,7 +806,12 @@ void EventDispatcher::ProcessFaceCallback(const std::string& requestId,
     int saveRet = ImageSaver::SaveBase64Image(savePath, "face_capture", faceResult.image_base64,
                                                mimeType, fullPath);
     if (saveRet != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("事件分发", "人脸回调处理失败：保存图片失败，request_id=%s，path=%s", requestId.c_str(), fullPath.c_str());
+        LOG_ERROR("事件分发",
+                  "人脸图片保存失败：Operation=CaptureFace RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), saveRet);
+        LOG_DEBUG("事件分发", "人脸图片保存技术字段：RequestId=%s，path=%s",
+                  requestId.c_str(), LogValue(fullPath).c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FACE_IMAGE, HZCYKJTHardWare_EVENT_FACE_CAPTURE_FAILED,
                   HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "人脸图片保存失败");
         return;
@@ -736,6 +826,10 @@ void EventDispatcher::ProcessFingerprintCallback(const std::string& requestId,
                                                   const RequestSession& session) {
     auto fpResult = ResultParser::ParseFingerprintResult(body);
     if (!fpResult.valid) {
+        LOG_ERROR("事件分发",
+                  "指纹抓拍失败：Operation=CaptureFingerprint RequestId=%s "
+                  "Result=Failed ErrorCode=parse_json_failed",
+                  requestId.c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE, HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_FAILED,
                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "指纹抓拍结果解析失败");
         return;
@@ -758,6 +852,10 @@ void EventDispatcher::ProcessFingerprintCallback(const std::string& requestId,
     int saveRet = ImageSaver::SaveBase64Image(savePath, "fingerprint_capture", fpResult.image_base64,
                                                mimeType, fullPath);
     if (saveRet != HZCYKJTHardWare_RET_OK) {
+        LOG_ERROR("事件分发",
+                  "指纹图片保存失败：Operation=CaptureFingerprint RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), saveRet);
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE, HZCYKJTHardWare_EVENT_FINGERPRINT_CAPTURE_FAILED,
                   HZCYKJTHardWare_RET_SAVE_FILE_FAILED, "", "指纹图片保存失败");
         return;
@@ -776,13 +874,16 @@ void EventDispatcher::ProcessOcrCallback(const std::string& requestId,
         savePath = session.save_dir;
     }
 
-    LOG_INFO("事件分发", "OCR回调完成：request_id=%s，MRZ=%s",
-             requestId.c_str(), mrz.c_str());
+    LOG_INFO("事件分发",
+             "OCR识别完成：Operation=RequestOCR RequestId=%s Result=Success",
+             requestId.c_str());
+    LOG_DEBUG("事件分发", "OCR回调技术字段：RequestId=%s，MRZ=%s",
+              requestId.c_str(), LogValue(mrz).c_str());
     const OcrIdCardFields idCard = ParseOcrIdCardFields(body);
     if (idCard.present) {
-        LOG_INFO("事件分发",
-                 "OCR ID卡鉴伪：request_id=%s，authen_score=%d，optical_check_result=%d",
-                 requestId.c_str(), idCard.authen_score, idCard.optical_check_result);
+        LOG_DEBUG("事件分发",
+                  "OCR ID卡鉴伪技术字段：RequestId=%s，authen_score=%d，optical_check_result=%d",
+                  requestId.c_str(), idCard.authen_score, idCard.optical_check_result);
     }
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "OCR识别完成",
@@ -876,7 +977,9 @@ void EventDispatcher::ProcessIrisCallback(const std::string& requestId,
         savePath = session.save_dir;
     }
 
-    LOG_INFO("事件分发", "虹膜回调完成");
+    LOG_INFO("事件分发",
+             "虹膜抓拍完成：Operation=CaptureIris RequestId=%s Result=Success",
+             requestId.c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "虹膜抓拍成功",
               savePath.c_str(), body.c_str());
@@ -950,7 +1053,11 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         cardText = JsonHelper::GetString(body, "ic_number");
     }
     if (cardText.empty()) {
-        LOG_ERROR("NFC", "硬件控制程序IC卡回调缺少card_text：request_id=%s，%s",
+        LOG_ERROR("NFC",
+                  "IC卡读取失败：Operation=RequestNfcCard RequestId=%s "
+                  "Result=Failed ErrorCode=card_text_missing",
+                  requestId.c_str());
+        LOG_DEBUG("NFC", "IC卡读取技术字段：RequestId=%s，%s",
                   requestId.c_str(), SanitizeLargePayloadForLog(body, requestId).c_str());
         SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                   HZCYKJTHardWare_RET_PARSE_JSON_FAILED, "", "IC卡回调缺少card_text",
@@ -958,8 +1065,11 @@ void EventDispatcher::ProcessNfcCardCallback(const std::string& requestId,
         return;
     }
 
-    LOG_INFO("NFC", "IC卡回调完成：request_id=%s，卡号=%s",
-             requestId.c_str(), cardText.c_str());
+    LOG_INFO("NFC",
+             "IC卡读取完成：Operation=RequestNfcCard RequestId=%s Result=Success",
+             requestId.c_str());
+    LOG_DEBUG("NFC", "IC卡回调技术字段：RequestId=%s，卡号=%s",
+              requestId.c_str(), LogValue(cardText).c_str());
     SendEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_SUCCESS,
               HZCYKJTHardWare_RET_OK, "", "", nullptr, body.c_str(), cardText.c_str());
 }
@@ -1009,8 +1119,13 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
         } else if (resourceType == HZCYKJTHardWare_RESOURCE_PLATE_IMAGE) {
             failedEventType = HZCYKJTHardWare_EVENT_PLATE_PREVIEW_FAILED;
         }
-        LOG_ERROR("事件分发", "硬件控制程序异步预览启动失败：request_id=%s，resource=%s，code=%s，msg=%s",
-                  requestId.c_str(), resourceType.c_str(), errorCode.c_str(), errorMsg.c_str());
+        LOG_ERROR("事件分发",
+                  "预览启动失败：Operation=PreviewReady RequestId=%s "
+                  "Result=Failed ErrorCode=%s",
+                  requestId.c_str(), errorCode.empty() ? "preview_failed" : errorCode.c_str());
+        LOG_DEBUG("事件分发", "预览启动失败技术字段：RequestId=%s，resource=%s，msg=%s",
+                  requestId.c_str(), LogValue(resourceType).c_str(),
+                  LogValue(errorMsg).c_str());
         ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_FAILED, errorCode.c_str(), errorMsg.c_str(),
@@ -1060,7 +1175,11 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     HWND thirdPartyWindow = reinterpret_cast<HWND>(thirdPartyHwndValue);
 
     if (renderHwnd == 0 || !IsWindow(renderWindow)) {
-        LOG_ERROR("事件分发", "硬件控制程序预览就绪回调处理失败：render_hwnd无效，request_id=%s，render_hwnd=%p",
+        LOG_ERROR("事件分发",
+                  "预览启动失败：Operation=PreviewReady RequestId=%s "
+                  "Result=Failed ErrorCode=invalid_render_hwnd",
+                  requestId.c_str());
+        LOG_DEBUG("事件分发", "预览启动失败技术字段：RequestId=%s，render_hwnd=%p",
                   requestId.c_str(), renderWindow);
         ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
@@ -1070,7 +1189,11 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     }
 
     if (thirdPartyHwndValue == 0 || !IsWindow(thirdPartyWindow)) {
-        LOG_ERROR("事件分发", "硬件控制程序预览就绪回调处理失败：第三方HWND无效，request_id=%s，third_party_hwnd=%p，render_hwnd=%p",
+        LOG_ERROR("事件分发",
+                  "预览启动失败：Operation=PreviewReady RequestId=%s "
+                  "Result=Failed ErrorCode=invalid_target_hwnd",
+                  requestId.c_str());
+        LOG_DEBUG("事件分发", "预览启动失败技术字段：RequestId=%s，third_party_hwnd=%p，render_hwnd=%p",
                   requestId.c_str(), thirdPartyWindow, renderWindow);
         ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
@@ -1080,8 +1203,13 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     }
 
     if (renderWindow != thirdPartyWindow) {
-        LOG_ERROR("事件分发", "硬件控制程序预览渲染目标不一致：request_id=%s，resource=%s，third_party_hwnd=%p，render_hwnd=%p",
-                  requestId.c_str(), resourceType.c_str(), thirdPartyWindow, renderWindow);
+        LOG_ERROR("事件分发",
+                  "预览启动失败：Operation=PreviewReady RequestId=%s "
+                  "Result=Failed ErrorCode=render_target_mismatch",
+                  requestId.c_str());
+        LOG_DEBUG("事件分发", "预览启动失败技术字段：RequestId=%s，resource=%s，third_party_hwnd=%p，render_hwnd=%p",
+                  requestId.c_str(), LogValue(resourceType).c_str(),
+                  thirdPartyWindow, renderWindow);
         ClearExternalPreviewLeaseOnFailure(resourceType, requestId);
         SendEvent(requestId, resourceType, failedEventType,
                   HZCYKJTHardWare_RET_PREVIEW_RENDER_FAILED, "", "预览渲染窗口与传入窗口不一致",
@@ -1089,8 +1217,12 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
         return;
     }
 
-    LOG_INFO("事件分发", "预览已启动：request_id=%s，资源=%s，third_party_hwnd=%p，render_hwnd=%p",
-             requestId.c_str(), resourceType.c_str(), thirdPartyWindow, renderWindow);
+    LOG_INFO("事件分发",
+             "预览已启动：Operation=PreviewReady RequestId=%s Result=Success",
+             requestId.c_str());
+    LOG_DEBUG("事件分发", "预览启动技术字段：RequestId=%s，resource=%s，third_party_hwnd=%p，render_hwnd=%p",
+              requestId.c_str(), LogValue(resourceType).c_str(),
+              thirdPartyWindow, renderWindow);
     SendEvent(requestId, resourceType, startedEventType,
               HZCYKJTHardWare_RET_OK, "", "预览已就绪",
               nullptr, body.c_str());
@@ -1297,12 +1429,23 @@ LOG_DEBUG("事件分发", "第三方回调分发线程已启动");
                     json += "}";
                     if (SafeInvokeThirdPartyCallback(cb, json.c_str())) {
                         LOG_INFO("事件分发",
-                                 "已回调第三方：event=%d，request_id=%s，resource=%s，status=%d",
-                                 event.event_type, strs.request_id.c_str(),
-                                 strs.resource_type.c_str(), event.status);
+                                 "第三方回调已投递：Operation=%s RequestId=%s Result=Success",
+                                 OperationForResource(strs.resource_type),
+                                 strs.request_id.c_str());
+                        LOG_DEBUG("事件分发",
+                                  "第三方回调技术字段：RequestId=%s，event=%d，resource=%s，status=%d",
+                                  strs.request_id.c_str(), event.event_type,
+                                  LogValue(strs.resource_type).c_str(), event.status);
                     } else {
-                        LOG_ERROR("事件分发", "第三方事件回调执行异常，已保护：event=%d，request_id=%s",
-                                  event.event_type, strs.request_id.c_str());
+                        LOG_ERROR("事件分发",
+                                  "第三方回调失败：Operation=%s RequestId=%s "
+                                  "Result=Failed ErrorCode=callback_exception",
+                                  OperationForResource(strs.resource_type),
+                                  strs.request_id.c_str());
+                        LOG_DEBUG("事件分发",
+                                  "第三方回调失败技术字段：RequestId=%s，event=%d，resource=%s，status=%d",
+                                  strs.request_id.c_str(), event.event_type,
+                                  LogValue(strs.resource_type).c_str(), event.status);
                     }
                 } else {
                     LOG_DEBUG("事件分发", "第三方事件回调未注册：event=%d request_id=%s",
@@ -1328,15 +1471,27 @@ void EventDispatcher::ProcessAuthorizeCallback(const std::string& requestId,
     if (message.empty()) {
         message = (authResult == 1) ? "授权通过" : "授权未通过";
     }
-    LOG_INFO("授权", "DLL收到EXE授权回调：请求ID=%s，授权结果=%d，消息=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
-             requestId.c_str(), authResult, LogValue(message).c_str(),
-             LogValue(JsonHelper::GetString(body, "ZJHM")).c_str(),
-             LogValue(JsonHelper::GetString(body, "ZJLB")).c_str(),
-             LogValue(JsonHelper::GetString(body, "GJDQDM")).c_str(),
-             LogValue(JsonHelper::GetString(body, "XM")).c_str(),
-             LogValue(JsonHelper::GetString(body, "XB")).c_str(),
-             LogValue(JsonHelper::GetString(body, "CSRQ")).c_str(),
-             LogValue(JsonHelper::GetString(body, "KADM")).c_str());
+    if (authResult == 1) {
+        LOG_INFO("授权",
+                 "授权处理完成：Operation=Authorize RequestId=%s Result=Success",
+                 requestId.c_str());
+    } else {
+        LOG_ERROR("授权",
+                  "授权处理失败：Operation=Authorize RequestId=%s "
+                  "Result=Failed ErrorCode=authorize_failed",
+                  requestId.c_str());
+    }
+    LOG_DEBUG("授权", "授权回调技术字段：RequestId=%s，授权结果=%d，消息=%s，"
+              "证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，"
+              "出生日期=%s，口岸代码=%s",
+              requestId.c_str(), authResult, LogValue(message).c_str(),
+              LogValue(JsonHelper::GetString(body, "ZJHM")).c_str(),
+              LogValue(JsonHelper::GetString(body, "ZJLB")).c_str(),
+              LogValue(JsonHelper::GetString(body, "GJDQDM")).c_str(),
+              LogValue(JsonHelper::GetString(body, "XM")).c_str(),
+              LogValue(JsonHelper::GetString(body, "XB")).c_str(),
+              LogValue(JsonHelper::GetString(body, "CSRQ")).c_str(),
+              LogValue(JsonHelper::GetString(body, "KADM")).c_str());
 
     // 构建基础事件
     const EventTerminalContext terminalContext =

@@ -1420,7 +1420,10 @@ static int SwitchTerminalBody(int terminalIndex) {
 
     SwitchPendingScope switchScope(ctx.switch_pending);
     if (!switchScope.acquired) {
-        LOG_WARN("接口", "终端切换请求被拒绝：已有切换正在执行，terminal_index=%d", terminalIndex);
+        LOG_WARN("接口",
+                 "终端切换失败：Operation=SwitchTerminal RequestId=%s "
+                 "Result=Failed ErrorCode=%d",
+                 requestId.c_str(), HZCYKJTHardWare_RET_DEVICE_BUSY);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
@@ -1440,8 +1443,10 @@ static int SwitchTerminalBody(int terminalIndex) {
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.SwitchTerminal(terminalIndex, requestId)) {
-        LOG_ERROR("接口", "终端切换失败：DLL转发硬件控制程序失败，terminal_index=%d，request_id=%s",
-                  terminalIndex, requestId.c_str());
+        LOG_ERROR("接口",
+                  "终端切换失败：Operation=SwitchTerminal RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1594,7 +1599,9 @@ static int StartCameraPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.camera_preview_running) {
-            LOG_WARN("接口", "启动摄像头预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口",
+                     "启动摄像头预览失败：Operation=StartCameraPreview "
+                     "RequestId=%s Result=Failed ErrorCode=preview_already_running",
                      ctx.camera_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -1606,7 +1613,10 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "摄像头预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "摄像头预览启动失败：Operation=StartCameraPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -1616,7 +1626,10 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "摄像头预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "摄像头预览启动失败：Operation=StartCameraPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
@@ -1627,15 +1640,18 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartCameraPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("接口", "启动摄像头预览失败：向硬件控制程序下发外部渲染请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
+        const int failureCode = ProxyFailureCode(proxy);
+        LOG_ERROR("接口",
+                  "启动摄像头预览失败：Operation=StartCameraPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), failureCode);
         auto lock = WriteLock();
         if (ctx.camera_preview_request_id == requestId) {
             ctx.camera_preview_running = false;
             ctx.camera_preview_request_id.clear();
             ctx.camera_preview_third_party_hwnd = 0;
         }
-        return ProxyFailureCode(proxy);
+        return failureCode;
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
@@ -1664,8 +1680,10 @@ static int StopCameraPreviewBody() {
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopCameraPreview(requestId)) {
-        LOG_ERROR("接口", "停止摄像头预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
+        LOG_ERROR("接口",
+                  "停止摄像头预览失败：Operation=StopCameraPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1703,7 +1721,9 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_running) {
-            LOG_WARN("接口", "启动指纹预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口",
+                     "启动指纹预览失败：Operation=StartFingerprintPreview "
+                     "RequestId=%s Result=Failed ErrorCode=preview_already_running",
                      ctx.fingerprint_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -1715,7 +1735,10 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "指纹预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "指纹预览启动失败：Operation=StartFingerprintPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1725,7 +1748,10 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "指纹预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "指纹预览启动失败：Operation=StartFingerprintPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1736,7 +1762,10 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StartFingerprintPreview(requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("接口", "启动指纹预览失败：向硬件控制程序下发外部渲染请求失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口",
+                  "启动指纹预览失败：Operation=StartFingerprintPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         auto lock = WriteLock();
         if (ctx.fingerprint_preview_request_id == requestId) {
             ctx.fingerprint_preview_running = false;
@@ -1772,8 +1801,10 @@ static int StopFingerprintPreviewBody() {
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopFingerprintPreview(requestId)) {
-        LOG_ERROR("接口", "停止指纹预览失败：向硬件控制程序下发停止请求失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(delphiServerUrl).c_str());
+        LOG_ERROR("接口",
+                  "停止指纹预览失败：Operation=StopFingerprintPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1811,7 +1842,9 @@ static int StartIrisPreviewBody(void* hwnd) {
     {
         auto lock = WriteLock();
         if (ctx.iris_preview_running) {
-            LOG_WARN("接口", "启动虹膜预览失败：预览已运行，request_id=%s",
+            LOG_WARN("接口",
+                     "启动虹膜预览失败：Operation=StartIrisPreview "
+                     "RequestId=%s Result=Failed ErrorCode=preview_already_running",
                      ctx.iris_preview_request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
@@ -1822,7 +1855,10 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "虹膜预览启动被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "虹膜预览启动失败：Operation=StartIrisPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1832,7 +1868,10 @@ static int StartIrisPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "虹膜预览启动被终端切换拦截（锁后）：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "虹膜预览启动失败：Operation=StartIrisPreview RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1843,7 +1882,10 @@ static int StartIrisPreviewBody(void* hwnd) {
     }
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.GetIrisPreviewUrl(requestId, rtspUrl)) {
-        LOG_ERROR("接口", "启动虹膜预览失败：向硬件控制程序获取预览地址失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口",
+                  "启动虹膜预览失败：Operation=StartIrisPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1855,8 +1897,10 @@ static int StartIrisPreviewBody(void* hwnd) {
 
     int ret = PreviewManager::Instance().StartIrisPreviewFromUrl(reinterpret_cast<HWND>(hwnd), rtspUrl);
     if (ret != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("接口", "启动虹膜预览失败：本地渲染器启动失败，request_id=%s，third_party_hwnd=%p，返回值=%d",
-                  requestId.c_str(), hwnd, ret);
+        LOG_ERROR("接口",
+                  "启动虹膜预览失败：Operation=StartIrisPreview RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), ret);
         auto lock = WriteLock();
         if (ctx.iris_preview_request_id == requestId) {
             ctx.iris_preview_running = false;
@@ -1931,18 +1975,24 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
         auto lock = WriteLock();
         PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
         if (plateState.running) {
-            LOG_WARN("接口", "启动车牌预览失败：预览已运行，request_id=%s",
-                     plateState.request_id.c_str());
+            LOG_WARN("接口",
+                     "启动车牌%s预览失败：Operation=StartPlatePreview%s "
+                     "RequestId=%s Result=Failed ErrorCode=preview_already_running",
+                     plateName, plateName, plateState.request_id.c_str());
             return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
         }
         if (!plateState.enabled) {
-            LOG_WARN("接口", "启动车牌%s预览失败：配置preview.plate.%s.enabled=false，request_id=%s",
-                     plateName, plateCode, requestId.c_str());
+            LOG_WARN("接口",
+                     "启动车牌%s预览失败：Operation=StartPlatePreview%s "
+                     "RequestId=%s Result=Failed ErrorCode=plate_preview_not_configured",
+                     plateName, plateName, requestId.c_str());
             return HZCYKJTHardWare_RET_UNSUPPORTED;
         }
         if (plateState.rtsp_url.empty()) {
-            LOG_ERROR("接口", "启动车牌%s预览失败：车牌相机RTSP配置不完整，request_id=%s",
-                      plateName, requestId.c_str());
+            LOG_ERROR("接口",
+                      "启动车牌%s预览失败：Operation=StartPlatePreview%s "
+                      "RequestId=%s Result=Failed ErrorCode=rtsp_url_empty",
+                      plateName, plateName, requestId.c_str());
             return HZCYKJTHardWare_RET_RTSP_URL_EMPTY;
         }
 
@@ -1956,8 +2006,11 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
 
     DelphiProxy proxy(proxyUrl);
     if (!proxy.StartPlatePreview(plateCode, requestId, thirdPartyHwnd, callbackUrl)) {
-        LOG_ERROR("接口", "启动车牌预览失败：向C# Proxy下发外部渲染请求失败，request_id=%s，stream_channel=%d",
-                  requestId.c_str(), streamChannel);
+        LOG_ERROR("接口",
+                  "启动车牌%s预览失败：Operation=StartPlatePreview%s "
+                  "RequestId=%s Result=Failed ErrorCode=%d",
+                  plateName, plateName, requestId.c_str(),
+                  HZCYKJTHardWare_RET_HTTP_FAILED);
         auto lock = WriteLock();
         PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
         if (plateState.request_id == requestId) {
@@ -1997,8 +2050,11 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
 
     DelphiProxy proxy(proxyUrl);
     if (!proxy.StopPlatePreview(plateCode, requestId)) {
-        LOG_ERROR("接口", "停止车牌预览失败：向C# Proxy下发停止请求失败，request_id=%s",
-                  requestId.c_str());
+        LOG_ERROR("接口",
+                  "停止车牌%s预览失败：Operation=StopPlatePreview%s "
+                  "RequestId=%s Result=Failed ErrorCode=%d",
+                  plateName, plateName, requestId.c_str(),
+                  HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -2153,20 +2209,28 @@ static int CaptureCameraImageDirect(const char* saveDir) {
     std::string savePath;
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "人脸抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "人脸抓拍失败：Operation=CaptureFace RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureFace(requestId, saveRoot, savePath,
                            ctx.face_capture_timeout_ms)) {
-        LOG_ERROR("接口", "人脸抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        LOG_ERROR("接口",
+                  "人脸抓拍失败：Operation=CaptureFace RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
     // 终端切换抢断：如果HTTP执行期间发生了切换，丢弃结果
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "人脸抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "人脸抓拍失败：Operation=CaptureFace RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
@@ -2204,7 +2268,10 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
     std::string savePath;
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "指纹抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "指纹抓拍失败：Operation=CaptureFingerprint RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     DelphiProxy proxy(ctx.delphi_server_url);
@@ -2218,13 +2285,18 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
                                       ctx.fingerprint_capture_timeout_ms);
     }
     if (!ok) {
-        LOG_ERROR("接口", "指纹抓拍失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        LOG_ERROR("接口",
+                  "指纹抓拍失败：Operation=CaptureFingerprint RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), HZCYKJTHardWare_RET_HTTP_FAILED);
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "指纹抓拍结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "指纹抓拍失败：Operation=CaptureFingerprint RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
@@ -2255,7 +2327,10 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "虹膜抓拍被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "虹膜抓拍失败：Operation=CaptureIris RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -2271,8 +2346,10 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.CaptureIrisAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
-        LOG_ERROR("接口", "虹膜抓拍提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        LOG_ERROR("接口",
+                  "虹膜抓拍提交失败：Operation=CaptureIris RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), failureCode);
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, HZCYKJTHardWare_EVENT_IRIS_CAPTURE_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2283,12 +2360,18 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "虹膜抓拍受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "虹膜抓拍失败：Operation=CaptureIris RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
-        LOG_WARN("接口", "虹膜抓拍受理结果已过期：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "虹膜抓拍失败：Operation=CaptureIris RequestId=%s "
+                 "Result=Failed ErrorCode=request_expired",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     LOG_INFO("接口", "虹膜抓拍已受理：Operation=CaptureIris RequestId=%s Result=Accepted",
@@ -2325,7 +2408,10 @@ static int RequestOCRDirect(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "OCR请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "OCR请求失败：Operation=RequestOCR RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -2341,8 +2427,10 @@ static int RequestOCRDirect(const char* saveDir) {
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestOcrAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
-        LOG_ERROR("接口", "OCR请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        LOG_ERROR("接口",
+                  "OCR请求提交失败：Operation=RequestOCR RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), failureCode);
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, HZCYKJTHardWare_EVENT_OCR_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2353,12 +2441,18 @@ static int RequestOCRDirect(const char* saveDir) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "OCR请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "OCR请求失败：Operation=RequestOCR RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
-        LOG_WARN("接口", "OCR请求受理结果已过期：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "OCR请求失败：Operation=RequestOCR RequestId=%s "
+                 "Result=Failed ErrorCode=request_expired",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     LOG_INFO("接口", "OCR请求已受理：Operation=RequestOCR RequestId=%s Result=Accepted",
@@ -2396,7 +2490,10 @@ static int RequestNfcCardDirect(const char* saveDir) {
     std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "NFC请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "NFC请求失败：Operation=RequestNfcCard RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -2412,8 +2509,10 @@ static int RequestNfcCardDirect(const char* saveDir) {
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.RequestNfcAsync(requestId, saveRoot, callbackUrl)) {
         const int failureCode = ProxyFailureCode(proxy);
-        LOG_ERROR("NFC", "IC卡识别请求提交失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        LOG_ERROR("NFC",
+                  "IC卡识别请求提交失败：Operation=RequestNfcCard RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), failureCode);
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_NFC_CARD, HZCYKJTHardWare_EVENT_NFC_CARD_FAILED,
                          failureCode,
                          failureCode == HZCYKJTHardWare_RET_UNSUPPORTED ? "not_supported" : "",
@@ -2424,12 +2523,18 @@ static int RequestNfcCardDirect(const char* saveDir) {
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("NFC", "NFC请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("NFC",
+                 "NFC请求失败：Operation=RequestNfcCard RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
-        LOG_WARN("NFC", "NFC请求受理结果已过期：request_id=%s", requestId.c_str());
+        LOG_WARN("NFC",
+                 "NFC请求失败：Operation=RequestNfcCard RequestId=%s "
+                 "Result=Failed ErrorCode=request_expired",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     LOG_INFO("NFC", "IC卡识别已受理：Operation=RequestNfcCard RequestId=%s Result=Accepted",
@@ -2480,17 +2585,20 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
         CurrentExportRequestId());
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
-    LOG_INFO("授权", "收到授权请求：Operation=Authorize RequestId=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
-             requestId.c_str(),
-             LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
-             LogValue(authGJDQDM).c_str(), LogValue(authXM).c_str(),
-             LogValue(authXB).c_str(), LogValue(authCSRQ).c_str(),
-             LogValue(authKADM).c_str());
+    LOG_DEBUG("授权", "收到授权请求：Operation=Authorize RequestId=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
+              requestId.c_str(),
+              LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
+              LogValue(authGJDQDM).c_str(), LogValue(authXM).c_str(),
+              LogValue(authXB).c_str(), LogValue(authCSRQ).c_str(),
+              LogValue(authKADM).c_str());
     LOG_DEBUG("授权", "授权请求通信上下文：请求ID=%s，回调地址=%s",
               requestId.c_str(), LogValue(callbackUrl).c_str());
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "授权请求被终端切换拦截：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "授权请求失败：Operation=Authorize RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
@@ -2515,11 +2623,14 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
                                 callbackUrl,
                                 httpTimeoutMs)) {
         const int failureCode = ProxyFailureCode(proxy);
-        LOG_ERROR("授权", "EXE授权请求受理失败：请求ID=%s，错误码=%d",
+        LOG_DEBUG("授权", "EXE授权请求受理失败：请求ID=%s，错误码=%d",
                   requestId.c_str(), failureCode);
         LOG_DEBUG("授权", "授权请求通信失败：请求ID=%s，EXE地址=%s",
                   requestId.c_str(), LogValue(ctx.delphi_server_url).c_str());
-        LOG_ERROR("接口", "授权请求提交失败：DLL转发硬件控制程序失败，request_id=%s", requestId.c_str());
+        LOG_ERROR("接口",
+                  "授权请求提交失败：Operation=Authorize RequestId=%s "
+                  "Result=Failed ErrorCode=%d",
+                  requestId.c_str(), failureCode);
         PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_AUTHORIZATION,
                          HZCYKJTHardWare_EVENT_AUTHORIZE_FAILED,
                          failureCode,
@@ -2531,12 +2642,18 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
     }
 
     if (IsSwitchPending()) {
-        LOG_WARN("接口", "授权请求受理结果因终端切换丢弃：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "授权请求失败：Operation=Authorize RequestId=%s "
+                 "Result=Failed ErrorCode=device_busy",
+                 requestId.c_str());
         RequestSessionManager::Instance().MarkCompleted(requestId);
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     if (!RequestSessionManager::Instance().MarkAccepted(requestId)) {
-        LOG_WARN("接口", "授权请求受理结果已过期：request_id=%s", requestId.c_str());
+        LOG_WARN("接口",
+                 "授权请求失败：Operation=Authorize RequestId=%s "
+                 "Result=Failed ErrorCode=request_expired",
+                 requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
     LOG_INFO("授权", "授权请求已受理：Operation=Authorize RequestId=%s Result=Accepted",

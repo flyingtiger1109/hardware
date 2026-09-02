@@ -2121,3 +2121,44 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 
 - 风险：Native 日志模块表与 `.def` 仍需随未来新增导出同步更新；硬件瞬时无新帧时最多增加一次 75ms 延迟。
 - 回退：仅回退本节列出的源码、测试、校验脚本和本节记录；不改变 DLL 导出名、参数、调用约定、结构体布局或第三方 HWND 所有权。
+
+## Stage 3 Logging
+
+### 当前阶段
+
+阶段 3 日志系统 Rev.4 代码收尾及自动化验证已完成，现场抽样、故障注入和长稳验证后再 Close。
+
+### 已完成内容
+
+- [x] L6 global production INFO minimization：Native/C# 普通成功日志按“中文业务结果 + RequestId”渲染，普通失败日志按“中文失败结果 + RequestId + ErrorCode”渲染；`Operation`、结果码、耗时、尺寸、路径、来源等技术字段保留在 DEBUG。
+- [x] L8 preview failure dedup：预览内部低层失败下沉 DEBUG；外部 DLL 边界保留最终业务结果；已有恢复、限流和 RecoveryEpisode 聚合字段不删除。
+- [x] L9 tiered field rendering：统一 Native `Logger` 与 C# `Logger` 的分层渲染；`RequestId == CaptureRequestId` 的普通 INFO 不重复打印父子 ID；日志队列、滚动、低磁盘和 ERROR 优先保护逻辑不改变。
+- [x] L10 OCR info reduction：证件检测/离开等正常传感器状态改为 DEBUG；OCR 真正识别完成仍保留 INFO，MRZ/鉴伪技术字段进入 DEBUG。
+- [x] L11 cross-module consistency regression：Native/C# 导出 Operation 继续按模块映射；授权、NFC、预览、抓拍、回调投递的成功/失败日志补齐统一关联字段。
+- [x] 追加解析失败、回调失败和授权请求入口的日志边界治理；未修改导出 ABI、回调签名、错误码、第三方 HWND 行为或业务协议。
+
+### 自动化测试与字段校验
+
+- [x] 新增普通 INFO/失败 ERROR/DEBUG 字段裁剪、RequestId 去重、恢复聚合保留和 Operation 映射断言。
+- [x] 已执行 Native/C# 编译、日志专项/全量测试、`git diff --check`、`.def`/dumpbin 导出校验；操作映射脚本 25/25 通过，x86/x64 导出各 25 个且与 `.def` 一致。
+- [ ] 现场抽样校验所有业务模块的成功/失败日志、DLL/Proxy RequestId 对账和 `[未识别接口]` 为 0。
+
+### 兼容性、风险与验证状态
+
+- 外部接口：DLL 导出名、`extern "C"`、`__stdcall`、参数布局、Callback ABI 和负错误码保持不变。
+- Payload：普通日志和 DEBUG 均不输出 Base64、图片二进制或完整大 JSON；必要信息使用长度/摘要/脱敏标识。
+- StopPreview HTTP 12002：本轮未实施行为修复；只有现场实际观察到该错误时，才记录到 `## R1.1 StopPreview HTTP Lifecycle`。
+- [x] 编译验证：Native Release Win32/x86、Native Release x64、Proxy Release x64、Tests Release x64、C# 第三方 Demo Release x86 均编译完成；除 Tests 的既有 `NU1900` 网络警告外无编译错误。
+- [x] 自动化核心/异常回归：日志专项 `LoggerTests` 20/20 通过；全量 VSTest 168/180 通过，12 项为既有 `HttpListener` 平台限制、ProductVersion 断言和回调时序断言问题。
+- [x] 日志字段、Payload、RateLimit/Telemetry 回归：已有自动化断言通过；真实文件可靠性、现场字段和长稳仍待复核。
+
+### 长稳计划
+
+- [ ] 2h：Proxy/Native 日志队列、滚动、低磁盘保护、预览恢复和 RequestId 对账长稳。
+- [ ] 24h：全链路日志量、文件句柄/线程/内存、RecoveryEpisode 聚合、Payload 脱敏和 `[未识别接口]` 统计。
+
+### 下一步与回退
+
+- [x] 已完成自动化构建/测试和导出表核对，并记录本节验证结果。
+- [ ] 在真实 Delphi7 x86 + Native x86 + Proxy x64 + 终端环境执行业务抽样与 2h/24h 长稳。
+- 回退：仅回退本节日志渲染、日志调用点、测试和本节记录；不执行宽范围 reset，不覆盖已有用户未提交文件。

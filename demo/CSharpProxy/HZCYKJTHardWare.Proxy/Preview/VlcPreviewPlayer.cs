@@ -194,7 +194,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             {
                 if (!LoadVlc())
                 {
-                    Logger.Warn("VLC预热失败: 无法加载VLC库");
+                    Logger.Debug("VLC预热失败: 无法加载VLC库");
                     return;
                 }
 
@@ -224,7 +224,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"VLC预热失败: {ex.Message}");
+                Logger.Debug($"VLC预热失败: {ex.Message}");
             }
         }
 
@@ -262,7 +262,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (TryLoadFromDir(dir)) return true;
             }
 
-            Logger.Error("VLC not found");
+            Logger.Debug("VLC not found");
             return false;
         }
 
@@ -282,7 +282,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (!IsPeMachineCompatible(corePath, is64BitProcess, out coreMachine) ||
                     !IsPeMachineCompatible(libPath, is64BitProcess, out libMachine))
                 {
-                    Logger.Warn(
+                    Logger.Debug(
                         $"Skipping incompatible VLC directory: dir={dir}, " +
                         $"process={(is64BitProcess ? "x64" : "x86")}, " +
                         $"libvlccore={FormatPeMachine(coreMachine)}, libvlc={FormatPeMachine(libMachine)}");
@@ -294,7 +294,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     LoadWithAlteredSearchPath);
                 if (_libVlcCoreHandle == IntPtr.Zero)
                 {
-                    Logger.Warn($"加载libvlccore.dll失败: path={corePath}, error={Marshal.GetLastWin32Error()}");
+                    Logger.Debug($"加载libvlccore.dll失败: path={corePath}, error={Marshal.GetLastWin32Error()}");
                     return false;
                 }
 
@@ -305,7 +305,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     var error = Marshal.GetLastWin32Error();
                     FreeLibrary(_libVlcCoreHandle);
                     _libVlcCoreHandle = IntPtr.Zero;
-                    Logger.Warn($"加载libvlc.dll失败: path={libPath}, error={error}");
+                    Logger.Debug($"加载libvlc.dll失败: path={libPath}, error={error}");
                     return false;
                 }
 
@@ -330,7 +330,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_fnNew == null || _fnPlayerPlay == null)
                 {
-                    Logger.Warn("libVLC缺少必要导出函数");
+                    Logger.Debug("libVLC缺少必要导出函数");
                     Unload();
                     return false;
                 }
@@ -341,7 +341,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"加载VLC异常: dir={dir}, error={ex.Message}");
+                Logger.Debug($"加载VLC异常: dir={dir}, error={ex.Message}");
                 Unload();
                 return false;
             }
@@ -389,7 +389,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_vlcInstance == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC instance");
+                    Logger.Debug("Failed to create VLC instance");
                     CleanupPartial();
                     return false;
                 }
@@ -402,7 +402,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (media == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC media");
+                    Logger.Debug("Failed to create VLC media");
                     CleanupPartial();
                     return false;
                 }
@@ -442,7 +442,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (_mediaPlayer == IntPtr.Zero)
                 {
-                    Logger.Error("Failed to create VLC media player");
+                    Logger.Debug("Failed to create VLC media player");
                     CleanupPartial();
                     return false;
                 }
@@ -467,7 +467,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     _ownsVideoHwnd = _videoHwnd != IntPtr.Zero;
                     if (_videoHwnd == IntPtr.Zero)
                     {
-                        Logger.Error("Failed to create video child window");
+                        Logger.Debug("Failed to create video child window");
                         CleanupPartial();
                         return false;
                     }
@@ -482,7 +482,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Logger.Debug($"VLC启动步骤：开始播放，url={safeUrl}，videoHwnd={_videoHwnd}");
                 if (_fnPlayerPlay(_mediaPlayer) != 0)
                 {
-                    Logger.Error("VLC play returned error");
+                    Logger.Debug("VLC play returned error");
                     CleanupPartial();
                     return false;
                 }
@@ -501,7 +501,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC播放异常: url={SanitizeUrlForLog(rtspUrl)}, 错误={ex.Message}", ex);
+                Logger.Debug($"VLC播放异常: url={SanitizeUrlForLog(rtspUrl)}, 错误={ex}");
                 CleanupPartial();
                 return false;
             }
@@ -576,7 +576,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"SetParentWindow failed: {ex.Message}");
+                Logger.Debug($"SetParentWindow failed: {ex.Message}");
                 return false;
             }
         }
@@ -680,7 +680,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"ApplyCoverLayout failed: {ex.Message}");
+                Logger.Debug($"ApplyCoverLayout failed: {ex.Message}");
             }
         }
 

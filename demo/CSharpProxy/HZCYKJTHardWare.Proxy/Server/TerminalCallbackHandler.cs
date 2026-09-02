@@ -223,16 +223,12 @@ namespace HZCYKJTHardWare.Proxy.Server
             var errorCode = JsonHelper.ExtractString(bodyUtf8, "error_code");
             var message = JsonHelper.ExtractString(bodyUtf8, "message");
 
-            // UI 仅显示“证件检测”和“证件离开”，其他事件只写入日志文件
-            bool showInUi = (eventType == "event_type_card_detect" || eventType == "event_type_card_leave");
-
             var logLine = !string.IsNullOrEmpty(errorCode)
                 ? $"[OCR事件] request_id={requestId}，事件={chineseEvent}，错误码={errorCode}，消息={message}"
                 : $"[OCR事件] request_id={requestId}，事件={chineseEvent}";
 
-            if (showInUi)
-                _log(logLine);           // UI + file — 证件检测/证件离开
-            else if (eventType == "event_type_rfid_result_fail")
+            // 证件检测/离开等是正常传感器状态，不进入生产 INFO；真实识别失败仍保留 WARN。
+            if (eventType == "event_type_rfid_result_fail")
                 Logger.Warn(logLine);    // RFID识别失败 → 警告
             else
                 Logger.Debug(logLine);   // 其余事件 → Debug
@@ -462,9 +458,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                 JsonHelper.ExtractString(originalBody, "GJDQDM"));
             var portCode = CoalesceString(ExtractTopOrDataString(bodyUtf8, "port_code"),
                 JsonHelper.ExtractString(originalBody, "KADM"));  // KADM
-            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+            var isYes = (status == "yes");
+            _log(Logger.FormatModuleMessage(LogModules.Authorization,
+                isYes ? "信息" : "错误",
                 "授权结果已收到：Operation=Authorize RequestId=" + JsonHelper.ToLogValue(result.RequestId) +
-                " Result=" + (status == "yes" ? "Approved" : "Rejected") +
+                (isYes ? " Result=Success" : " Result=Failed ErrorCode=authorization_rejected") +
                 "，来源=" + JsonHelper.ToLogValue(sourceAddress?.ToString()) +
                 "，状态=" + JsonHelper.ToLogValue(status) +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
@@ -476,7 +474,6 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "，口岸代码=" + JsonHelper.ToLogValue(portCode)));
 
             // 构建 DLL 回调载荷，使用与 Delphi 一致的中文缩写字段名格式
-            var isYes = (status == "yes");
             var message = isYes ? "同意授权" : "旅客拒绝签署";
             var authResult = isYes ? "1" : "0";
 

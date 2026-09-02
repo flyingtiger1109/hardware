@@ -102,7 +102,7 @@ int PreviewManager::StartRendererFromUrl(HWND hwnd, const std::string& rtspUrl,
 
     int ret = renderer->Start(rtspUrl, hwnd);
     if (ret != HZCYKJTHardWare_RET_OK) {
-        LOG_ERROR("PreviewMgr", "本进程预览启动失败：ret=%d，detail=%s",
+        LOG_DEBUG("PreviewMgr", "本进程预览启动失败：ret=%d，detail=%s",
                   ret, renderer->LastErrorMessage().c_str());
         renderer.reset();
         return ret;
@@ -122,17 +122,17 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
     CriticalSectionGuard guard(&m_cs);
 
     if (!TerminalManager::Instance().IsTerminalSelected()) {
-        LOG_ERROR("PreviewMgr", "启动预览失败：当前未选择终端");
+        LOG_DEBUG("PreviewMgr", "启动预览失败：当前未选择终端");
         return HZCYKJTHardWare_RET_TERMINAL_NOT_SELECTED;
     }
 
     if (!IsWindow(hwnd)) {
-        LOG_ERROR("PreviewMgr", "启动预览失败：HWND 无效，hwnd=%p", hwnd);
+        LOG_DEBUG("PreviewMgr", "启动预览失败：HWND 无效，hwnd=%p", hwnd);
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
     if (runningFlag) {
-        LOG_WARN("PreviewMgr", "预览已在运行，忽略重复启动：path=%s", previewPath.c_str());
+        LOG_DEBUG("PreviewMgr", "预览已在运行，忽略重复启动：path=%s", previewPath.c_str());
         return HZCYKJTHardWare_RET_PREVIEW_ALREADY_RUNNING;
     }
 
@@ -166,7 +166,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
     }
 
     if (!client.PostJson(url, body, connectTimeout, requestTimeout, responseBody, statusCode)) {
-        LOG_ERROR("PreviewMgr", "请求终端预览地址失败：url=%s，request_id=%s",
+        LOG_DEBUG("PreviewMgr", "请求终端预览地址失败：url=%s，request_id=%s",
                   safeUrl.c_str(), requestId.c_str());
 
         HZCYKJTHardWare_EVENT event;
@@ -181,7 +181,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
 
     std::string rtspUrl = ResultParser::ExtractPreviewUrl(responseBody);
     if (rtspUrl.empty()) {
-        LOG_ERROR("PreviewMgr", "终端预览响应缺少 RTSP 地址：request_id=%s，%s",
+        LOG_DEBUG("PreviewMgr", "终端预览响应缺少 RTSP 地址：request_id=%s，%s",
                   requestId.c_str(), SanitizeLargePayloadForLog(responseBody, requestId).c_str());
 
         HZCYKJTHardWare_EVENT event;
@@ -199,7 +199,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
 
     renderer = CreateLibVlcRtspRenderer();
     if (!renderer) {
-        LOG_ERROR("PreviewMgr", "启动预览失败：创建 RTSP 渲染器失败");
+        LOG_DEBUG("PreviewMgr", "启动预览失败：创建 RTSP 渲染器失败");
 
         HZCYKJTHardWare_EVENT event;
         memset(&event, 0, sizeof(event));
@@ -218,7 +218,7 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
             detail = "启动RTSP预览失败。";
         }
         detail += " RTSP=" + SanitizeUrlForLog(rtspUrl);
-        LOG_ERROR("PreviewMgr", "启动 RTSP 预览失败：ret=%d，detail=%s", ret, detail.c_str());
+        LOG_DEBUG("PreviewMgr", "启动 RTSP 预览失败：ret=%d，detail=%s", ret, detail.c_str());
 
         HZCYKJTHardWare_EVENT event;
         memset(&event, 0, sizeof(event));
@@ -260,8 +260,8 @@ int PreviewManager::StartPreview(HWND hwnd, const std::string& previewPath,
         width = rc.right - rc.left;
         height = rc.bottom - rc.top;
     }
-    LOG_INFO("PreviewMgr", "预览已启动：path=%s，hwnd=%p，client=%dx%d",
-             previewPath.c_str(), hwnd, width, height);
+    LOG_DEBUG("PreviewMgr", "预览已启动：path=%s，hwnd=%p，client=%dx%d",
+              previewPath.c_str(), hwnd, width, height);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -347,7 +347,7 @@ int PreviewManager::StopPreview(std::atomic<bool>& runningFlag,
     event.status = HZCYKJTHardWare_RET_OK;
     EventDispatcher::Instance().PostEvent(event);
 
-    LOG_INFO("PreviewMgr", "预览已停止：event=%d", stoppedEvent);
+    LOG_DEBUG("PreviewMgr", "预览已停止：event=%d", stoppedEvent);
     return HZCYKJTHardWare_RET_OK;
 }
 

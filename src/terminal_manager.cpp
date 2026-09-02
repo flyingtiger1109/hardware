@@ -170,9 +170,9 @@ int TerminalManager::SwitchTerminalByUrl(const std::string& baseUrl) {
         EventDispatcher::Instance().PostEvent(event);
     }
 
-    LOG_INFO("TerminalMgr", "当前终端已切换：terminal_index=%d，terminal=%s",
-             HzsjkjtContext::Instance().current_terminal_index,
-             SanitizeUrlForLog(baseUrl).c_str());
+    LOG_DEBUG("TerminalMgr", "当前终端已切换：terminal_index=%d，terminal=%s",
+              HzsjkjtContext::Instance().current_terminal_index,
+              SanitizeUrlForLog(baseUrl).c_str());
 
     return HZCYKJTHardWare_RET_OK;
 }

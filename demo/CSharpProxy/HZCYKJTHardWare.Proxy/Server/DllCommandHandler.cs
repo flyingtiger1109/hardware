@@ -655,7 +655,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             var authSex = JsonHelper.ToLogValue(request.GetString("XB"));
             var authBirthday = JsonHelper.ToLogValue(request.GetString("CSRQ"));
             var authPortCode = JsonHelper.ToLogValue(request.GetString("KADM"));
-            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
                 "授权请求：来源=DLL，Operation=Authorize RequestId=" +
                 JsonHelper.ToLogValue(requestId) +
                 "，TerminalIndex=" + routeEpoch.Route.TerminalIndex +

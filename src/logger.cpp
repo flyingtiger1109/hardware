@@ -215,6 +215,145 @@ std::string ToLowerAscii(std::string value) {
     return value;
 }
 
+size_t FindLogField(const std::string& message, const char* fieldName) {
+    if (!fieldName || !*fieldName) return std::string::npos;
+
+    const std::string marker = std::string(fieldName) + "=";
+    size_t offset = 0;
+    while (offset < message.size()) {
+        const size_t position = message.find(marker, offset);
+        if (position == std::string::npos) return position;
+        if (position == 0 ||
+            (!std::isalnum(static_cast<unsigned char>(message[position - 1])) &&
+             message[position - 1] != '_')) {
+            return position;
+        }
+        offset = position + 1;
+    }
+    return std::string::npos;
+}
+
+std::string ExtractLogField(const std::string& message, const char* fieldName) {
+    const size_t markerPosition = FindLogField(message, fieldName);
+    if (markerPosition == std::string::npos) return "";
+
+    const size_t valueStart = markerPosition + std::strlen(fieldName) + 1;
+    size_t valueEnd = valueStart;
+    while (valueEnd < message.size()) {
+        const char ch = message[valueEnd];
+        if (ch == ' ' || ch == '\t' || ch == ',' || ch == ';' ||
+            ch == '\r' || ch == '\n' ||
+            message.compare(valueEnd, std::strlen("，"), "，") == 0 ||
+            message.compare(valueEnd, std::strlen("；"), "；") == 0) {
+            break;
+        }
+        ++valueEnd;
+    }
+    return message.substr(valueStart, valueEnd - valueStart);
+}
+
+bool IsSuccessfulBusinessResult(const std::string& result) {
+    const std::string value = ToLowerAscii(result);
+    return value == "success" || value == "accepted" || value == "stopped" ||
+        value == "recovered" || value == "delivered" || value == "ignored" ||
+        value == "started" || result == "成功" || result == "已受理" ||
+        result == "已停止" || result == "已恢复" || result == "已发送" ||
+        result == "忽略" || result == "已忽略" || result == "开始";
+}
+
+bool IsDiagnosticBusinessMessage(const std::string& message) {
+    return ContainsText(message, "RecoveryEpisodeId") ||
+        ContainsText(message, "Recovery") || ContainsText(message, "恢复") ||
+        ContainsText(message, "重复故障汇总") || ContainsText(message, "聚合") ||
+        ContainsText(message, "次数=") || ContainsText(message, "Attempts=") ||
+        ContainsText(message, "DowntimeMs") || ContainsText(message, "Telemetry") ||
+        ContainsText(message, "指标") || ContainsText(message, "RateLimit");
+}
+
+std::string ExtractBusinessDescription(const std::string& message) {
+    const size_t markerPosition = FindLogField(message, "Operation");
+    if (markerPosition == std::string::npos) return "";
+
+    std::string description = message.substr(0, markerPosition);
+    while (!description.empty()) {
+        if (description.back() == ' ' || description.back() == '\t' ||
+            description.back() == ',' || description.back() == ';') {
+            description.pop_back();
+        } else if (description.size() >= std::strlen("，") &&
+                   description.compare(description.size() - std::strlen("，"),
+                                       std::strlen("，"), "，") == 0) {
+            description.erase(description.size() - std::strlen("，"));
+        } else if (description.size() >= std::strlen("；") &&
+                   description.compare(description.size() - std::strlen("；"),
+                                       std::strlen("；"), "；") == 0) {
+            description.erase(description.size() - std::strlen("；"));
+        } else {
+            break;
+        }
+    }
+
+    const size_t chineseColon = description.rfind("：");
+    const size_t asciiColon = description.rfind(':');
+    const size_t colon = (chineseColon == std::string::npos) ? asciiColon :
+        (asciiColon == std::string::npos ? chineseColon :
+         (std::max)(chineseColon, asciiColon));
+    if (colon != std::string::npos &&
+        description.substr(colon + 1).find('=') != std::string::npos) {
+        description.erase(colon);
+        while (!description.empty() &&
+               (description.back() == ' ' || description.back() == '\t')) {
+            description.pop_back();
+        }
+    }
+
+    if (description.empty()) return "";
+    const size_t chineseColonLength = std::strlen("：");
+    const bool endsWithChineseColon =
+        description.size() >= chineseColonLength &&
+        description.compare(description.size() - chineseColonLength,
+                            chineseColonLength, "：") == 0;
+    if (!endsWithChineseColon &&
+        description.back() != ':') {
+        description += "：";
+    }
+    return description;
+}
+
+std::string MinimizeProductionMessage(LogLevel level,
+                                      const std::string& message) {
+    if (level == LogLevel::Debug || message.empty() ||
+        IsDiagnosticBusinessMessage(message)) {
+        return message;
+    }
+
+    if (ExtractLogField(message, "Operation").empty()) return message;
+
+    std::string requestId = ExtractLogField(message, "RequestId");
+    if (requestId.empty()) requestId = ExtractLogField(message, "CaptureRequestId");
+    if (requestId.empty()) requestId = ExtractLogField(message, "PreviewRequestId");
+    if (requestId.empty()) return message;
+
+    const std::string result = ExtractLogField(message, "Result");
+    const bool success = level == LogLevel::Info &&
+        IsSuccessfulBusinessResult(result);
+    const bool failure = (level == LogLevel::Warn || level == LogLevel::Error) &&
+        (ToLowerAscii(result) == "failed" || result == "失败");
+    if (!success && !failure) return message;
+
+    std::string description = ExtractBusinessDescription(message);
+    if (description.empty()) {
+        description = failure ? "业务处理失败：" : "业务处理成功：";
+    }
+
+    std::string output = description + "RequestId=" + requestId;
+    if (failure) {
+        const std::string errorCode = ExtractLogField(message, "ErrorCode");
+        if (errorCode.empty() || ToLowerAscii(errorCode) == "none") return message;
+        output += " ErrorCode=" + errorCode;
+    }
+    return output;
+}
+
 std::string RateLimitCategory(const std::string& key) {
     const std::string lower = ToLowerAscii(key);
     if (ContainsText(lower, "mjpeg") &&
@@ -1124,8 +1263,9 @@ void Logger::Log(LogLevel level, const char* module, const char* function,
     const std::string timestamp = FormatTimestamp();
     const std::string normalizedModule = NormalizeModule(
         module, function, message.c_str());
+    const std::string productionMessage = MinimizeProductionMessage(level, message);
     const std::string line = "[" + timestamp + "] [" + normalizedModule +
-        "][" + LevelToString(level) + "] " + message + "\n";
+        "][" + LevelToString(level) + "] " + productionMessage + "\n";
 
     LogEntry entry;
     entry.level = level;
@@ -1137,6 +1277,21 @@ void Logger::Log(LogLevel level, const char* module, const char* function,
                 m_totalDroppedCount.fetch_add(1);
             }
         } else {
+            m_totalDroppedCount.fetch_add(1);
+            m_droppedSinceNotice.fetch_add(1);
+        }
+    }
+
+    // 默认 INFO/WARN/ERROR 只写业务摘要；开启 DEBUG 时补写同一条原始技术记录，
+    // 让 Operation、耗时、尺寸和链路字段仍可按 RequestId 追踪。
+    if (level != LogLevel::Debug &&
+        productionMessage != message && IsLevelEnabled(LogLevel::Debug)) {
+        LogEntry debugEntry;
+        debugEntry.level = LogLevel::Debug;
+        debugEntry.date = PathHelper::GetDateString();
+        debugEntry.line = "[" + timestamp + "] [" + normalizedModule +
+            "][调试] " + message + "\n";
+        if (!Enqueue(std::move(debugEntry))) {
             m_totalDroppedCount.fetch_add(1);
             m_droppedSinceNotice.fetch_add(1);
         }

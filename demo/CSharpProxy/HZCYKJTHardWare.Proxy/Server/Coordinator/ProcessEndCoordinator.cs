@@ -113,7 +113,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
                 Logger.Warn("[流程] 流程结束未确认：Operation=EndProcess RequestId=" +
                     JsonHelper.ToLogValue(requestId) + "，TerminalIndex=" +
-                    route.TerminalIndex + "，ErrorCode=" + errorCode);
+                    route.TerminalIndex + " Result=Failed ErrorCode=" + errorCode);
                 return new ProcessEndOutcome(false, errorCode, requestId,
                     route.TerminalIndex);
             }

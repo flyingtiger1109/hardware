@@ -154,7 +154,19 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static void Info(string message) => Write("信息", message, 1);
         public static void Warn(string message) => Write("警告", message, 2);
         public static void Error(string message) => Write("错误", message, 3);
-        public static void Error(string message, Exception ex) => Write("错误", $"{message}: {ex}", 3);
+        public static void Error(string message, Exception ex)
+        {
+            // 生产 ERROR 只保留摘要；完整异常链路下沉到 DEBUG，避免默认日志被
+            // 堆栈和重复上下文淹没。
+            Write("错误", message, 3);
+            if (ex == null)
+                return;
+
+            var parsed = ParseMessage(message, "错误");
+            var detail = parsed.Body + "，异常=" +
+                         ex.ToString().Replace(Environment.NewLine, " | ");
+            Write("调试", FormatModuleMessage(parsed.Module, "调试", detail), 0);
+        }
 
         /// <summary>
         /// 判断指定级别是否会写入当前日志。UI 和其他日志入口也必须复用该判断，
@@ -466,9 +478,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public static string NormalizeForDisplay(string message, string defaultLevel = "信息")
         {
             var parsed = ParseMessage(message, defaultLevel);
+            var body = MinimizeProductionMessage(
+                CanonicalizeOperationField(parsed.Body), parsed.LevelNumber);
             if (string.IsNullOrEmpty(parsed.Module))
-                return $"[{parsed.Level}] {CanonicalizeOperationField(parsed.Body)}";
-            return $"[{parsed.Module}][{parsed.Level}] {CanonicalizeOperationField(parsed.Body)}";
+                return $"[{parsed.Level}] {body}";
+            return $"[{parsed.Module}][{parsed.Level}] {body}";
         }
 
         /// <summary>
@@ -483,23 +497,24 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             {
                 var now = DateTime.Now;
                 var date = now.ToString("yyyyMMdd");
-                formattedLine = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] {NormalizeForDisplay(message, level)}";
+                var parsed = ParseMessage(message, level);
+                var canonicalBody = CanonicalizeOperationField(parsed.Body);
+                var productionBody = MinimizeProductionMessage(
+                    canonicalBody, parsed.LevelNumber);
+                formattedLine = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                                $"[{parsed.Module}][{parsed.Level}] {productionBody}";
 
-                var entry = new LogEntry
+                EnqueueLine(date, formattedLine, levelNum);
+
+                // DEBUG 开启时保留同一条业务记录的完整技术字段，默认 INFO 运行时
+                // 不额外放大日志量。直接入队，避免公共入口递归触发再次裁剪。
+                if (parsed.LevelNumber > 0 &&
+                    !string.Equals(productionBody, canonicalBody, StringComparison.Ordinal) &&
+                    IsLevelEnabled(0))
                 {
-                    Date = date,
-                    Line = formattedLine,
-                    LevelNum = levelNum
-                };
-                if (levelNum >= 3)
-                {
-                    if (!_errorQueue.TryAdd(entry, 0) &&
-                        !TryWriteEmergencyLine(formattedLine, "ERROR queue full or logger stopping"))
-                        RecordDroppedEntry();
-                }
-                else if (!_queue.TryAdd(entry, 0))
-                {
-                    RecordDroppedEntry();
+                    var debugLine = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] " +
+                                    $"[{parsed.Module}][调试] {canonicalBody}";
+                    EnqueueLine(date, debugLine, 0);
                 }
             }
             catch (InvalidOperationException)
@@ -517,6 +532,26 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     RecordDroppedEntry();
                 else if (levelNum < 3)
                     RecordDroppedEntry();
+            }
+        }
+
+        private static void EnqueueLine(string date, string line, int levelNum)
+        {
+            var entry = new LogEntry
+            {
+                Date = date,
+                Line = line,
+                LevelNum = levelNum
+            };
+            if (levelNum >= 3)
+            {
+                if (!_errorQueue.TryAdd(entry, 0) &&
+                    !TryWriteEmergencyLine(line, "ERROR queue full or logger stopping"))
+                    RecordDroppedEntry();
+            }
+            else if (!_queue.TryAdd(entry, 0))
+            {
+                RecordDroppedEntry();
             }
         }
 
@@ -975,6 +1010,141 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                    value.Contains("password") || value.Contains("passwd") ||
                    value.Contains("token") || value.Contains("secret") ||
                    value.Contains("credential");
+        }
+
+        /// <summary>
+        /// 将普通请求型业务日志渲染为生产摘要。原始字段由 Write 在 DEBUG 开启时
+        /// 镜像保存，因此 Operation、耗时、尺寸和链路字段不会从内部日志中消失。
+        /// 恢复、聚合、指标和健康诊断消息必须保留上下文，避免丢失故障定位信息。
+        /// </summary>
+        internal static string MinimizeProductionMessage(string body, int levelNumber)
+        {
+            if (levelNumber <= 0 || string.IsNullOrWhiteSpace(body) ||
+                IsDiagnosticBusinessMessage(body))
+                return body;
+
+            var operation = ExtractLogField(body, "Operation");
+            if (string.IsNullOrWhiteSpace(operation))
+                return body;
+
+            var requestId = ExtractLogField(body, "RequestId");
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = ExtractLogField(body, "CaptureRequestId");
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = ExtractLogField(body, "PreviewRequestId");
+            if (string.IsNullOrWhiteSpace(requestId))
+                return body;
+
+            var result = ExtractLogField(body, "Result");
+            var isSuccess = levelNumber == 1 && IsSuccessfulBusinessResultName(result);
+            var isFailure = (levelNumber == 2 || levelNumber == 3) &&
+                            (string.Equals(result, "Failed", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(result, "失败", StringComparison.Ordinal));
+            if (!isSuccess && !isFailure)
+                return body;
+
+            var description = ExtractBusinessDescription(body);
+            if (string.IsNullOrWhiteSpace(description))
+                description = isFailure ? "业务处理失败：" : "业务处理成功：";
+
+            var output = description + "RequestId=" + requestId;
+            if (isFailure)
+            {
+                var errorCode = ExtractLogField(body, "ErrorCode");
+                if (string.IsNullOrWhiteSpace(errorCode) ||
+                    string.Equals(errorCode, "none", StringComparison.OrdinalIgnoreCase))
+                    return body;
+                output += " ErrorCode=" + errorCode;
+            }
+            return output;
+        }
+
+        private static bool IsSuccessfulBusinessResultName(string result)
+        {
+            switch ((result ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "success":
+                case "accepted":
+                case "stopped":
+                case "recovered":
+                case "delivered":
+                case "ignored":
+                case "started":
+                case "成功":
+                case "已受理":
+                case "已停止":
+                case "已恢复":
+                case "已发送":
+                case "忽略":
+                case "已忽略":
+                case "开始":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsDiagnosticBusinessMessage(string body)
+        {
+            return body.IndexOf("RecoveryEpisodeId", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   body.IndexOf("Recovery", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   body.IndexOf("恢复", StringComparison.Ordinal) >= 0 ||
+                   body.IndexOf("重复故障汇总", StringComparison.Ordinal) >= 0 ||
+                   body.IndexOf("聚合", StringComparison.Ordinal) >= 0 ||
+                   body.IndexOf("次数=", StringComparison.Ordinal) >= 0 ||
+                   body.IndexOf("Attempts=", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   body.IndexOf("DowntimeMs", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   body.IndexOf("Telemetry", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   body.IndexOf("指标", StringComparison.Ordinal) >= 0 ||
+                   body.IndexOf("RateLimit", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string ExtractBusinessDescription(string body)
+        {
+            var marker = body.IndexOf("Operation=", StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+                return string.Empty;
+
+            var description = body.Substring(0, marker).Trim();
+            description = description.TrimEnd(' ', '\t', ',', '，', ';', '；');
+            var chineseColon = description.LastIndexOf('：');
+            var asciiColon = description.LastIndexOf(':');
+            var colon = Math.Max(chineseColon, asciiColon);
+            if (colon >= 0 && description.Substring(colon + 1).IndexOf('=') >= 0)
+                description = description.Substring(0, colon).TrimEnd(' ', '\t', ',', '，', ';', '；');
+
+            if (description.Length == 0)
+                return string.Empty;
+            if (!description.EndsWith("：", StringComparison.Ordinal) &&
+                !description.EndsWith(":", StringComparison.Ordinal))
+                description += "：";
+            return description;
+        }
+
+        private static string ExtractLogField(string body, string fieldName)
+        {
+            if (string.IsNullOrEmpty(body) || string.IsNullOrEmpty(fieldName))
+                return string.Empty;
+
+            var markerText = fieldName + "=";
+            var marker = body.IndexOf(markerText, StringComparison.OrdinalIgnoreCase);
+            while (marker >= 0 && marker > 0 &&
+                   (char.IsLetterOrDigit(body[marker - 1]) || body[marker - 1] == '_'))
+            {
+                var nextStart = marker + 1;
+                marker = body.IndexOf(markerText, nextStart,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            if (marker < 0)
+                return string.Empty;
+
+            var start = marker + fieldName.Length + 1;
+            var end = start;
+            while (end < body.Length && body[end] != ' ' && body[end] != '\t' &&
+                   body[end] != ',' && body[end] != '，' && body[end] != ';' &&
+                   body[end] != '；' && body[end] != '\r' && body[end] != '\n')
+                end++;
+            return body.Substring(start, end - start).Trim();
         }
 
         private static ParsedLogMessage ParseMessage(string message, string defaultLevel)

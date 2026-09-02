@@ -860,7 +860,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var urlElapsed = totalSw.ElapsedMilliseconds - urlTick;
             if (string.IsNullOrEmpty(rtspUrl))
             {
-                Logger.Error($"获取预览URL失败：资源={ResourceToName(resType)}，{TraceRequest(requestId)}");
+                LogPreviewStartFailure(
+                    resType, "获取预览URL失败",
+                    $"资源={ResourceToName(resType)}，{TraceRequest(requestId)}",
+                    sessionType, requestId, "preview_url_failed");
                 return false;
             }
 
@@ -879,8 +882,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             else
             {
-                Logger.Error($"无效的HWND：{SessionToName(sessionType)} {ResourceToName(resType)}，" +
-                             $"hwnd={FormatHwnd(targetHwnd)}，{TraceRequest(requestId)}");
+                LogPreviewStartFailure(
+                    resType, "预览启动失败",
+                    $"会话={SessionToName(sessionType)}，资源={ResourceToName(resType)}，" +
+                    $"hwnd={FormatHwnd(targetHwnd)}，{TraceRequest(requestId)}",
+                    sessionType, requestId, "invalid_hwnd");
                 return false;
             }
 
@@ -912,8 +918,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     await CleanupMjpegWorkerForRequestAsync(key, requestId).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(explicitPreviewUrl))
                 {
-                    Logger.Error($"预览播放失败：{ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
-                                 $"{TraceRequest(requestId)}");
+                    LogPreviewStartFailure(
+                        resType, "预览播放失败",
+                        $"资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
+                        $"{TraceRequest(requestId)}", sessionType, requestId, "preview_play_failed");
                     return false;
                 }
 
@@ -944,10 +952,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var playerPipeline = allowVlcFallback
                     ? (isHttpPreview ? "MJPEG+VLC回退" : "VLC")
                     : "仅MJPEG";
-                Logger.Error($"预览播放失败明细：资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
+                Logger.Debug($"预览播放失败明细：资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
                              $"播放链路={playerPipeline}，获取地址耗时={urlElapsed}ms，播放耗时={playElapsed}ms，" +
                              $"总耗时={totalSw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
-                Logger.Error($"预览播放失败：{ResourceToName(resType)}，{TraceRequest(requestId)}");
+                LogPreviewStartFailure(
+                    resType, "预览播放失败",
+                    $"资源={ResourceToName(resType)}，{TraceRequest(requestId)}",
+                    sessionType, requestId, "preview_play_failed");
                 return false;
             }
 
@@ -993,6 +1004,26 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return true;
         }
 
+        private static void LogPreviewStartFailure(PreviewResourceType resType,
+            string description, string diagnostics, PreviewSessionType sessionType,
+            string requestId, string errorCode)
+        {
+            var structuredMessage = description + "：" +
+                $"Operation={PreviewOperationName(resType, true)} " +
+                $"RequestId={FormatRequestId(requestId)} Result=Failed " +
+                $"ErrorCode={JsonHelper.ToLogValue(errorCode)}";
+
+            // 外部请求由 DllCommandHandler 记录唯一业务边界 ERROR；这里仅保留
+            // 内部结构化诊断，避免 PreviewManager 与 Proxy 边界重复记同一失败。
+            if (sessionType == PreviewSessionType.External)
+                Logger.Debug(structuredMessage);
+            else
+                Logger.Error(structuredMessage);
+
+            if (!string.IsNullOrWhiteSpace(diagnostics))
+                Logger.Debug(description + "技术字段：" + diagnostics);
+        }
+
         private async Task CleanupMjpegWorkerForRequestAsync(string key, string requestId)
         {
             if (!_mjpegWorkers.TryGetValue(key, out var worker) || worker == null)
@@ -1019,7 +1050,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (isRecoveryAttempt)
                     Logger.Warn($"预览Worker仍在释放，暂缓创建新Worker：会话={key}，{TraceRequest(requestId)}");
                 else
-                    Logger.Error($"预览Worker仍在释放，拒绝创建重叠Worker：会话={key}，{TraceRequest(requestId)}");
+                    Logger.Debug($"预览Worker仍在释放，拒绝创建重叠Worker：会话={key}，{TraceRequest(requestId)}");
                 return null;
             }
 
@@ -1056,7 +1087,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (isRecoveryAttempt)
                         Logger.Warn($"HTTP MJPEG恢复暂未成功，已等待后续重试：{description}，{TraceRequest(requestId)}");
                     else
-                        Logger.Error($"HTTP MJPEG预览失败，已禁止VLC回退：{description}，{TraceRequest(requestId)}");
+                        Logger.Debug($"HTTP MJPEG预览失败，已禁止VLC回退：{description}，{TraceRequest(requestId)}");
                     return null;
                 }
 
@@ -1067,7 +1098,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (isRecoveryAttempt)
                     Logger.Warn($"外部MJPEG恢复暂未成功，地址类型不支持回退：{description}，{TraceRequest(requestId)}");
                 else
-                    Logger.Error($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={Logger.SanitizeUrlForLog(previewUrl)}，{TraceRequest(requestId)}");
+                    Logger.Debug($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={Logger.SanitizeUrlForLog(previewUrl)}，{TraceRequest(requestId)}");
                 return null;
             }
 

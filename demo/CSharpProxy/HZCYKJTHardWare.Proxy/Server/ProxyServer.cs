@@ -646,7 +646,8 @@ namespace HZCYKJTHardWare.Proxy.Server
         private void LogException(string context, Exception ex)
         {
             Logger.Error(context, ex);
-            _log($"{context}：{ex.Message}");
+            _log(Logger.FormatModuleMessage(LogModules.Application, "调试",
+                $"{context}：{ex.Message}"));
         }
 
         private static async Task<(string method, string path, string body)>

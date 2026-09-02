@@ -206,7 +206,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed != controller._startTcs.Task)
             {
                 controller._abandoned = true;
-                Logger.Error($"VLC预览启动超时：{description}，超时={timeoutMs}ms，地址={VlcPreviewPlayer.SanitizeUrlForLog(rtspUrl)}。本次预览已放弃，终端切换继续完成。");
+                Logger.Debug($"VLC预览启动超时：{description}，超时={timeoutMs}ms，地址={VlcPreviewPlayer.SanitizeUrlForLog(rtspUrl)}。本次预览已放弃，终端切换继续完成。");
                 await controller.DisposeAsync(Math.Min(1000, Math.Max(1, timeoutMs))).ConfigureAwait(false);
                 return null;
             }
@@ -218,7 +218,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC预览启动异常：{description}，错误={ex.Message}", ex);
+                Logger.Debug($"VLC预览启动异常：{description}，错误={ex}");
                 await controller.DisposeAsync(1000).ConfigureAwait(false);
                 return null;
             }
@@ -249,7 +249,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (completed != _exitTcs.Task && firstRequest)
             {
                 var timeoutCount = Interlocked.Increment(ref _exitTimeoutCount);
-                Logger.Warn($"VLC预览线程退出超时：{_description}，超时={timeoutMs}ms，" +
+                Logger.Debug($"VLC预览线程退出超时：{_description}，超时={timeoutMs}ms，" +
                     $"存活线程数={LiveThreadCount}，退出超时次数={timeoutCount}。后台线程将继续尝试释放资源。");
             }
         }
@@ -301,7 +301,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC预览线程异常：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"VLC预览线程异常：{_description}，错误={ex}");
                 _startTcs.TrySetResult(false);
             }
             finally
@@ -457,9 +457,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var message = BuildSnapshotFailureMessage(failureCode, reason, count,
                 playerState, snapshotReturnCode, detectedFormat, fileBytes,
                 width, height);
+            var summary = $"VLC车牌最新帧获取失败：RequestId={_requestId ?? "<无>"}，" +
+                          $"ErrorCode={failureCode}，次数={count}";
             if (count == 1)
             {
-                Logger.Warn(message);
+                Logger.Debug(message);
+                Logger.Warn(summary);
             }
             else
             {
@@ -470,7 +473,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     Logger.TryLogRateLimited(
                         "VlcPlateSnapshot|aggregate|" + _description + "|" + failureCode,
-                        LogModules.Preview, "警告", message);
+                        LogModules.Preview, "警告", summary);
                 }
             }
         }
@@ -546,7 +549,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"VLC车牌最新帧临时文件清理失败：{_latestFrameTempPath}，错误={ex.Message}");
+                Logger.Debug($"VLC车牌最新帧临时文件清理失败：{_latestFrameTempPath}，错误={ex.Message}");
             }
         }
 
@@ -597,7 +600,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC流故障检测异常：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"VLC流故障检测异常：{_description}，错误={ex}");
             }
         }
 
@@ -607,7 +610,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return;
 
             _streamFaultReason = reason;
-            Logger.Warn($"VLC预览流故障：{_description}，原因={reason}");
+            Logger.Debug($"VLC预览流故障：{_description}，原因={reason}");
             _stopRequested = true;
 
             var handler = _streamFaultHandler;
@@ -620,7 +623,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Error($"VLC流故障回调失败：{_description}，错误={ex.Message}", ex);
+                Logger.Debug($"VLC流故障回调失败：{_description}，错误={ex}");
             }
         }
 
@@ -632,7 +635,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             catch (Exception ex)
             {
-                Logger.Warn($"VLC预览资源释放异常：{_description}，错误={ex.Message}");
+                Logger.Debug($"VLC预览资源释放异常：{_description}，错误={ex.Message}");
             }
             finally
             {

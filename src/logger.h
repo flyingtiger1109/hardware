@@ -181,3 +181,4 @@ private:
 #define LOG_ERROR_RATE_LIMITED(key, mod, fmt, ...) \
     HZCYKJTHardWare::Logger::Instance().LogRateLimited( \
         HZCYKJTHardWare::LogLevel::Error, mod, __FUNCTION__, key, fmt, ##__VA_ARGS__)
+#define LOG_DEBUG_RATE_LIMITED(key, mod, fmt, ...) HZCYKJTHardWare::Logger::Instance().LogRateLimited(HZCYKJTHardWare::LogLevel::Debug, mod, __FUNCTION__, key, fmt, ##__VA_ARGS__)

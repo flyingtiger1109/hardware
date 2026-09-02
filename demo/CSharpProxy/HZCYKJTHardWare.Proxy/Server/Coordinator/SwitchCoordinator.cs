@@ -235,7 +235,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             catch (Exception ex)
             {
                 _log("[终端切换][错误] 切换失败：Operation=SwitchTerminal RequestId=" +
-                    PreviewManager.FormatRequestId(requestId) + "，错误=" + ex.Message);
+                    PreviewManager.FormatRequestId(requestId) +
+                    " Result=Failed ErrorCode=exception，错误=" + ex.Message);
                 return false;
             }
             finally

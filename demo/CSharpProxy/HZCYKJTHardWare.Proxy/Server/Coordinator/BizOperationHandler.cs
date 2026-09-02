@@ -494,7 +494,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 $"\"XB\":\"{JsonHelper.EscapeString(sex)}\",\"CSRQ\":\"{JsonHelper.EscapeString(birthday)}\"," +
                 "\"KADM\":\"\"}}";
 
-            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
                 "授权请求：Operation=Authorize RequestId=" + JsonHelper.ToLogValue(requestId) +
                 "，TerminalIndex=" + routeEpoch.Route.TerminalIndex +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
@@ -552,10 +552,14 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
 
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
+            var errorCode = ResultParser.ExtractErrorCode(response);
+            if (string.IsNullOrWhiteSpace(errorCode))
+                errorCode = "authorize_failed";
             _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
             _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
                 "授权请求最终失败：Operation=Authorize RequestId=" +
-                JsonHelper.ToLogValue(requestId) + " Result=Failed，错误=" + detail));
+                JsonHelper.ToLogValue(requestId) + " Result=Failed ErrorCode=" +
+                JsonHelper.ToLogValue(errorCode) + "，错误=" + detail));
             return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = detail };
         }
 

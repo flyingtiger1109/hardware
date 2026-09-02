@@ -44,7 +44,7 @@ FaceResult ResultParser::ParseFaceResult(const std::string& json) {
     FaceResult result;
     std::string dataObj = JsonHelper::GetJsonObject(json, "data");
     if (dataObj.empty()) {
-        LOG_ERROR("ResultParser", "人脸回调解析失败：缺少 data 字段");
+        LOG_DEBUG("ResultParser", "人脸回调解析失败：缺少 data 字段");
         return result;
     }
 
@@ -69,7 +69,7 @@ FaceResult ResultParser::ParseFaceResult(const std::string& json) {
 
     result.valid = !result.image_base64.empty();
     if (!result.valid) {
-        LOG_ERROR("ResultParser", "人脸回调解析失败：image_base64 为空");
+        LOG_DEBUG("ResultParser", "人脸回调解析失败：image_base64 为空");
     } else {
         LOG_DEBUG("ResultParser", "人脸回调解析成功：%dx%d，mime=%s，score=%.2f",
                  result.width, result.height, result.image_mime_type.c_str(), result.face_score);
@@ -82,7 +82,7 @@ FingerprintResult ResultParser::ParseFingerprintResult(const std::string& json) 
     FingerprintResult result;
     std::string dataObj = JsonHelper::GetJsonObject(json, "data");
     if (dataObj.empty()) {
-        LOG_ERROR("ResultParser", "指纹回调解析失败：缺少 data 字段");
+        LOG_DEBUG("ResultParser", "指纹回调解析失败：缺少 data 字段");
         return result;
     }
 
@@ -99,7 +99,7 @@ FingerprintResult ResultParser::ParseFingerprintResult(const std::string& json) 
 
     result.valid = !result.image_base64.empty();
     if (!result.valid) {
-        LOG_ERROR("ResultParser", "指纹回调解析失败：image_base64 为空");
+        LOG_DEBUG("ResultParser", "指纹回调解析失败：image_base64 为空");
     } else {
         LOG_DEBUG("ResultParser", "指纹回调解析成功：%dx%d，mime=%s，score=%.2f",
                  result.width, result.height, result.image_mime_type.c_str(), result.finger_score);
@@ -113,7 +113,7 @@ OcrResult ResultParser::ParseOcrResult(const std::string& json) {
 
     std::string dataObj = JsonHelper::GetJsonObject(json, "data");
     if (dataObj.empty()) {
-        LOG_ERROR("ResultParser", "OCR回调解析失败：缺少 data 字段");
+        LOG_DEBUG("ResultParser", "OCR回调解析失败：缺少 data 字段");
         return result;
     }
 
@@ -203,7 +203,7 @@ IrisResult ResultParser::ParseIrisResult(const std::string& json) {
     IrisResult result;
     std::string dataObj = JsonHelper::GetJsonObject(json, "data");
     if (dataObj.empty()) {
-        LOG_ERROR("ResultParser", "虹膜回调解析失败：缺少 data 字段");
+        LOG_DEBUG("ResultParser", "虹膜回调解析失败：缺少 data 字段");
         return result;
     }
 
@@ -244,7 +244,7 @@ IrisResult ResultParser::ParseIrisResult(const std::string& json) {
     result.image_mime_type = JsonHelper::GetString(dataObj, "image_mime_type");
     result.valid = !result.left_iris_base64.empty() || !result.right_iris_base64.empty();
     if (!result.valid) {
-        LOG_ERROR("ResultParser", "虹膜回调解析失败：左右眼图像均为空");
+        LOG_DEBUG("ResultParser", "虹膜回调解析失败：左右眼图像均为空");
     } else {
         LOG_DEBUG("ResultParser", "虹膜回调解析成功：left=%dx%d，right=%dx%d，mime=%s",
                  result.left_width, result.left_height,
@@ -259,7 +259,7 @@ NfcCardResult ResultParser::ParseNfcCardResult(const std::string& json) {
     NfcCardResult result;
     std::string dataObj = JsonHelper::GetJsonObject(json, "data");
     if (dataObj.empty()) {
-        LOG_ERROR("ResultParser", "IC卡识别回调解析失败：缺少 data 字段");
+        LOG_DEBUG("ResultParser", "IC卡识别回调解析失败：缺少 data 字段");
         return result;
     }
 
@@ -267,7 +267,7 @@ NfcCardResult ResultParser::ParseNfcCardResult(const std::string& json) {
     result.ic_number = result.card_text;
     result.valid = !result.ic_number.empty();
     if (!result.valid) {
-        LOG_ERROR("ResultParser", "IC卡识别回调解析失败：card_text 为空");
+        LOG_DEBUG("ResultParser", "IC卡识别回调解析失败：card_text 为空");
     } else {
         LOG_DEBUG("ResultParser", "IC卡识别回调解析成功：card_text=%s", result.card_text.c_str());
     }
