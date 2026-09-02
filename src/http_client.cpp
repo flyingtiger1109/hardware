@@ -154,13 +154,15 @@ bool HttpClient::PostBinary(const std::string& url,
                             int requestTimeoutMs,
                             size_t maxResponseBytes,
                             std::string& responseBody,
-                            int& responseStatusCode) {
+                            int& responseStatusCode,
+                            std::map<std::string, std::string>* responseHeaders) {
     const ULONGLONG startedAt = GetTickCount64();
     const std::string requestId = JsonHelper::GetString(body, "request_id");
     const char* requestIdForLog = requestId.empty() ? "<无>" : requestId.c_str();
     const std::string safeUrl = SanitizeUrlForLog(url);
     responseBody.clear();
     responseStatusCode = 0;
+    if (responseHeaders) responseHeaders->clear();
 
     if (!m_hSession) {
         LOG_ERROR_RATE_LIMITED("HTTP|POST_BINARY|session", "HTTP请求",
@@ -249,6 +251,51 @@ bool HttpClient::PostBinary(const std::string& url,
                         WINHTTP_HEADER_NAME_BY_INDEX, &statusCode,
                         &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
     responseStatusCode = static_cast<int>(statusCode);
+
+    if (responseHeaders) {
+        const wchar_t* headerNames[] = {
+            L"X-HZCY-Capture-Request-Id",
+            L"X-HZCY-Preview-Request-Id",
+            L"X-HZCY-Plate",
+            L"X-HZCY-Frame-Source",
+            L"X-HZCY-Frame-Width",
+            L"X-HZCY-Frame-Height",
+            L"X-HZCY-Frame-Age-Ms"
+        };
+        const char* headerKeys[] = {
+            "X-HZCY-Capture-Request-Id",
+            "X-HZCY-Preview-Request-Id",
+            "X-HZCY-Plate",
+            "X-HZCY-Frame-Source",
+            "X-HZCY-Frame-Width",
+            "X-HZCY-Frame-Height",
+            "X-HZCY-Frame-Age-Ms"
+        };
+        for (size_t i = 0; i < sizeof(headerNames) / sizeof(headerNames[0]); ++i) {
+            DWORD headerBytes = 0;
+            WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM,
+                                headerNames[i], nullptr, &headerBytes,
+                                WINHTTP_NO_HEADER_INDEX);
+            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || headerBytes == 0)
+                continue;
+
+            std::vector<wchar_t> headerValue(
+                headerBytes / sizeof(wchar_t) + 1, L'\0');
+            if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM,
+                                    headerNames[i], headerValue.data(),
+                                    &headerBytes, WINHTTP_NO_HEADER_INDEX)) {
+                const size_t charCount = headerBytes / sizeof(wchar_t);
+                std::wstring value(headerValue.data(), charCount);
+                while (!value.empty() &&
+                       (value.back() == L'\0' || value.back() == L' ' ||
+                        value.back() == L'\t')) {
+                    value.pop_back();
+                }
+                (*responseHeaders)[headerKeys[i]] =
+                    PathHelper::WideToUtf8(value);
+            }
+        }
+    }
 
     DWORD bytesAvailable = 0;
     char buffer[4096];

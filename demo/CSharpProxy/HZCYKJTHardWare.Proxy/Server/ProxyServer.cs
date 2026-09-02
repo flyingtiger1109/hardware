@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -412,7 +413,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                         {
                             await WriteBinaryHttpResponseWithDeadlineAsync(client, stream,
                                 binaryResponse.StatusCode, binaryResponse.ContentType,
-                                binaryResponse.Body, 5000).ConfigureAwait(false);
+                                binaryResponse.Body, binaryResponse.Headers,
+                                5000).ConfigureAwait(false);
                         }
                         finally
                         {
@@ -672,13 +674,14 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         private static async Task WriteBinaryHttpResponseWithDeadlineAsync(TcpClient client,
             NetworkStream stream, int statusCode, string contentType, byte[] body,
+            IDictionary<string, string> headers,
             int timeoutMs)
         {
             using (var cancellation = new CancellationTokenSource(timeoutMs))
             using (cancellation.Token.Register(() => CloseClient(client)))
             {
                 await HttpProtocolHandler.WriteHttpResponseAsync(stream, statusCode,
-                    contentType, body, cancellation.Token).ConfigureAwait(false);
+                    contentType, body, headers, cancellation.Token).ConfigureAwait(false);
             }
         }
 

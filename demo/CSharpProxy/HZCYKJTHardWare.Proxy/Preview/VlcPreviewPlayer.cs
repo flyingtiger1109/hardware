@@ -18,6 +18,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private IntPtr _currentParentHwnd;
         private bool _ownsVideoHwnd;
         private bool _directRenderTarget;
+        private bool _disableOsd;
         private string _vlcDir;
         private const string RiskySftpPluginRelativePath = @"plugins\access\libsftp_plugin.dll";
         private const uint LoadWithAlteredSearchPath = 0x00000008;
@@ -128,7 +129,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
-        internal static List<string> BuildLibVlcArguments(string pluginsPath)
+        internal static List<string> BuildLibVlcArguments(string pluginsPath,
+            bool disableOsd = false)
         {
             var args = new List<string>
             {
@@ -141,6 +143,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 // 作为 VLC 侧首选输出；读取端仍按 magic/decode 判定实际格式。
                 "--snapshot-format=jpg"
             };
+
+            if (disableOsd)
+            {
+                // 仅车牌抓帧实例关闭 OSD，避免改变其他预览实例的既有行为。
+                args.Insert(4, "--no-osd");
+            }
 
             if (!string.IsNullOrWhiteSpace(pluginsPath) && Directory.Exists(pluginsPath))
                 args.Add("--plugin-path=" + pluginsPath);
@@ -344,7 +352,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public bool Play(string rtspUrl, IntPtr parentHwnd, int networkCachingMs, int liveCachingMs,
             string rtspTransport = "", int sourceWidth = 0, int sourceHeight = 0, bool swapDimensions = false,
-            bool visible = true, bool directRenderTarget = false)
+            bool visible = true, bool directRenderTarget = false, bool disableOsd = false)
         {
             if (_fnNew == null && !LoadVlc()) return false;
             if (parentHwnd == IntPtr.Zero || !IsWindow(parentHwnd)) return false;
@@ -356,13 +364,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
             _sourceHeight = sourceHeight;
             _swapDimensions = swapDimensions;
             _directRenderTarget = directRenderTarget;
+            _disableOsd = disableOsd;
             _lastHostW = _lastHostH = _lastSrcW = _lastSrcH = 0;
 
             try
             {
                 var pluginsPath = Path.Combine(_vlcDir ?? "", "plugins");
                 // 1）创建实际执行车牌 take_snapshot 的 VLC 实例。
-                var args = BuildLibVlcArguments(pluginsPath);
+                var args = BuildLibVlcArguments(pluginsPath, disableOsd: _disableOsd);
 
                 var argPtrs = new IntPtr[args.Count];
                 for (int i = 0; i < args.Count; i++)

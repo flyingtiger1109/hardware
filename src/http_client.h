@@ -33,7 +33,8 @@ public:
                     int requestTimeoutMs,
                     size_t maxResponseBytes,
                     std::string& responseBody,
-                    int& responseStatusCode);
+                    int& responseStatusCode,
+                    std::map<std::string, std::string>* responseHeaders = nullptr);
 
     // 发送 GET 请求（用于终端状态检测）
     bool Get(const std::string& url,

@@ -11,9 +11,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
     public sealed class VlcPreviewController : IPreviewController
     {
         internal const int LayoutRefreshIntervalMs = 250;
-        internal const int LatestPlateFrameCaptureIntervalMs = 200;
         internal const int LatestPlateFrameMaxBytes = 8 * 1024 * 1024;
-        internal const int LatestPlateFrameMaxAgeMs = 3000;
+        // 最新帧只在请求触发时抓拍；超过 1 秒即视为过期，不向第三方返回旧帧。
+        internal const int LatestPlateFrameMaxAgeMs = 1000;
         internal const int LatestPlateFrameSnapshotWaitMs = 300;
         internal const int LatestPlateFrameRefreshTimeoutMs = 600;
         internal const int LatestFrameFailureNone = 0;
@@ -115,14 +115,35 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal bool TryRefreshLatestFrame(int timeoutMs,
             out LatestPlateFrameSnapshot snapshot)
         {
+            return TryRefreshLatestFrame(timeoutMs, LatestPlateFrameMaxAgeMs,
+                out snapshot, out _);
+        }
+
+        /// <summary>
+        /// 对已过期或尚未产生帧的会话请求一次有界刷新。
+        /// 同一会话使用 CompareExchange 合并并发请求，实际 Snapshot 始终只由
+        /// VLC 所属线程执行；等待方共享这次刷新产生的序列，不创建新的播放器。
+        /// </summary>
+        internal bool TryRefreshLatestFrame(int timeoutMs, int maxAgeMs,
+            out LatestPlateFrameSnapshot snapshot, out bool refreshed)
+        {
             snapshot = null;
+            refreshed = false;
             if (!IsLatestFrameSourceRunning)
                 return false;
+
+            if (_latestFrameCache.TryGet(out var cached) &&
+                IsLatestFrameFresh(cached, maxAgeMs, DateTime.UtcNow))
+            {
+                snapshot = cached;
+                return true;
+            }
 
             long previousSequence = 0;
             _latestFrameCache.TryGetSequence(out previousSequence);
 
-            Interlocked.Exchange(ref _snapshotRefreshRequested, 1);
+            // 只有第一个请求负责投递刷新；其余并发请求等待同一个新序列。
+            Interlocked.CompareExchange(ref _snapshotRefreshRequested, 1, 0);
             var stopwatch = Stopwatch.StartNew();
             var waitMs = Math.Max(1, timeoutMs);
             while (!_stopRequested && stopwatch.ElapsedMilliseconds < waitMs)
@@ -132,6 +153,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     TryGetLatestFrame(out var current))
                 {
                     snapshot = current;
+                    refreshed = true;
                     return true;
                 }
 
@@ -139,9 +161,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     Math.Max(1, waitMs - (int)stopwatch.ElapsedMilliseconds)));
             }
 
-            return _latestFrameCache.TryGetSequence(out var finalSequence) &&
-                   finalSequence > previousSequence &&
-                   TryGetLatestFrame(out snapshot);
+            if (_latestFrameCache.TryGetSequence(out var finalSequence) &&
+                finalSequence > previousSequence &&
+                TryGetLatestFrame(out snapshot))
+            {
+                refreshed = true;
+                return true;
+            }
+
+            return false;
         }
 
         internal void SetStreamFaultHandler(Action<VlcPreviewController, string> handler)
@@ -236,7 +264,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _player = new VlcPreviewPlayer();
                 var ok = _player.Play(_rtspUrl, _parentHwnd, _networkCachingMs, _liveCachingMs,
                     _rtspTransport, _sourceWidth, _sourceHeight, _swapDimensions, _visible,
-                    _directRenderTarget);
+                    _directRenderTarget, _captureLatestFrame);
 
                 _running = ok && _player.IsRunning;
                 _startTcs.TrySetResult(ok);
@@ -248,8 +276,6 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastMediaUpdateUtc = DateTime.UtcNow;
 
                 var nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
-                var nextSnapshotUtc = DateTime.UtcNow.AddMilliseconds(
-                    LatestPlateFrameCaptureIntervalMs);
                 while (!_stopRequested)
                 {
                     Application.DoEvents();
@@ -261,12 +287,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     }
                     var refreshRequested = Interlocked.Exchange(
                         ref _snapshotRefreshRequested, 0) != 0;
-                    if (_captureLatestFrame && !_stopRequested &&
-                        (nowUtc >= nextSnapshotUtc || refreshRequested))
+                    if (_captureLatestFrame && !_stopRequested && refreshRequested)
                     {
                         CaptureLatestFrame();
-                        nextSnapshotUtc = DateTime.UtcNow.AddMilliseconds(
-                            LatestPlateFrameCaptureIntervalMs);
                     }
                     DetectStreamFault();
                     Thread.Sleep(20);
@@ -494,6 +517,18 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private void SetLatestFrameFailure(int failure)
         {
             Volatile.Write(ref _latestFrameFailure, failure);
+        }
+
+        private static bool IsLatestFrameFresh(LatestPlateFrameSnapshot snapshot,
+            int maxAgeMs, DateTime nowUtc)
+        {
+            if (snapshot == null || snapshot.Jpeg == null || snapshot.Jpeg.Length == 0 ||
+                snapshot.Width <= 0 || snapshot.Height <= 0 ||
+                !string.Equals(snapshot.Format, "jpeg", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var ageMs = (nowUtc - snapshot.CapturedUtc).TotalMilliseconds;
+            return ageMs >= 0 && ageMs <= Math.Max(0, maxAgeMs);
         }
 
         private void DeleteLatestFrameTempFile()

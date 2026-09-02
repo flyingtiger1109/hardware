@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -327,55 +328,99 @@ namespace HZCYKJTHardWare.Proxy.Server
         private DllBinaryResponse HandleLatestPlateFrame(string method,
             string path, string bodyUtf8)
         {
+            var captureStopwatch = Stopwatch.StartNew();
+            string captureRequestId = null;
+            string requestId = null;
+            string plateCode = "unknown";
+            string source = "unknown";
+            long frameAgeMs = -1;
+            LatestPlateFrameSnapshot snapshot = null;
+
             if (!TryGetLatestPlateFrameRoute(path,
-                out var resourceType, out var plateCode))
+                out var resourceType, out var routePlateCode))
             {
                 return BuildLatestPlateFrameError("not_found", "未知车牌最新帧路由");
             }
 
-            var canonicalPath = "/preview/plate/" + plateCode + "/latest-frame";
+            plateCode = routePlateCode.ToUpperInvariant();
+            var canonicalPath = "/preview/plate/" + routePlateCode + "/latest-frame";
+            var request = ParsedJsonBody.Parse(bodyUtf8);
+            requestId = request.GetString("request_id");
+            captureRequestId = request.GetString("capture_request_id");
+            if (string.IsNullOrWhiteSpace(captureRequestId))
+                captureRequestId = CreateCaptureRequestId();
 
             if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Failed", "invalid_method", captureStopwatch.ElapsedMilliseconds,
+                    null, source, frameAgeMs);
                 return BuildLatestPlateFrameError("invalid_method", "最新车牌帧接口只支持POST");
+            }
 
             if (_capabilities.TryGetRequiredCapability(canonicalPath, out var required) &&
                 !_capabilities.IsSupported(required))
             {
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Failed", "not_supported", captureStopwatch.ElapsedMilliseconds,
+                    null, source, frameAgeMs);
                 return DllBinaryResponse.Json(
                     _capabilities.BuildNotSupportedResult(canonicalPath, required));
             }
 
-            var request = ParsedJsonBody.Parse(bodyUtf8);
-            var requestId = request.GetString("request_id");
             if (string.IsNullOrWhiteSpace(requestId))
+            {
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Failed", "invalid_request_id", captureStopwatch.ElapsedMilliseconds,
+                    null, source, frameAgeMs);
                 return BuildLatestPlateFrameError("invalid_request_id", "request_id为空");
+            }
 
             if (!_latestFrameResponseGate.Wait(0))
+            {
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Failed", "frame_busy", captureStopwatch.ElapsedMilliseconds,
+                    null, source, frameAgeMs);
                 return BuildLatestPlateFrameError("frame_busy", "最新车牌帧响应并发数已达上限");
+            }
 
             var leaseOwned = true;
             try
             {
                 if (!_previewManager.TryGetLatestPlateFrame(resourceType, requestId,
-                    out var snapshot, out var errorCode, out var errorMessage))
+                    out snapshot, out var errorCode, out var errorMessage,
+                    out source, out frameAgeMs))
                 {
+                    LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                        "Failed", errorCode, captureStopwatch.ElapsedMilliseconds,
+                        snapshot, source, frameAgeMs);
                     return BuildLatestPlateFrameError(errorCode, errorMessage);
                 }
 
                 if (snapshot == null || snapshot.Jpeg == null || snapshot.Jpeg.Length == 0)
+                {
+                    LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                        "Failed", "frame_data_invalid", captureStopwatch.ElapsedMilliseconds,
+                        snapshot, source, frameAgeMs);
                     return BuildLatestPlateFrameError("frame_data_invalid", "最新车牌帧数据为空");
+                }
 
+                var responseHeaders = BuildLatestPlateFrameHeaders(
+                    plateCode, captureRequestId, requestId, snapshot, source, frameAgeMs);
                 var response = DllBinaryResponse.Binary(snapshot.Jpeg, "image/jpeg",
+                    responseHeaders,
                     () => _latestFrameResponseGate.Release());
-                _log(Logger.FormatModuleMessage(LogModules.Preview, "调试",
-                    $"车牌最新帧已准备：资源={FormatPreviewResource(resourceType)}，" +
-                    $"request_id={FormatRequestId(requestId)}，尺寸={snapshot.Width}x{snapshot.Height}，" +
-                    $"序列号={snapshot.Sequence}，字节数={snapshot.Jpeg.Length}"));
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Success", "none", captureStopwatch.ElapsedMilliseconds,
+                    snapshot, source, frameAgeMs);
                 leaseOwned = false;
                 return response;
             }
             catch (Exception ex)
             {
+                LogLatestPlateFrameOperation(plateCode, captureRequestId, requestId,
+                    "Failed", "frame_data_invalid", captureStopwatch.ElapsedMilliseconds,
+                    snapshot, source, frameAgeMs);
                 Logger.Error($"车牌最新帧处理异常：资源={FormatPreviewResource(resourceType)}，" +
                     $"request_id={FormatRequestId(requestId)}", ex);
                 return BuildLatestPlateFrameError("frame_data_invalid", "获取最新车牌帧异常");
@@ -385,6 +430,51 @@ namespace HZCYKJTHardWare.Proxy.Server
                 if (leaseOwned)
                     _latestFrameResponseGate.Release();
             }
+        }
+
+        private static string CreateCaptureRequestId()
+        {
+            return "PROXY_CAPTURE_" + DateTime.Now.ToString("yyyyMMddHHmmssfff") +
+                "_" + Guid.NewGuid().ToString("N").Substring(0, 12);
+        }
+
+        private static IDictionary<string, string> BuildLatestPlateFrameHeaders(
+            string plateCode, string captureRequestId, string requestId,
+            LatestPlateFrameSnapshot snapshot, string source, long frameAgeMs)
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["X-HZCY-Capture-Request-Id"] = captureRequestId ?? string.Empty,
+                ["X-HZCY-Preview-Request-Id"] = requestId ?? string.Empty,
+                ["X-HZCY-Plate"] = plateCode ?? "unknown",
+                ["X-HZCY-Frame-Source"] = source ?? "unknown",
+                ["X-HZCY-Frame-Width"] = snapshot == null ? "-1" : snapshot.Width.ToString(),
+                ["X-HZCY-Frame-Height"] = snapshot == null ? "-1" : snapshot.Height.ToString(),
+                ["X-HZCY-Frame-Age-Ms"] = frameAgeMs.ToString()
+            };
+        }
+
+        private void LogLatestPlateFrameOperation(string plateCode,
+            string captureRequestId, string requestId, string result,
+            string errorCode, long durationMs, LatestPlateFrameSnapshot snapshot,
+            string source, long frameAgeMs)
+        {
+            var fields = Logger.FormatContextMessage("GetLatestPlateFrame",
+                requestId: captureRequestId,
+                result: result,
+                errorCode: string.IsNullOrWhiteSpace(errorCode) ? "unknown" : errorCode,
+                durationMs: durationMs);
+            fields += " CaptureRequestId=" + FormatRequestId(captureRequestId) +
+                " PreviewRequestId=" + FormatRequestId(requestId) +
+                " Plate=" + JsonHelper.ToLogValue(plateCode ?? "unknown") +
+                " Source=" + JsonHelper.ToLogValue(source ?? "unknown") +
+                " Bytes=" + (snapshot?.Jpeg?.Length ?? 0) +
+                " Width=" + (snapshot == null ? -1 : snapshot.Width) +
+                " Height=" + (snapshot == null ? -1 : snapshot.Height) +
+                " FrameAgeMs=" + frameAgeMs;
+            _log(Logger.FormatModuleMessage(LogModules.PlateCapture,
+                string.Equals(result, "Success", StringComparison.OrdinalIgnoreCase)
+                    ? "信息" : "错误", fields));
         }
 
         private static DllBinaryResponse BuildLatestPlateFrameError(string code,

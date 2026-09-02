@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
@@ -119,12 +120,41 @@ namespace HZCYKJTHardWare.Proxy.Server
             int statusCode, string contentType, byte[] body,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            await WriteHttpResponseAsync(stream, statusCode, contentType, body,
+                null, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 向 NetworkStream 写入带内部诊断响应头的二进制响应。
+        /// 这些响应头只服务于 DLL↔Proxy 内部链路，不改变 JPEG 正文或导出 ABI。
+        /// </summary>
+        public static async Task WriteHttpResponseAsync(NetworkStream stream,
+            int statusCode, string contentType, byte[] body,
+            IDictionary<string, string> headers,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
             var statusText = statusCode == 200 ? "OK" : statusCode == 202 ? "Accepted" : "Error";
             var bodyBytes = body ?? new byte[0];
             var responseContentType = string.IsNullOrWhiteSpace(contentType)
                 ? "application/octet-stream"
                 : contentType;
-            var header = $"HTTP/1.1 {statusCode} {statusText}\r\nContent-Type: {responseContentType}\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n";
+            var headerBuilder = new StringBuilder();
+            headerBuilder.Append($"HTTP/1.1 {statusCode} {statusText}\r\n")
+                .Append("Content-Type: ").Append(responseContentType).Append("\r\n")
+                .Append("Content-Length: ").Append(bodyBytes.Length).Append("\r\n");
+            if (headers != null)
+            {
+                foreach (var pair in headers)
+                {
+                    if (string.IsNullOrWhiteSpace(pair.Key))
+                        continue;
+                    var value = (pair.Value ?? string.Empty)
+                        .Replace("\r", " ").Replace("\n", " ");
+                    headerBuilder.Append(pair.Key).Append(": ").Append(value).Append("\r\n");
+                }
+            }
+            headerBuilder.Append("Connection: close\r\n\r\n");
+            var header = headerBuilder.ToString();
             var headerBytes = Encoding.UTF8.GetBytes(header);
 
             await stream.WriteAsync(headerBytes, 0, headerBytes.Length,

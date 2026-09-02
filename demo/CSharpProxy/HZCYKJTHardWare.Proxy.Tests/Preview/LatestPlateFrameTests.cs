@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -12,10 +13,11 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
     public class LatestPlateFrameTests
     {
         [TestMethod]
-        public void VlcArguments_DisableSnapshotPreviewAndPreferJpeg()
+        public void VlcArguments_DisableSnapshotPreviewOsdAndPreferJpeg()
         {
-            var args = VlcPreviewPlayer.BuildLibVlcArguments(null);
+            var args = VlcPreviewPlayer.BuildLibVlcArguments(null, disableOsd: true);
 
+            CollectionAssert.Contains(args, "--no-osd");
             CollectionAssert.Contains(args, "--no-snapshot-preview");
             CollectionAssert.Contains(args, "--snapshot-format=jpg");
         }
@@ -113,10 +115,29 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                 "jpeg", 1, now.AddMilliseconds(-100));
             var stale = new LatestPlateFrameSnapshot(
                 new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 }, 2, 1,
-                "jpeg", 2, now.AddMilliseconds(-3001));
+                "jpeg", 2, now.AddMilliseconds(-1001));
 
             Assert.IsTrue(PreviewManager.IsLatestPlateFrameFresh(fresh, now));
             Assert.IsFalse(PreviewManager.IsLatestPlateFrameFresh(stale, now));
+            Assert.AreEqual(1000, VlcPreviewController.LatestPlateFrameMaxAgeMs);
+        }
+
+        [TestMethod]
+        public void DllBinaryResponse_PreservesAndSanitizesFrameMetadataHeaders()
+        {
+            var headers = new Dictionary<string, string>
+            {
+                ["X-HZCY-Capture-Request-Id"] = "CAPTURE-1\r\nInjected: no",
+                ["X-HZCY-Frame-Width"] = "1920"
+            };
+
+            using (var response = DllBinaryResponse.Binary(
+                new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 }, "image/jpeg", headers))
+            {
+                Assert.AreEqual("CAPTURE-1  Injected: no",
+                    response.Headers["X-HZCY-Capture-Request-Id"]);
+                Assert.AreEqual("1920", response.Headers["X-HZCY-Frame-Width"]);
+            }
         }
 
         [TestMethod]

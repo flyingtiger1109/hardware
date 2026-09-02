@@ -2015,3 +2015,68 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 - 回退方式：回退本节涉及的 4 个源文件到修改前版本；不需要改动 DLL ABI 或现场数据。
 - 现场部署必须停止旧 Proxy 进程，使用 `Release|x64` 输出和统一配置端口 `8089`，再重新启动验证。
 - 后续仅在实机指标不足时评估 200ms Snapshot、LastGoodFrame 和纯内存帧缓存优化；本次不扩大预览系统重构范围。
+
+## 车牌最新帧按需抓拍与跨层关联（2026-09-02）
+
+### 调查结论
+
+- [x] 原链路由 `VlcPreviewController` 在线程循环中每 200ms 调用 `CaptureLatestFrame`，再通过临时文件读取、规范化并更新缓存；第三方 `SaveLatestPlateFrame` 只是读取该后台产物。
+- [x] `LastGoodFrame` 已按每个 `VlcPreviewController`/Preview Session 独立维护；CJ、RJ2、RJ3 不共用可变帧，Preview `RequestId` 与 `Generation` 仍由现有 Session 体系管理。
+- [x] `VlcPreviewPlayer.BuildLibVlcArguments` 是实际传给 `libvlc_new` 的参数构造点；每个预览会话独立创建 LibVLC Instance，车牌会话可定向关闭 OSD。
+
+### 本次完成
+
+- [x] 移除车牌 `200ms` 周期 Snapshot；VLC 线程仅在 `SaveLatestPlateFrame` 触发的刷新信号下执行一次 `TakeSnapshot`，预览本身继续稳定播放。
+- [x] `LastGoodFrame` 仅缓存通过尺寸、格式和 JPEG 规范化的帧；发布/读取均复制字节，帧年龄上限统一为 `LatestPlateFrameMaxAgeMs=1000`，明显过期或抓拍失败不静默返回旧帧。
+- [x] 每个 Preview Session 使用 `CompareExchange` 刷新信号合并并发请求；同一次按需刷新产生的新序列可被并发等待方共享，不创建新播放器，也不让多个线程同时调用 `TakeSnapshot`。
+- [x] 保留 `--no-snapshot-preview`，并仅对车牌抓帧 LibVLC Instance 加入 `--no-osd`；其他非车牌预览不改变既有 OSD 参数行为。
+- [x] Proxy 对真实 `/preview/plate/{cj|rj2|rj3}/latest-frame` 请求记录 `Operation=GetLatestPlateFrame` 的成功/失败业务日志，区分 `Source=Cache|OnDemandSnapshot`，并返回帧尺寸、年龄等受控响应头。
+- [x] Native DLL 为每次 `SaveLatestPlateFrame` 生成独立 `CaptureRequestId`，通过 DLL→Proxy 内部 JSON 传递；DLL 记录最终保存路径、Proxy/Preview RequestId、Plate、Result、ErrorCode、尺寸、FrameAge、Duration，Proxy 使用同一 `CaptureRequestId` 交叉关联。
+- [x] 新增响应头传递和 C++ JPEG 尺寸回退解析；未修改 DLL 导出名、`extern "C"`、`__stdcall`、参数数量/顺序/类型、callback ABI、错误码和第三方 HWND 所有权。
+- [x] 未修改 Stop Preview HTTP 12002 超时问题；该问题保留为独立 P1。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/LatestPlateFrame.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewController.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewPlayer.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllBinaryResponse.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/DllCommandHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/HttpProtocolHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/ProxyServer.cs`
+- `src/http_client.h`、`src/http_client.cpp`
+- `src/delphi_proxy.h`、`src/delphi_proxy.cpp`
+- `src/exports.cpp`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/LatestPlateFrameTests.cs`
+
+### 验证状态
+
+- [x] Native `Release|Win32/x86`：0 警告、0 错误。
+- [x] C# Proxy `Release|x64`：0 警告、0 错误。
+- [x] C# 第三方 Demo `Release|x86`：0 警告、0 错误。
+- [x] Tests `Release|x64`：0 错误；1 个 `NU1900` 仅为无法访问 NuGet 漏洞源的网络警告。
+- [x] 车牌最新帧专项 VSTest：11/11 通过。
+- [x] `git diff --check`：无空白错误；仅有 Git LF/CRLF 转换提示。
+- [x] Native `dumpbin /exports`：`HZCYKJTHardWare_SaveLatestPlateFrame = _HZCYKJTHardWare_SaveLatestPlateFrame@8`；CJ/RJ2/RJ3 开始/停止导出均存在，ABI 未变化。
+- [ ] 全量 C# Proxy 测试：160/172 通过、12 失败；10 项为当前宿主 `HttpListener` 的 `PlatformNotSupportedException`，1 项 ProductVersion 期望值不一致，1 项既有回调路由时序断言失败，均未归因于本次车牌帧改动。
+
+### 尚待实机验证
+
+- [ ] Windows 10/11 x64 + Delphi7 x86 + 真实终端下分别验证 CJ、RJ2、RJ3 预览、顶部无 Snapshot 路径、左上角无 Snapshot 缩略图和最终 JPEG 保存。
+- [ ] 无第三方抓拍运行至少 10 秒，确认 Snapshot 调用次数为 0；首次抓拍为 `OnDemandSnapshot`，新鲜帧命中 `Cache`，超过 1 秒后再次按需抓拍。
+- [ ] 连续 100 次抓拍：记录成功/失败数、实际 Snapshot 次数、Cache 命中数，并确认每次 `CaptureRequestId` 唯一且 DLL/Proxy 日志可交叉检索。
+- [ ] 同一 CJ 多线程并发、CJ/RJ2/RJ3 并行、Start→Stop→Start、Snapshot 与 Stop 竞态：确认不串帧、不访问已释放 MediaPlayer、旧 Session 不回写新缓存。
+- [ ] 现场采集 CPU、Private Bytes、Working Set、Threads、Handles、GDI/USER Handles、临时文件数量和 30 分钟/2 小时长稳数据；当前未声称不存在增长。
+
+### 风险与回退
+
+- 风险：按需刷新首次依赖 `Playing`、轨道尺寸和文件稳定窗口；视频启动慢或瞬时断流时会返回 `frame_not_ready`/`frame_stale`，不再使用几秒以前的历史车牌图。
+- 风险：完整回归中的 `HttpListener`、版本断言和既有回调时序失败需要在 Windows/规范运行环境单独处理，不能与本 Task 混修。
+- 回退：仅回退本节列出的车牌帧源文件、Native HTTP/Proxy/导出改动和专项测试/本节记录；不执行宽范围 `reset`，不删除已有用户修改、未跟踪文件或构建产物，不改变此前提交的 DLL ABI。
+
+### 后续计划
+
+- [ ] 完成真实 CJ/RJ2/RJ3 抓拍与资源指标基线。
+- [ ] 单独评估是否去除临时 Snapshot 文件、改用 VLC Frame Callback 纯内存抓帧，以及 Stop Preview HTTP 12002 超时。
+- [ ] 完成 24 小时稳定性测试后再决定是否扩大缓存/抓帧架构范围。

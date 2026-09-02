@@ -140,6 +140,68 @@ bool HasJpegSignature(const std::string& data) {
         static_cast<unsigned char>(data[data.size() - 1]) == 0xD9;
 }
 
+bool IsJpegStartOfFrame(unsigned char marker) {
+    return (marker >= 0xC0 && marker <= 0xC3) ||
+           (marker >= 0xC5 && marker <= 0xC7) ||
+           (marker >= 0xC9 && marker <= 0xCB) ||
+           (marker >= 0xCD && marker <= 0xCF);
+}
+
+bool TryGetJpegDimensions(const std::string& data, int& width, int& height) {
+    width = 0;
+    height = 0;
+    if (!HasJpegSignature(data)) return false;
+
+    size_t index = 2;
+    while (index + 1 < data.size()) {
+        if (static_cast<unsigned char>(data[index]) != 0xFF)
+            return false;
+        while (index < data.size() &&
+               static_cast<unsigned char>(data[index]) == 0xFF) {
+            ++index;
+        }
+        if (index >= data.size()) return false;
+
+        const unsigned char marker = static_cast<unsigned char>(data[index++]);
+        if (marker == 0xD9 || marker == 0xDA) break;
+        if (marker == 0xD8 || (marker >= 0xD0 && marker <= 0xD7)) continue;
+        if (index + 1 >= data.size()) return false;
+
+        const unsigned int segmentLength =
+            (static_cast<unsigned char>(data[index]) << 8) |
+            static_cast<unsigned char>(data[index + 1]);
+        if (segmentLength < 2 || index + segmentLength > data.size())
+            return false;
+
+        if (IsJpegStartOfFrame(marker) && segmentLength >= 7) {
+            height = (static_cast<unsigned char>(data[index + 3]) << 8) |
+                     static_cast<unsigned char>(data[index + 4]);
+            width = (static_cast<unsigned char>(data[index + 5]) << 8) |
+                    static_cast<unsigned char>(data[index + 6]);
+            return width > 0 && height > 0;
+        }
+        index += segmentLength;
+    }
+    return false;
+}
+
+std::string GetResponseHeader(const std::map<std::string, std::string>& headers,
+                              const char* name) {
+    if (!name) return "";
+    auto it = headers.find(name);
+    return it == headers.end() ? "" : it->second;
+}
+
+int GetResponseHeaderInt(const std::map<std::string, std::string>& headers,
+                         const char* name) {
+    const std::string value = GetResponseHeader(headers, name);
+    if (value.empty()) return -1;
+    char* end = nullptr;
+    const long parsed = std::strtol(value.c_str(), &end, 10);
+    if (end == value.c_str() || (end && *end != '\0')) return -1;
+    return parsed < INT_MIN || parsed > INT_MAX ? -1 : static_cast<int>(parsed);
+}
+
 } // 匿名命名空间结束
 
 DelphiProxy::DelphiProxy(const std::string& baseUrl)
@@ -348,9 +410,22 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
                                       const std::string& requestId,
                                       std::vector<unsigned char>& outJpeg,
                                       int timeoutMs) {
+    return GetLatestPlateFrame(plateCode, requestId, outJpeg, timeoutMs,
+                               "", nullptr);
+}
+
+bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
+                                      const std::string& requestId,
+                                      std::vector<unsigned char>& outJpeg,
+                                      int timeoutMs,
+                                      const std::string& captureRequestId,
+                                      LatestPlateFrameMetadata* metadata) {
     constexpr size_t kMaxJpegBytes = 8U * 1024U * 1024U;
     outJpeg.clear();
     lastResultCode_ = HZCYKJTHardWare_RET_OK;
+    if (metadata) {
+        *metadata = LatestPlateFrameMetadata();
+    }
 
     if (plateCode != "cj" && plateCode != "rj2" && plateCode != "rj3") {
         lastResultCode_ = HZCYKJTHardWare_FRAME_INVALID_CAMERA;
@@ -386,16 +461,21 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
     }
 
     const std::string path = "/preview/plate/" + plateCode + "/latest-frame";
-    const std::string body = "{" + JsonStringField("request_id", requestId) + "}";
+    std::string body = "{" + JsonStringField("request_id", requestId);
+    if (!captureRequestId.empty())
+        body += "," + JsonStringField("capture_request_id", captureRequestId);
+    body += "}";
     const std::string url = BuildUrl(path);
     const std::string safeUrl = SanitizeUrlForLog(url);
     std::string response;
     int statusCode = 0;
+    std::map<std::string, std::string> responseHeaders;
     LOG_DEBUG("代理服务", "获取最新车牌帧：车牌=%s，地址=%s，request_id=%s",
               plateCode.c_str(), safeUrl.c_str(), requestId.c_str());
 
     const bool posted = http->PostBinary(url, body, connectTimeout, requestTimeout,
-                                         kMaxJpegBytes, response, statusCode);
+                                         kMaxJpegBytes, response, statusCode,
+                                         &responseHeaders);
     if (!posted) {
         if (statusCode == -1)
             lastResultCode_ = HZCYKJTHardWare_FRAME_TOO_LARGE;
@@ -433,6 +513,20 @@ bool DelphiProxy::GetLatestPlateFrame(const std::string& plateCode,
                   plateCode.c_str(), requestId.c_str(), response.size(),
                   lastResultCode_);
         return false;
+    }
+
+    if (metadata) {
+        metadata->source = GetResponseHeader(responseHeaders,
+            "X-HZCY-Frame-Source");
+        metadata->width = GetResponseHeaderInt(responseHeaders,
+            "X-HZCY-Frame-Width");
+        metadata->height = GetResponseHeaderInt(responseHeaders,
+            "X-HZCY-Frame-Height");
+        metadata->frameAgeMs = GetResponseHeaderInt(responseHeaders,
+            "X-HZCY-Frame-Age-Ms");
+
+        if (metadata->width <= 0 || metadata->height <= 0)
+            TryGetJpegDimensions(response, metadata->width, metadata->height);
     }
 
     outJpeg.assign(response.begin(), response.end());

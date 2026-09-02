@@ -4,6 +4,13 @@
 
 namespace HZCYKJTHardWare {
 
+struct LatestPlateFrameMetadata {
+    std::string source;
+    int width = -1;
+    int height = -1;
+    long long frameAgeMs = -1;
+};
+
 // DLL 到 Delphi 的 HTTP 代理；导出 API 层不感知端点细节和 Delphi 响应解析规则
 class DelphiProxy {
 public:
@@ -84,6 +91,15 @@ public:
                              const std::string& requestId,
                              std::vector<unsigned char>& outJpeg,
                              int timeoutMs = 5000);
+
+    // 内部抓拍链路携带独立的 CaptureRequestId，并接收 Proxy 返回的帧元数据。
+    // 不改变任何 DLL 导出函数签名或第三方调用约定。
+    bool GetLatestPlateFrame(const std::string& plateCode,
+                             const std::string& requestId,
+                             std::vector<unsigned char>& outJpeg,
+                             int timeoutMs,
+                             const std::string& captureRequestId,
+                             LatestPlateFrameMetadata* metadata);
 
     bool RequestAuthorize(const std::string& requestId,
                           const std::string& ZJHM,

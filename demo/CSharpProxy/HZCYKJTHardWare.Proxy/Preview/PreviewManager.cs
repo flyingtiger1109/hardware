@@ -330,9 +330,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
             string requestId, out LatestPlateFrameSnapshot snapshot,
             out string errorCode, out string errorMessage)
         {
+            return TryGetLatestPlateFrame(resType, requestId, out snapshot,
+                out errorCode, out errorMessage, out _, out _);
+        }
+
+        internal bool TryGetLatestPlateFrame(PreviewResourceType resType,
+            string requestId, out LatestPlateFrameSnapshot snapshot,
+            out string errorCode, out string errorMessage,
+            out string source, out long frameAgeMs)
+        {
             snapshot = null;
             errorCode = "frame_not_ready";
             errorMessage = "车牌视频尚未产生可用帧";
+            source = "unknown";
+            frameAgeMs = -1;
 
             if (!IsPlateResource(resType))
             {
@@ -383,12 +394,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return false;
             }
 
+            var refreshedBySnapshot = false;
             var hasSnapshot = vlc.TryGetLatestFrame(out snapshot);
             if (!hasSnapshot && vlc.IsLatestFrameSourceRunning)
             {
+                source = "OnDemandSnapshot";
                 hasSnapshot = vlc.TryRefreshLatestFrame(
                     VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
-                    out snapshot);
+                    VlcPreviewController.LatestPlateFrameMaxAgeMs,
+                    out snapshot, out refreshedBySnapshot);
+                if (hasSnapshot)
+                    source = refreshedBySnapshot ? "OnDemandSnapshot" : "Cache";
+            }
+            else if (hasSnapshot)
+            {
+                source = "Cache";
             }
 
             if (!hasSnapshot)
@@ -410,6 +430,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     errorCode = "frame_not_ready";
                     errorMessage = "车牌视频尚未产生完整JPEG帧";
                 }
+                frameAgeMs = GetFrameAgeMs(snapshot);
                 LogLatestFrameLookupDiagnostic(resType, requestId, key,
                     "LatestFrameLookup", errorCode, true, true, true,
                     hasSnapshot, IsFrameStructurallyValid(snapshot),
@@ -435,17 +456,22 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             if (!IsLatestPlateFrameFresh(snapshot, DateTime.UtcNow))
             {
+                source = "OnDemandSnapshot";
                 if (vlc.TryRefreshLatestFrame(
                     VlcPreviewController.LatestPlateFrameRefreshTimeoutMs,
-                    out var refreshed) &&
+                    VlcPreviewController.LatestPlateFrameMaxAgeMs,
+                    out var refreshed, out var refreshedBySnapshot2) &&
                     IsLatestPlateFrameFresh(refreshed, DateTime.UtcNow))
                 {
                     snapshot = refreshed;
+                    source = refreshedBySnapshot2 ? "OnDemandSnapshot" : "Cache";
+                    frameAgeMs = GetFrameAgeMs(snapshot);
                     return true;
                 }
 
                 errorCode = "frame_stale";
                 errorMessage = "车牌视频帧已过期或视频已断开";
+                frameAgeMs = GetFrameAgeMs(snapshot);
                 LogLatestFrameLookupDiagnostic(resType, requestId, key,
                     "FreshnessValidation", errorCode, true, true, true, true,
                     IsFrameStructurallyValid(snapshot), GetFrameAgeMs(snapshot),
@@ -455,6 +481,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 return false;
             }
 
+            if (string.IsNullOrWhiteSpace(source))
+                source = "Cache";
+            frameAgeMs = GetFrameAgeMs(snapshot);
             return true;
         }
 
