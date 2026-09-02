@@ -195,6 +195,53 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private static string RecoveryOperationName(PreviewResourceType resType)
+        {
+            switch (resType)
+            {
+                case PreviewResourceType.Camera: return "RecoverCameraPreview";
+                case PreviewResourceType.Fingerprint: return "RecoverFingerprintPreview";
+                case PreviewResourceType.Iris: return "RecoverIrisPreview";
+                case PreviewResourceType.PlateCJ: return "RecoverPlatePreviewCJ";
+                case PreviewResourceType.PlateRJ2: return "RecoverPlatePreviewRJ2";
+                case PreviewResourceType.PlateRJ3: return "RecoverPlatePreviewRJ3";
+                default: return "RecoverPreview";
+            }
+        }
+
+        private static string PreviewOperationName(PreviewResourceType resType,
+            bool start)
+        {
+            switch (resType)
+            {
+                case PreviewResourceType.Camera:
+                    return start ? "StartCameraPreview" : "StopCameraPreview";
+                case PreviewResourceType.Fingerprint:
+                    return start ? "StartFingerprintPreview" : "StopFingerprintPreview";
+                case PreviewResourceType.Iris:
+                    return start ? "StartIrisPreview" : "StopIrisPreview";
+                case PreviewResourceType.PlateCJ:
+                    return start ? "StartPlatePreviewCJ" : "StopPlatePreviewCJ";
+                case PreviewResourceType.PlateRJ2:
+                    return start ? "StartPlatePreviewRJ2" : "StopPlatePreviewRJ2";
+                case PreviewResourceType.PlateRJ3:
+                    return start ? "StartPlatePreviewRJ3" : "StopPlatePreviewRJ3";
+                default:
+                    return start ? "StartPreview" : "StopPreview";
+            }
+        }
+
+        private static string FailureKindDisplayName(MjpegFailureKind failureKind)
+        {
+            switch (failureKind)
+            {
+                case MjpegFailureKind.StreamFailure: return "视频流中断";
+                case MjpegFailureKind.DecodeFailure: return "画面解码失败";
+                case MjpegFailureKind.RenderTargetFailure: return "绘制目标异常";
+                default: return "预览故障";
+            }
+        }
+
         private static string SessionToName(PreviewSessionType sessionType)
         {
             switch (sessionType)
@@ -357,7 +404,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         }
 
         public async Task<string> RequestPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
-            bool forceRefresh = false, string requestId = null)
+            bool forceRefresh = false, string requestId = null,
+            bool isRecoveryAttempt = false)
         {
             var cacheKey = PreviewUrlCacheKey(resType, terminalBaseUrl);
             if (!forceRefresh &&
@@ -375,14 +423,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
             }
 
-            var previewUrl = await FetchPreviewUrl(resType, terminalBaseUrl, requestId).ConfigureAwait(false);
+            var previewUrl = await FetchPreviewUrl(resType, terminalBaseUrl, requestId,
+                isRecoveryAttempt).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(previewUrl))
                 UpdatePreviewUrlCache(resType, terminalBaseUrl, previewUrl);
             return previewUrl;
         }
 
         private async Task<string> FetchPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
-            string requestId = null)
+            string requestId = null, bool isRecoveryAttempt = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var path = ResourceToTerminalPath(resType);
@@ -391,12 +440,17 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 : requestId;
             var body = $"{{\"request_id\":\"{JsonHelper.EscapeString(terminalRequestId)}\"}}";
 
-            var (ok, response) = await _terminalClient.PostJsonAsync(terminalBaseUrl, path, body, PreviewUrlTimeoutMs).ConfigureAwait(false);
+            var (ok, response) = await _terminalClient.PostJsonAsync(
+                terminalBaseUrl, path, body, PreviewUrlTimeoutMs,
+                isRecoveryAttempt: isRecoveryAttempt).ConfigureAwait(false);
             sw.Stop();
             if (!ok)
             {
-                Logger.Warn($"预览URL请求失败：资源={ResourceToName(resType)}，request_id={FormatRequestId(terminalRequestId)}，" +
-                            $"终端={Logger.SanitizeUrlForLog(terminalBaseUrl)}，耗时={sw.ElapsedMilliseconds}ms");
+                Logger.TryLogRateLimited(
+                    "PreviewUrl|failure|" + resType,
+                    LogModules.Preview, "警告",
+                    $"预览地址请求失败：资源={ResourceToName(resType)}，" +
+                    $"RequestId={FormatRequestId(terminalRequestId)}，耗时={sw.ElapsedMilliseconds}ms");
                 return null;
             }
 
@@ -691,7 +745,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
             Logger.Debug($"预览启动明细：资源={ResourceToName(resType)}，会话={SessionToName(sessionType)}，" +
                          $"hwnd={FormatHwnd(parentHwnd)}，耗时={totalSw.ElapsedMilliseconds}ms，{TraceRequest(requestId)}");
 
-            var startedMessage = $"预览已启动：{ResourceToName(resType)} {SessionToName(sessionType)}，{TraceRequest(requestId)}";
+            var startedMessage = $"{ResourceToName(resType)}预览已启动：" +
+                                 $"Operation={PreviewOperationName(resType, true)} " +
+                                 $"RequestId={FormatRequestId(requestId)} Result=Success";
             if (sessionType == PreviewSessionType.External)
                 Logger.Debug(startedMessage);
             else
@@ -717,12 +773,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private async Task<IPreviewController> StartPreviewPlayerAsync(string key, string description, string previewUrl,
             IntPtr parentHwnd, int srcW, int srcH, bool swap, bool isHttpPreview,
             bool directRenderTarget = false, bool allowVlcFallback = true, string requestId = null,
-            bool captureLatestFrame = false)
+            bool captureLatestFrame = false, bool isRecoveryAttempt = false)
         {
             if (isHttpPreview && !await WaitForMjpegWorkerCleanupAsync(key, VlcPlayTimeoutMs)
                     .ConfigureAwait(false))
             {
-                Logger.Error($"预览Worker仍在释放，拒绝创建重叠Worker：会话={key}，{TraceRequest(requestId)}");
+                if (isRecoveryAttempt)
+                    Logger.Warn($"预览Worker仍在释放，暂缓创建新Worker：会话={key}，{TraceRequest(requestId)}");
+                else
+                    Logger.Error($"预览Worker仍在释放，拒绝创建重叠Worker：会话={key}，{TraceRequest(requestId)}");
                 return null;
             }
 
@@ -756,7 +815,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (!allowVlcFallback)
                 {
-                    Logger.Error($"HTTP MJPEG预览失败，已禁止VLC回退：{description}，{TraceRequest(requestId)}");
+                    if (isRecoveryAttempt)
+                        Logger.Warn($"HTTP MJPEG恢复暂未成功，已等待后续重试：{description}，{TraceRequest(requestId)}");
+                    else
+                        Logger.Error($"HTTP MJPEG预览失败，已禁止VLC回退：{description}，{TraceRequest(requestId)}");
                     return null;
                 }
 
@@ -764,7 +826,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
             else if (!allowVlcFallback)
             {
-                Logger.Error($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={Logger.SanitizeUrlForLog(previewUrl)}，{TraceRequest(requestId)}");
+                if (isRecoveryAttempt)
+                    Logger.Warn($"外部MJPEG恢复暂未成功，地址类型不支持回退：{description}，{TraceRequest(requestId)}");
+                else
+                    Logger.Error($"外部MJPEG预览URL不是HTTP地址，已禁止VLC回退：{description}，地址={Logger.SanitizeUrlForLog(previewUrl)}，{TraceRequest(requestId)}");
                 return null;
             }
 
@@ -895,7 +960,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         ClearPreviewUrlCache(current.ResourceType, current.TerminalBaseUrl);
                         previewUrl = SelectRecoveryPreviewUrl(null,
                             await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
-                                forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
+                                forceRefresh: true, requestId: current.RequestId,
+                                isRecoveryAttempt: true).ConfigureAwait(false));
                     }
 
                     if (!CanContinueRecovery(current))
@@ -911,7 +977,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                             recoveryHwnd, srcW, srcH, swap, isHttpPreview,
                             directRenderTarget: true, allowVlcFallback: false,
                             current.RequestId,
-                            captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
+                            captureLatestFrame: IsPlateResource(current.ResourceType),
+                            isRecoveryAttempt: true).ConfigureAwait(false);
                         if (replacement != null && replacement.IsRunning)
                         {
                             current.Generation = Interlocked.Increment(ref _sessionGeneration);
@@ -919,7 +986,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                             _sessions[key] = current;
                             _restartInfo[key] = PreviewRestartInfo.FromSession(current);
                             AttachPlayerFaultHandler(key, current, replacement);
-                            Logger.Info($"VLC预览已恢复：会话={key}，累计尝试次数={failedAttempts + 1}");
+                            Logger.Info($"{ResourceToName(current.ResourceType)}预览已恢复：" +
+                                        $"Operation={RecoveryOperationName(current.ResourceType)} " +
+                                        $"RequestId={FormatRequestId(current.RequestId)} " +
+                                        $"Result=Success Attempt={failedAttempts + 1}");
                             return;
                         }
 
@@ -952,7 +1022,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (failedAttempts <= 3)
                         Logger.TryLogRateLimited(
                             "VLC|recovery|" + key + "|exception",
-                            LogModules.Preview, "错误",
+                            LogModules.Preview, "警告",
                             $"VLC预览恢复异常：会话={JsonHelper.ToLogValue(key)}，" +
                             $"累计尝试次数={failedAttempts}，错误={JsonHelper.ToLogValue(ex.Message)}");
                     await DelayVlcRecoveryAsync(failedAttempts, cancellationToken).ConfigureAwait(false);
@@ -1009,8 +1079,16 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!_activeRecoveries.TryAdd(recoveryKey, 0))
                 return;
 
-            Logger.Warn($"HTTP MJPEG流故障，启动受控恢复：会话={key}，故障类型={failureKind}，" +
-                        $"RecoveryEpisodeId={episode.Id}，错误={reason}");
+            _sessions.TryGetValue(key, out var currentSession);
+            var resourceName = currentSession == null
+                ? "预览"
+                : ResourceToName(currentSession.ResourceType);
+            var recoveryOperation = currentSession == null
+                ? "RecoverPreview"
+                : RecoveryOperationName(currentSession.ResourceType);
+            Logger.Warn($"{resourceName}预览出现{FailureKindDisplayName(failureKind)}，正在自动恢复：" +
+                        $"Operation={recoveryOperation} RequestId={FormatRequestId(currentSession?.RequestId)} " +
+                        $"RecoveryEpisodeId={episode.Id}，错误={JsonHelper.ToLogValue(reason)}");
             if (_taskTracker != null)
             {
                 var accepted = _taskTracker.TryRun(async () =>
@@ -1054,8 +1132,16 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!_activeRecoveries.TryAdd(recoveryKey, 0))
                 return;
 
-            Logger.Warn($"HTTP MJPEG绘制目标失效，结束预览会话：会话={key}，" +
-                        $"HWND原因={JsonHelper.ToLogValue(reason)}");
+            _sessions.TryGetValue(key, out var currentSession);
+            var resourceName = currentSession == null
+                ? "预览"
+                : ResourceToName(currentSession.ResourceType);
+            var recoveryOperation = currentSession == null
+                ? "RecoverPreview"
+                : RecoveryOperationName(currentSession.ResourceType);
+            Logger.Warn($"{resourceName}预览绘制目标失效，停止当前预览会话：" +
+                        $"Operation={recoveryOperation} RequestId={FormatRequestId(currentSession?.RequestId)} " +
+                        $"Result=Stopped ErrorCode=render_target_invalid，原因={JsonHelper.ToLogValue(reason)}");
             if (_taskTracker != null)
             {
                 var accepted = _taskTracker.TryRun(async () =>
@@ -1152,6 +1238,21 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
         }
 
+        private long GetMjpegRecoveryDurationMs(string key, long episodeId)
+        {
+            if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) ||
+                episode == null)
+                return 0;
+
+            lock (episode)
+            {
+                if (episode.Id != episodeId || episode.FirstFailureUtc == default(DateTime))
+                    return 0;
+                return Math.Max(0, (long)(DateTime.UtcNow - episode.FirstFailureUtc)
+                    .TotalMilliseconds);
+            }
+        }
+
         private bool IsMjpegRecoveryAttemptExhausted(string key, long episodeId)
         {
             if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) || episode == null)
@@ -1177,9 +1278,20 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (!TryAdvanceMjpegRecoveryAttempt(key, episodeId,
                     lastFailureKind, lastFailureReason, out attempt))
                 {
-                    Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
-                                 $"RecoveryEpisodeId={episodeId}，最大次数={MaxMjpegRecoveryAttempts}，" +
-                                 $"{TraceRequest(recoverySession?.RequestId)}");
+                    var recoveryResource = recoverySession == null
+                        ? "未知"
+                        : ResourceToName(recoverySession.ResourceType);
+                    var recoveryOperation = recoverySession == null
+                        ? "RecoverPreview"
+                        : RecoveryOperationName(recoverySession.ResourceType);
+                    var recoveryRequestId = recoverySession == null
+                        ? null
+                        : recoverySession.RequestId;
+                    var recoveryDurationMs = GetMjpegRecoveryDurationMs(key, episodeId);
+                    Logger.Error($"{recoveryResource}预览恢复失败：连续{MaxMjpegRecoveryAttempts}次尝试均未成功，" +
+                                 $"Operation={recoveryOperation} RequestId={FormatRequestId(recoveryRequestId)} " +
+                                 $"RecoveryEpisodeId={episodeId} Attempts={MaxMjpegRecoveryAttempts} " +
+                                 $"Result=Failed ErrorCode=recovery_exhausted DurationMs={recoveryDurationMs}");
                     await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
                         lastFailureReason).ConfigureAwait(false);
                     CompleteMjpegRecoveryEpisode(key, episodeId);
@@ -1250,7 +1362,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                                          $"尝试次数={attempt}");
                             previewUrl = SelectRecoveryPreviewUrl(null,
                                 await RequestPreviewUrl(current.ResourceType, current.TerminalBaseUrl,
-                                    forceRefresh: true, requestId: current.RequestId).ConfigureAwait(false));
+                                    forceRefresh: true, requestId: current.RequestId,
+                                    isRecoveryAttempt: true).ConfigureAwait(false));
                         }
 
                         if (!CanContinueRecovery(current))
@@ -1273,7 +1386,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                             replacement = await StartPreviewPlayerAsync(key, description, previewUrl,
                                 recoveryHwnd, srcW, srcH, swap, isHttpPreview,
                                 effectiveDirectRenderTarget, allowVlcFallback, current.RequestId,
-                                captureLatestFrame: IsPlateResource(current.ResourceType)).ConfigureAwait(false);
+                                captureLatestFrame: IsPlateResource(current.ResourceType),
+                                isRecoveryAttempt: true).ConfigureAwait(false);
                             mjpegReplacement = replacement as MjpegPreviewController;
 
                             if (mjpegReplacement != null)
@@ -1306,9 +1420,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     lastFailureReason = ex.Message;
                     Logger.TryLogRateLimited(
                         "Mjpeg|Recovery|" + key + "|Exception",
-                        LogModules.Preview, "错误",
-                        $"HTTP MJPEG恢复异常：会话={JsonHelper.ToLogValue(key)}，" +
-                        $"RecoveryEpisodeId={episodeId}，尝试次数={attempt}，错误={JsonHelper.ToLogValue(ex.Message)}");
+                        LogModules.Preview, "警告",
+                        $"{(recoverySession == null ? "预览" : ResourceToName(recoverySession.ResourceType))}" +
+                        $"恢复过程出现异常：Operation={(recoverySession == null ? "RecoverPreview" : RecoveryOperationName(recoverySession.ResourceType))} " +
+                        $"RequestId={FormatRequestId(recoverySession?.RequestId)} RecoveryEpisodeId={episodeId} " +
+                        $"Attempt={attempt}，错误={JsonHelper.ToLogValue(ex.Message)}");
                 }
                 finally
                 {
@@ -1317,8 +1433,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (invalidTarget)
                 {
-                    Logger.Warn($"HTTP MJPEG恢复取消，目标HWND已失效：会话={key}，" +
-                                $"{TraceRequest(recoverySession?.RequestId)}");
+                    Logger.Warn($"{(recoverySession == null ? "预览" : ResourceToName(recoverySession.ResourceType))}" +
+                                $"预览目标窗口已失效，停止当前会话：" +
+                                $"Operation={(recoverySession == null ? "RecoverPreview" : RecoveryOperationName(recoverySession.ResourceType))} " +
+                                $"RequestId={FormatRequestId(recoverySession?.RequestId)} " +
+                                $"Result=Stopped ErrorCode=invalid_target_hwnd");
                     await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
                         lastFailureReason).ConfigureAwait(false);
                     CompleteMjpegRecoveryEpisode(key, episodeId);
@@ -1327,9 +1446,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 if (committed)
                 {
+                    var recoveryDurationMs = GetMjpegRecoveryDurationMs(key, episodeId);
                     CompleteMjpegRecoveryEpisode(key, episodeId);
-                    Logger.Info($"HTTP MJPEG预览已恢复：会话={key}，RecoveryEpisodeId={episodeId}，" +
-                                $"尝试次数={attempt}");
+                    Logger.Info($"{ResourceToName(recoverySession.ResourceType)}预览已恢复：共尝试{attempt}次，" +
+                                $"Operation={RecoveryOperationName(recoverySession.ResourceType)} " +
+                                $"RequestId={FormatRequestId(recoverySession.RequestId)} " +
+                                $"RecoveryEpisodeId={episodeId} Attempts={attempt} " +
+                                $"Result=Success DurationMs={recoveryDurationMs}");
                     return;
                 }
 
@@ -1366,9 +1489,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                         if (committedPlayer)
                         {
+                            var recoveryDurationMs = GetMjpegRecoveryDurationMs(key, episodeId);
                             CompleteMjpegRecoveryEpisode(key, episodeId);
-                            Logger.Info($"HTTP MJPEG预览已恢复：会话={key}，RecoveryEpisodeId={episodeId}，" +
-                                        $"尝试次数={attempt}");
+                            Logger.Info($"{ResourceToName(recoverySession.ResourceType)}预览已恢复：共尝试{attempt}次，" +
+                                        $"Operation={RecoveryOperationName(recoverySession.ResourceType)} " +
+                                        $"RequestId={FormatRequestId(recoverySession.RequestId)} " +
+                                        $"RecoveryEpisodeId={episodeId} Attempts={attempt} " +
+                                        $"Result=Success DurationMs={recoveryDurationMs}");
                             return;
                         }
 
@@ -1420,11 +1547,22 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 }
 
                 RecordMjpegFailure(key, lastFailureKind, lastFailureReason);
-                if (attempt >= MaxMjpegRecoveryAttempts)
+                if (GetMjpegRecoveryFailureLevel(attempt) == "错误")
                 {
-                    Logger.Error($"HTTP MJPEG恢复达到最大次数，预览进入故障状态：会话={key}，" +
-                                 $"RecoveryEpisodeId={episodeId}，最大次数={MaxMjpegRecoveryAttempts}，" +
-                                 $"{TraceRequest(recoverySession?.RequestId)}");
+                    var recoveryDurationMs = GetMjpegRecoveryDurationMs(key, episodeId);
+                    var recoveryResource = recoverySession == null
+                        ? "未知"
+                        : ResourceToName(recoverySession.ResourceType);
+                    var recoveryOperation = recoverySession == null
+                        ? "RecoverPreview"
+                        : RecoveryOperationName(recoverySession.ResourceType);
+                    var recoveryRequestId = recoverySession == null
+                        ? null
+                        : recoverySession.RequestId;
+                    Logger.Error($"{recoveryResource}预览恢复失败：连续{MaxMjpegRecoveryAttempts}次尝试均未成功，" +
+                                 $"Operation={recoveryOperation} RequestId={FormatRequestId(recoveryRequestId)} " +
+                                 $"RecoveryEpisodeId={episodeId} Attempts={attempt} " +
+                                 $"Result=Failed ErrorCode=recovery_exhausted DurationMs={recoveryDurationMs}");
                     await FailRecoveryAndReleaseAsync(key, generation, faultedPlayer,
                         lastFailureReason).ConfigureAwait(false);
                     CompleteMjpegRecoveryEpisode(key, episodeId);
@@ -1435,8 +1573,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 Logger.TryLogRateLimited(
                     "Mjpeg|Recovery|" + key + "|Retry",
                     LogModules.Preview, "警告",
-                    $"HTTP MJPEG恢复未成功，{delayMs}ms后重试：会话={JsonHelper.ToLogValue(key)}，" +
-                    $"RecoveryEpisodeId={episodeId}，尝试次数={attempt}，故障类型={lastFailureKind}");
+                    $"{(recoverySession == null ? "预览" : ResourceToName(recoverySession.ResourceType))}" +
+                    $"预览暂未恢复，{delayMs}ms后继续尝试：Operation={(recoverySession == null ? "RecoverPreview" : RecoveryOperationName(recoverySession.ResourceType))} " +
+                    $"RequestId={FormatRequestId(recoverySession?.RequestId)} RecoveryEpisodeId={episodeId} " +
+                    $"Attempt={attempt}，故障类别={FailureKindDisplayName(lastFailureKind)}");
                 try
                 {
                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
@@ -1536,6 +1676,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (failedAttempts == 2) return 2000;
             if (failedAttempts == 3) return 5000;
             return 10000;
+        }
+
+        internal static string GetMjpegRecoveryFailureLevel(int attempt)
+        {
+            return attempt >= MaxMjpegRecoveryAttempts ? "错误" : "警告";
         }
 
         internal static bool ShouldValidatePreviewUrl(string previewUrl)
@@ -1711,8 +1856,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 await ReleasePlayerAsync(key, session.Player, preserveRestartInfo).ConfigureAwait(false);
                 if (!preserveRestartInfo)
                     _restartInfo.TryRemove(key, out _);
-                var stoppedMessage = $"预览已停止：{ResourceToName(resType)} {SessionToName(sessionType)}，" +
-                                     $"hwnd={FormatHwnd(session.HostHwnd)}，{TraceRequest(session.RequestId)}";
+                var stoppedMessage = $"{ResourceToName(resType)}预览已停止：" +
+                                     $"Operation={PreviewOperationName(resType, false)} " +
+                                     $"RequestId={FormatRequestId(session.RequestId)} Result=Success，" +
+                                     $"会话={SessionToName(sessionType)}，HWND={FormatHwnd(session.HostHwnd)}";
                 if (sessionType == PreviewSessionType.External)
                     Logger.Debug(stoppedMessage);
                 else

@@ -1,3 +1,4 @@
+using HZCYKJTHardWare.Proxy.Infrastructure;
 using HZCYKJTHardWare.Proxy.Preview;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -14,6 +15,32 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
             Assert.AreEqual(5000, PreviewManager.GetRecoveryDelayMs(3));
             Assert.AreEqual(10000, PreviewManager.GetRecoveryDelayMs(4));
             Assert.AreEqual(10000, PreviewManager.GetRecoveryDelayMs(100));
+        }
+
+        [TestMethod]
+        public void RecoverableFailureIsWarning()
+        {
+            Assert.AreEqual("警告", PreviewManager.GetMjpegRecoveryFailureLevel(1));
+        }
+
+        [TestMethod]
+        public void FinalRecoveryFailureIsError()
+        {
+            Assert.AreEqual("错误", PreviewManager.GetMjpegRecoveryFailureLevel(5));
+        }
+
+        [TestMethod]
+        public void RecoverySuccessContainsNoFalseError()
+        {
+            var message = Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                "指纹预览已恢复：" + Logger.FormatContextMessage(
+                    "RecoverFingerprintPreview", requestId: "REQ-1",
+                    result: "Success", durationMs: 6124));
+
+            StringAssert.Contains(message, "指纹预览已恢复");
+            StringAssert.Contains(message, "Result=Success");
+            Assert.IsFalse(message.Contains("[错误]"));
+            Assert.IsFalse(message.Contains("错误="));
         }
 
         [TestMethod]

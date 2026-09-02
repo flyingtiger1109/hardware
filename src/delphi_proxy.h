@@ -18,7 +18,8 @@ public:
                       const std::string& callbacksJson = "{}");
     bool ProcessEnd(const std::string& requestId, int timeoutMs = 4500);
 
-    bool SwitchTerminal(int terminalIndex);
+    bool SwitchTerminal(int terminalIndex,
+                        const std::string& requestId = "");
 
     bool CaptureFace(const std::string& requestId,
                      const std::string& saveDir,

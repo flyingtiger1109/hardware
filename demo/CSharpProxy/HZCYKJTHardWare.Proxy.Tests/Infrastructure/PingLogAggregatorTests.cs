@@ -25,6 +25,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
 
             Assert.AreEqual(1, messages.Count);
             StringAssert.Contains(messages[0], "[健康检查][调试]");
+            StringAssert.Contains(messages[0], "Operation=TerminalHealth");
+            StringAssert.Contains(messages[0], "Result=Normal");
             StringAssert.Contains(messages[0], "请求次数=2");
             StringAssert.Contains(messages[0], "成功次数=2");
 
@@ -49,6 +51,8 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             now = now.AddSeconds(60);
             aggregator.RecordFailure("连接失败", true, 130);
             Assert.AreEqual(2, messages.Count);
+            StringAssert.Contains(messages[1], "[健康检查][警告]");
+            StringAssert.Contains(messages[1], "Result=Failed");
             StringAssert.Contains(messages[1], "请求次数=2");
             StringAssert.Contains(messages[1], "失败次数=2");
 

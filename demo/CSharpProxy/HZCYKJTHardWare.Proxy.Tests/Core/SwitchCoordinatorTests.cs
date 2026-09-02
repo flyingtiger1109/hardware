@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using System.Collections.Generic;
 using HZCYKJTHardWare.Proxy.Core;
 using HZCYKJTHardWare.Proxy.Preview;
 using HZCYKJTHardWare.Proxy.Server.Coordinator;
@@ -65,6 +66,29 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
                 Assert.AreEqual(newIndex, newEpoch.Route.TerminalIndex);
                 Assert.IsTrue(newEpoch.Generation > oldEpoch.Generation);
                 Assert.IsFalse(newEpoch.IsCancellationRequested);
+            }
+        }
+
+        [TestMethod]
+        public async Task SwitchTerminalRequestIdPropagation()
+        {
+            var messages = new List<string>();
+            var terminalManager = new TerminalManager();
+            using (var terminalClient = new TerminalClient())
+            using (var previewManager = new PreviewManager(terminalClient))
+            using (var requestRegistry = new RequestRegistry())
+            using (var queueManager = new QueueManager())
+            {
+                var coordinator = new SwitchCoordinator(
+                    terminalManager,
+                    previewManager,
+                    requestRegistry,
+                    queueManager,
+                    messages.Add);
+
+                Assert.IsTrue(await coordinator.SwitchToAsync(2, "SWITCH-L8-1"));
+                StringAssert.Contains(string.Join("\n", messages),
+                    "Operation=SwitchTerminal RequestId=SWITCH-L8-1");
             }
         }
     }

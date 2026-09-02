@@ -359,8 +359,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
 
             _log("[授权][调试] 转发至终端：请求ID=" + JsonHelper.ToLogValue(requestId) +
                 "，终端=" + routeEpoch.Route.TerminalIndex +
-                "，请求地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl + "/resources/protocol/request") +
-                "，回调地址=" + JsonHelper.ToLogValue(callbackBase) +
+                "，请求地址=" + Logger.SanitizeUrlForLog(routeEpoch.Route.BaseUrl + "/resources/protocol/request") +
+                "，回调地址=" + Logger.SanitizeUrlForLog(callbackBase) +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
                 "，证件类别=" + JsonHelper.ToLogValue(docType) +
                 "，国家地区代码=" + JsonHelper.ToLogValue(nationality) +
@@ -389,7 +389,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))
                     return "{\"error\":true,\"code\":\"request_expired\"}";
                 _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
-                    "授权请求已受理：RequestId=" + JsonHelper.ToLogValue(requestId)));
+                    "授权请求已受理：Operation=Authorize RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + " Result=Accepted"));
                 return "{\"accepted\":true}";
             }
 
@@ -397,8 +398,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Scheduler
             var message = ResultParser.ExtractErrorMessage(response);
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
             _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
-                "授权请求最终失败：RequestId=" + JsonHelper.ToLogValue(requestId) +
-                "，错误=" + detail));
+                "授权请求最终失败：Operation=Authorize RequestId=" +
+                JsonHelper.ToLogValue(requestId) + " Result=Failed ErrorCode=" +
+                JsonHelper.ToLogValue(code) + "，错误=" + detail));
 
             if (string.IsNullOrEmpty(code))
                 code = "terminal_request_failed";

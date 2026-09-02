@@ -83,6 +83,97 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
+        public void CanonicalOperationMapping_CoversAllKnownDllExports()
+        {
+            var cases = new[]
+            {
+                new[] { "HZCYKJTHardWare_InitSdk", "InitSdk" },
+                new[] { "HZCYKJTHardWare_ReleaseSdk", "ReleaseSdk" },
+                new[] { "HZCYKJTHardWare_SwitchTerminal", "SwitchTerminal" },
+                new[] { "HZCYKJTHardWare_StartProcess", "StartProcess" },
+                new[] { "HZCYKJTHardWare_EndProcess", "EndProcess" },
+                new[] { "HZCYKJTHardWare_StartCameraPreview", "StartCameraPreview" },
+                new[] { "HZCYKJTHardWare_StopCameraPreview", "StopCameraPreview" },
+                new[] { "HZCYKJTHardWare_StartFingerprintPreview", "StartFingerprintPreview" },
+                new[] { "HZCYKJTHardWare_StopFingerprintPreview", "StopFingerprintPreview" },
+                new[] { "HZCYKJTHardWare_StartIrisPreview", "StartIrisPreview" },
+                new[] { "HZCYKJTHardWare_StopIrisPreview", "StopIrisPreview" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewCJ", "StartPlatePreviewCJ" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewCJ", "StopPlatePreviewCJ" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewRJ2", "StartPlatePreviewRJ2" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewRJ2", "StopPlatePreviewRJ2" },
+                new[] { "HZCYKJTHardWare_StartPlatePreviewRJ3", "StartPlatePreviewRJ3" },
+                new[] { "HZCYKJTHardWare_StopPlatePreviewRJ3", "StopPlatePreviewRJ3" },
+                new[] { "HZCYKJTHardWare_SaveLatestPlateFrame", "SaveLatestPlateFrame" },
+                new[] { "HZCYKJTHardWare_CaptureCameraImage", "CaptureFace" },
+                new[] { "HZCYKJTHardWare_CaptureFingerprintImage", "CaptureFingerprint" },
+                new[] { "HZCYKJTHardWare_CaptureIrisImage", "CaptureIris" },
+                new[] { "HZCYKJTHardWare_RequestOCR", "RequestOCR" },
+                new[] { "HZCYKJTHardWare_RequestNfcCard", "RequestNfcCard" },
+                new[] { "HZCYKJTHardWare_RequestAuthorize", "Authorize" },
+                new[] { "HZCYKJTHardWare_RegisterEventCallback", "RegisterEventCallback" }
+            };
+
+            foreach (var item in cases)
+                Assert.AreEqual(item[1], Logger.CanonicalOperationName(item[0]), item[0]);
+
+            Assert.AreEqual("CaptureFace", Logger.CanonicalOperationName("POST /capture/face"));
+            Assert.AreEqual("Authorize", Logger.CanonicalOperationName("/resources/protocol/request"));
+        }
+
+        [TestMethod]
+        public void KnownOperationInLegacyInterfaceMessage_UsesConcreteModule()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[接口][信息] Operation=HZCYKJTHardWare_CaptureCameraImage RequestId=REQ-1 Result=Success");
+
+            Assert.AreEqual(
+                "[人脸抓拍][信息] Operation=CaptureFace RequestId=REQ-1 Result=Success",
+                message);
+        }
+
+        [TestMethod]
+        public void BusinessContext_UsesShortOperationAndStableResultFields()
+        {
+            var fields = Logger.FormatContextMessage(
+                "HZCYKJTHardWare_SwitchTerminal",
+                requestId: "SWITCH-1",
+                result: "成功",
+                durationMs: 16);
+
+            StringAssert.Contains(fields, "Operation=SwitchTerminal");
+            StringAssert.Contains(fields, "RequestId=SWITCH-1");
+            StringAssert.Contains(fields, "Result=Success");
+            StringAssert.Contains(fields, "DurationMs=16");
+            Assert.IsFalse(fields.Contains("HZCYKJTHardWare_SwitchTerminal"));
+            Assert.IsFalse(fields.Contains("入口"));
+            Assert.IsFalse(fields.Contains("出口"));
+        }
+
+        [TestMethod]
+        public void BusinessMessageDoesNotUseEntryExit()
+        {
+            var message = Logger.FormatModuleMessage(LogModules.TerminalSwitch, "信息",
+                "终端切换成功：当前=左通道 " + Logger.FormatContextMessage(
+                    "SwitchTerminal", requestId: "SWITCH-1", result: "Success",
+                    durationMs: 16));
+
+            StringAssert.Contains(message, "终端切换成功");
+            Assert.IsFalse(message.Contains("入口"));
+            Assert.IsFalse(message.Contains("出口"));
+            Assert.IsFalse(message.Contains("POST完成"));
+            Assert.IsFalse(message.Contains("DurationMs=0"));
+        }
+
+        [TestMethod]
+        public void ResourceDisplayName_UsesChineseBusinessNames()
+        {
+            Assert.AreEqual("人脸", Logger.ResourceDisplayName("face_image"));
+            Assert.AreEqual("摄像头/第三方", Logger.ResourceDisplayName("Camera_External"));
+            Assert.AreEqual("授权", Logger.ResourceDisplayName("authorization"));
+        }
+
+        [TestMethod]
         public void MessageLevelFilter_IsSharedByFileAndUiDecision()
         {
             try
@@ -165,6 +256,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             Assert.IsFalse(nextWindow.WindowSummary.Contains("FirstTime="));
             Assert.IsFalse(nextWindow.WindowSummary.Contains("LastTime="));
             Assert.IsFalse(nextWindow.WindowSummary.Contains("LastError="));
+            StringAssert.Contains(nextWindow.WindowSummary, "类别=连接失败");
             StringAssert.Contains(nextWindow.WindowSummary, "次数=2");
             StringAssert.Contains(nextWindow.WindowSummary, "首次=");
             StringAssert.Contains(nextWindow.WindowSummary, "最近=");

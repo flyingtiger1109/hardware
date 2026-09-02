@@ -189,6 +189,22 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        private static string CallbackOperation(string resourceType)
+        {
+            switch (resourceType)
+            {
+                case "face_image": return "CaptureFace";
+                case "fingerprint_image": return "CaptureFingerprint";
+                case ProxyResourceTypes.IrisImage: return "CaptureIris";
+                case ProxyResourceTypes.OcrDocument: return "RequestOCR";
+                case ProxyResourceTypes.NfcCard: return "RequestNfcCard";
+                case ProxyResourceTypes.Protocol:
+                case "authorization": return "Authorize";
+                case "plate_image": return "PreviewReady";
+                default: return "Callback";
+            }
+        }
+
         private void HandleOcrEventStatus(string bodyUtf8)
         {
             var requestId = JsonHelper.ExtractString(bodyUtf8, "request_id");
@@ -238,15 +254,21 @@ namespace HZCYKJTHardWare.Proxy.Server
             var saveDir = route.SaveDir;
             if (result.CardType == 30)
             {
-                _log("[OCR回调] ID卡: 姓名=" + JsonHelper.ToLogValue(result.Name) +
-                    ", 性别=" + JsonHelper.ToLogValue(result.Sex) +
-                    ", 证号=" + JsonHelper.ToLogValue(result.CardId) +
-                    ", 光学鉴权分数=" + result.AuthenScore +
-                    ", 鉴伪结果=" + FormatOpticalCheckResult(result.OpticalCheckResult));
+                _log(Logger.FormatModuleMessage(LogModules.DocumentRecognition, "信息",
+                    "证件识别完成：Operation=RequestOCR RequestId=" +
+                    JsonHelper.ToLogValue(result.RequestId) +
+                    "，姓名=" + JsonHelper.ToLogValue(result.Name) +
+                    "，性别=" + JsonHelper.ToLogValue(result.Sex) +
+                    "，证号=" + JsonHelper.ToLogValue(result.CardId) +
+                    "，光学鉴权分数=" + result.AuthenScore +
+                    "，鉴伪结果=" + FormatOpticalCheckResult(result.OpticalCheckResult)));
             }
             else
             {
-                _log($"[OCR回调] MRZ={result.Mrz}");
+                _log(Logger.FormatModuleMessage(LogModules.DocumentRecognition, "信息",
+                    "证件识别完成：Operation=RequestOCR RequestId=" +
+                    JsonHelper.ToLogValue(result.RequestId) +
+                    "，MRZ=" + JsonHelper.ToLogValue(result.Mrz)));
             }
 
             // 保存 OCR 结果 JSON
@@ -276,7 +298,10 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (route == null)
                 return;
 
-            _log($"[IC卡回调] 卡片文本={result.CardText}");
+            _log(Logger.FormatModuleMessage(LogModules.NfcRead, "信息",
+                "IC卡读取完成：Operation=RequestNfcCard RequestId=" +
+                JsonHelper.ToLogValue(result.RequestId) +
+                "，卡片文本=" + JsonHelper.ToLogValue(result.CardText)));
 
             if (!_isIcCardCallbackEnabled())
             {
@@ -344,7 +369,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
-            _log($"[虹膜回调] 保存完成：request_id={result.RequestId}，眼数={savedCount}，路径={savePath}");
+            Logger.Debug("[虹膜回调] 虹膜图片已保存：Operation=CaptureIris RequestId=" +
+                JsonHelper.ToLogValue(result.RequestId) + "，眼数=" + savedCount +
+                "，路径=" + JsonHelper.ToLogValue(savePath));
             if (!CanDeliver(route, "虹膜")) return;
             var delivery = await _dllCallback.SendIrisResult(route.DeliveryRequestId,
                 savePath, route.CancellationToken).ConfigureAwait(false);
@@ -359,7 +386,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "\",\"resource_type\":\"iris_image\",\"error\":true,\"code\":\"" +
                 JsonHelper.EscapeString(errorCode) + "\",\"message\":\"" +
                 JsonHelper.EscapeString(message) + "\"}";
-            _log($"[虹膜回调] 采集失败：request_id={requestId}，错误码={errorCode}，消息={message}");
+            Logger.Warn("[虹膜回调] 虹膜采集失败：Operation=CaptureIris RequestId=" +
+                JsonHelper.ToLogValue(requestId) + "，ErrorCode=" +
+                JsonHelper.ToLogValue(errorCode) + "，错误=" +
+                JsonHelper.ToLogValue(message));
             return _dllCallback.PostCallbackRaw("/iris", payload, cancellationToken);
         }
 
@@ -369,7 +399,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!result.Valid) { _log("[人脸回调][警告] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"[人脸回调] 异步抓拍结果：request_id={result.RequestId}");
+            Logger.Debug("[人脸回调] 异步抓拍结果：Operation=CaptureFace RequestId=" +
+                JsonHelper.ToLogValue(result.RequestId));
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -384,7 +415,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             if (!result.Valid) { _log("[指纹回调][警告] 数据无效"); return; }
 
             var saveDir = GetSaveDir(result.RequestId);
-            _log($"[指纹回调] 异步抓拍结果：request_id={result.RequestId}");
+            Logger.Debug("[指纹回调] 异步抓拍结果：Operation=CaptureFingerprint RequestId=" +
+                JsonHelper.ToLogValue(result.RequestId));
 
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
@@ -430,7 +462,9 @@ namespace HZCYKJTHardWare.Proxy.Server
                 JsonHelper.ExtractString(originalBody, "GJDQDM"));
             var portCode = CoalesceString(ExtractTopOrDataString(bodyUtf8, "port_code"),
                 JsonHelper.ExtractString(originalBody, "KADM"));  // KADM
-            _log("[授权回调] 收到终端回调：请求ID=" + JsonHelper.ToLogValue(result.RequestId) +
+            _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
+                "授权结果已收到：Operation=Authorize RequestId=" + JsonHelper.ToLogValue(result.RequestId) +
+                " Result=" + (status == "yes" ? "Approved" : "Rejected") +
                 "，来源=" + JsonHelper.ToLogValue(sourceAddress?.ToString()) +
                 "，状态=" + JsonHelper.ToLogValue(status) +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
@@ -439,7 +473,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 "，姓名=" + JsonHelper.ToLogValue(name) +
                 "，性别=" + JsonHelper.ToLogValue(sex) +
                 "，出生日期=" + JsonHelper.ToLogValue(birthday) +
-                "，口岸代码=" + JsonHelper.ToLogValue(portCode));
+                "，口岸代码=" + JsonHelper.ToLogValue(portCode)));
 
             // 构建 DLL 回调载荷，使用与 Delphi 一致的中文缩写字段名格式
             var isYes = (status == "yes");
@@ -570,11 +604,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                 }
 
                 if (savedNames.Count > 0)
-                    _log($"[OCR] 照片已保存至 {saveDir2}: {string.Join(", ", savedNames)}");
+                    Logger.Debug("[OCR] 证件照片已保存：Operation=RequestOCR RequestId=" +
+                        JsonHelper.ToLogValue(requestId) + "，目录=" +
+                        JsonHelper.ToLogValue(saveDir2) + "，类型=" +
+                        string.Join(", ", savedNames));
             }
             catch (Exception ex)
             {
-                _log($"[OCR] 保存证据图片异常: {ex.Message}");
+                Logger.Warn("[OCR] 保存证据图片异常：Operation=RequestOCR RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + "，错误=" +
+                    JsonHelper.ToLogValue(ex.Message));
             }
         }
 
@@ -620,11 +659,15 @@ namespace HZCYKJTHardWare.Proxy.Server
                 System.IO.File.WriteAllText(filePath,
                     mrzObj.ToString(Newtonsoft.Json.Formatting.Indented),
                     System.Text.Encoding.UTF8);
-                _log($"[OCR] MRZ信息已保存：路径={filePath}");
+                Logger.Debug("[OCR] MRZ信息已保存：Operation=RequestOCR RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + "，路径=" +
+                    JsonHelper.ToLogValue(filePath));
             }
             catch (Exception ex)
             {
-                _log($"[OCR] 保存MRZ信息异常: {ex.Message}");
+                Logger.Warn("[OCR] 保存MRZ信息异常：Operation=RequestOCR RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + "，错误=" +
+                    JsonHelper.ToLogValue(ex.Message));
             }
         }
 
@@ -776,8 +819,10 @@ namespace HZCYKJTHardWare.Proxy.Server
                     nowTicks, lastTicks) != lastTicks)
                 return;
 
-            _log?.Invoke("[IC卡回调] 已收到终端IC卡数据，第三方回调已关闭，本次不推送：" +
-                $"request_id={route.SourceRequestId}");
+            _log?.Invoke(Logger.FormatModuleMessage(LogModules.NfcRead, "信息",
+                "读取到IC卡，第三方回调已关闭，本次不通知第三方：Operation=RequestNfcCard " +
+                "RequestId=" + JsonHelper.ToLogValue(route.SourceRequestId) +
+                " Result=Ignored"));
         }
 
         private void CompleteWithoutDelivery(CallbackRoute route)
@@ -801,7 +846,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 if (route != null && delivery == CallbackDeliveryResult.Failed)
                     LogCallbackRateLimited("dll_callback|persistent_delivery_failed|" + route.ResourceType,
                         "警告",
-                        $"流程事件投递失败，本次不重试且会话保持有效：process_request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
+                        $"流程事件投递失败，本次不重试且会话保持有效：Operation={CallbackOperation(route.ResourceType)} " +
+                        $"process_request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
                         $"delivery_request_id={JsonHelper.ToLogValue(route.DeliveryRequestId)}，资源={route.ResourceType}");
                 return;
             }
@@ -818,7 +864,8 @@ namespace HZCYKJTHardWare.Proxy.Server
             {
                 LogCallbackRateLimited("dll_callback|delivery_failed|" + route.ResourceType,
                     "错误",
-                    $"结果投递失败，请求立即结束且不重试：request_id={JsonHelper.ToLogValue(route.SourceRequestId)}，" +
+                    $"结果投递失败，请求立即结束且不重试：Operation={CallbackOperation(route.ResourceType)} " +
+                    $"RequestId={JsonHelper.ToLogValue(route.SourceRequestId)} Result=Failed ErrorCode=delivery_failed，" +
                     $"资源={route.ResourceType}");
                 _requestRegistry.Fail(route.SourceRequestId, route.ResourceType);
             }
@@ -828,8 +875,10 @@ namespace HZCYKJTHardWare.Proxy.Server
         {
             var message = Logger.FormatModuleMessage(LogModules.DllCallback, "信息",
                 "结果已通知DLL：资源=" + FormatCallbackResource(route.ResourceType) +
-                "，RequestId=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
-                "，Result=成功");
+                "，Operation=" + CallbackOperation(route.ResourceType) +
+                " RequestId=" + JsonHelper.ToLogValue(route.SourceRequestId) +
+                " DeliveryRequestId=" + JsonHelper.ToLogValue(route.DeliveryRequestId) +
+                " Result=Success");
             if (_log != null)
                 _log(message);
             else

@@ -50,7 +50,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 {
                     var summary = bucket == null || bucket.Count <= 0
                         ? null
-                        : "重复故障汇总：类别=" + normalizedKey +
+                        : "重复故障汇总：类别=" + DescribeCategory(normalizedKey) +
                           "，次数=" + bucket.Count +
                           "，首次=" + FormatTime(bucket.FirstUtc) +
                           "，最近=" + FormatTime(bucket.LastUtc) +
@@ -114,6 +114,29 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static string FormatTime(DateTime value)
         {
             return value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff");
+        }
+
+        private static string DescribeCategory(string key)
+        {
+            var lower = (key ?? string.Empty).ToLowerInvariant();
+            if (lower.Contains("mjpeg") &&
+                (lower.Contains("render") || lower.Contains("target")))
+                return "MJPEG绘制失败";
+            if (lower.Contains("mjpeg") && lower.Contains("decode"))
+                return "MJPEG解码失败";
+            if (lower.Contains("mjpeg"))
+                return "MJPEG流故障";
+            if (lower.Contains("callback"))
+                return "回调投递失败";
+            if (lower.Contains("ping") || lower.Contains("connect") ||
+                lower.Contains("network") || lower.Contains("timeout") ||
+                lower.Contains("12029"))
+                return "连接失败";
+            if (lower.Contains("preview"))
+                return "预览失败";
+            if (lower.Contains("queue"))
+                return "任务队列失败";
+            return "重复故障";
         }
 
         private static string Sanitize(string value, int maxLength)

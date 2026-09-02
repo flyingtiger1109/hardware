@@ -48,7 +48,8 @@ std::string RequestSessionManager::GenerateRequestId(const std::string& prefix) 
 
 std::string RequestSessionManager::CreateSession(const std::string& resourceType,
                                                    const std::string& saveDir,
-                                                   int timeoutMs) {
+                                                   int timeoutMs,
+                                                   const std::string& requestIdOverride) {
     std::string prefix;
     if (resourceType == HZCYKJTHardWare_RESOURCE_FACE_IMAGE) {
         prefix = "HZCYKJTHardWare_FACE";
@@ -64,7 +65,8 @@ std::string RequestSessionManager::CreateSession(const std::string& resourceType
         prefix = "HZCYKJTHardWare_REQ";
     }
 
-    std::string requestId = GenerateRequestId(prefix);
+    std::string requestId = requestIdOverride.empty()
+        ? GenerateRequestId(prefix) : requestIdOverride;
 
     auto session = std::make_shared<RequestSession>();
     session->request_id = requestId;

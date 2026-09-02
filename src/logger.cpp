@@ -188,6 +188,27 @@ std::string ToLowerAscii(std::string value) {
     return value;
 }
 
+std::string RateLimitCategory(const std::string& key) {
+    const std::string lower = ToLowerAscii(key);
+    if (ContainsText(lower, "mjpeg") &&
+        (ContainsText(lower, "render") || ContainsText(lower, "target"))) {
+        return "MJPEG绘制失败";
+    }
+    if (ContainsText(lower, "mjpeg") && ContainsText(lower, "decode")) {
+        return "MJPEG解码失败";
+    }
+    if (ContainsText(lower, "mjpeg")) return "MJPEG流故障";
+    if (ContainsText(lower, "callback")) return "回调投递失败";
+    if (ContainsText(lower, "ping") || ContainsText(lower, "connect") ||
+        ContainsText(lower, "network") || ContainsText(lower, "timeout") ||
+        ContainsText(lower, "12029")) {
+        return "连接失败";
+    }
+    if (ContainsText(lower, "preview")) return "预览失败";
+    if (ContainsText(lower, "queue")) return "任务队列失败";
+    return "重复故障";
+}
+
 bool IsSensitivePayloadKey(const std::string& key) {
     const std::string lower = ToLowerAscii(key);
     return lower == "image_base64" || lower == "imagedata" ||
@@ -306,13 +327,44 @@ void AppendJsonScalar(std::string& output, const std::string& json,
 
 } // 匿名命名空间结束
 
+std::string CanonicalOperationName(const std::string& operation) {
+    if (operation.empty()) return operation;
+
+    std::string value = operation;
+    const std::string exportPrefix = "HZCYKJTHardWare_";
+    if (value.compare(0, exportPrefix.size(), exportPrefix) == 0) {
+        value.erase(0, exportPrefix.size());
+    }
+
+    if (value == "CaptureCameraImage") return "CaptureFace";
+    if (value == "CaptureFingerprintImage") return "CaptureFingerprint";
+    if (value == "CaptureIrisImage") return "CaptureIris";
+    if (value == "RequestAuthorize") return "Authorize";
+    return value;
+}
+
+static std::string CanonicalResultName(const std::string& result) {
+    if (result == "成功") return "Success";
+    if (result == "失败") return "Failed";
+    if (result == "已受理") return "Accepted";
+    if (result == "已恢复") return "Recovered";
+    if (result == "已停止") return "Stopped";
+    if (result == "忽略" || result == "已忽略") return "Ignored";
+    if (result == "已发送") return "Delivered";
+    if (result == "已取消") return "Cancelled";
+    if (result == "重试") return "Retrying";
+    if (result == "收到") return "Received";
+    if (result == "开始") return "Started";
+    return result;
+}
+
 std::string FormatLogContext(const LogContext& context) {
     std::string result;
-    AppendContextField(result, "Operation", context.operation);
+    AppendContextField(result, "Operation", CanonicalOperationName(context.operation));
     AppendContextField(result, "TerminalIndex", context.terminalIndex);
     AppendContextField(result, "Device", context.device);
     AppendContextField(result, "RequestId", context.requestId);
-    AppendContextField(result, "Result", context.result);
+    AppendContextField(result, "Result", CanonicalResultName(context.result));
     AppendContextField(result, "ErrorCode", context.errorCode);
     if (context.durationMs >= 0) {
         AppendContextField(result, "DurationMs", std::to_string(context.durationMs));
@@ -947,7 +999,7 @@ void Logger::RecordWriterFailure(const char* reason) {
         if (m_writerFailureBucket.windowStart == 0 ||
             now - m_writerFailureBucket.windowStart >= kRateLimitWindowMs) {
             if (m_writerFailureBucket.count > 0) {
-                windowSummary = "重复故障汇总：类别=Logger|writer_failure" +
+                windowSummary = "重复故障汇总：类别=日志写入失败" +
                     std::string("，次数=") +
                     std::to_string(m_writerFailureBucket.count) +
                     "，首次=" + m_writerFailureBucket.firstTime +
@@ -1000,7 +1052,7 @@ bool Logger::CheckRateLimitLocked(const std::string& key,
     if (bucket.windowStart == 0 ||
         now - bucket.windowStart >= kRateLimitWindowMs) {
         if (bucket.count > 0) {
-            windowSummary = "重复故障汇总：类别=" + normalizedKey +
+            windowSummary = "重复故障汇总：类别=" + RateLimitCategory(normalizedKey) +
                 "，次数=" + std::to_string(bucket.count) +
                 "，首次=" + bucket.firstTime +
                 "，最近=" + bucket.lastTime +

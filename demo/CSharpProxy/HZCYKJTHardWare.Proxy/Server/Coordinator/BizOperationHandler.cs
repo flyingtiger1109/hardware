@@ -105,8 +105,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 var committed = false;
                 try
                 {
-                    _log("[流程] 正在向终端开始流程，地址=" + route.BaseUrl +
-                        "/process/start，保存目录=" + resolvedSaveDir);
+                    Logger.Debug("[流程] 开始流程通信：Operation=StartProcess RequestId=" +
+                        JsonHelper.ToLogValue(requestId) + "，终端地址=" +
+                        Logger.SanitizeUrlForLog(route.BaseUrl) + "，保存目录=" +
+                        JsonHelper.ToLogValue(resolvedSaveDir));
 
                     var (ok, _) = await _terminalClient.PostJsonAsync(route.BaseUrl,
                         "/process/start", body, OperationTimeouts.ProcessStartTerminalRequestMs,
@@ -119,8 +121,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     _terminalManager.ProcessSaveDir = resolvedSaveDir;
                     _terminalManager.ProcessActive = true;
                     _onProcessStateChanged?.Invoke(true);
-                    _log("[流程] 终端流程已开始，终端=" + route.TerminalIndex +
-                        "，request_id=" + requestId + "，保存目录=" + resolvedSaveDir);
+                    _log("[流程] 流程已开始：Operation=StartProcess RequestId=" +
+                        JsonHelper.ToLogValue(requestId) + "，TerminalIndex=" +
+                        route.TerminalIndex + "，Result=Success，保存目录=" +
+                        JsonHelper.ToLogValue(resolvedSaveDir));
                     return "OK";
                 }
                 finally
@@ -145,6 +149,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
         internal async Task<string> SwitchTerminalAsync(int index)
         {
+            var requestId = "SWITCH_" + Guid.NewGuid().ToString("N").Substring(0, 16);
             if (!_terminalManager.IsTerminalConfigured(index))
                 return RejectUnconfiguredTerminalSwitch(index);
 
@@ -152,9 +157,10 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 return $"已在目标终端，无需切换";
 
             _log("[终端切换] 开始切换：" + _terminalManager.CurrentName + " → " +
-                 _terminalManager.GetTerminalName(index));
+                 _terminalManager.GetTerminalName(index) +
+                 "，Operation=SwitchTerminal RequestId=" + requestId);
 
-            var ok = await _switchCoordinator.SwitchToAsync(index).ConfigureAwait(false);
+            var ok = await _switchCoordinator.SwitchToAsync(index, requestId).ConfigureAwait(false);
             return ok ? $"已切换到终端 {index}" : "切换失败";
         }
 
@@ -489,7 +495,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 "\"KADM\":\"\"}}";
 
             _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
-                "授权请求：RequestId=" + JsonHelper.ToLogValue(requestId) +
+                "授权请求：Operation=Authorize RequestId=" + JsonHelper.ToLogValue(requestId) +
                 "，TerminalIndex=" + routeEpoch.Route.TerminalIndex +
                 "，证件号码=" + JsonHelper.ToLogValue(idNo) +
                 "，证件类别=" + JsonHelper.ToLogValue(docType) +
@@ -499,8 +505,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 "，出生日期=" + JsonHelper.ToLogValue(birthday)));
             _log(Logger.FormatModuleMessage(LogModules.Authorization, "调试",
                 "授权请求通信上下文：RequestId=" + JsonHelper.ToLogValue(requestId) +
-                "，终端地址=" + JsonHelper.ToLogValue(routeEpoch.Route.BaseUrl) +
-                "，回调地址=" + JsonHelper.ToLogValue(callbackBase)));
+                "，终端地址=" + Logger.SanitizeUrlForLog(routeEpoch.Route.BaseUrl) +
+                "，回调地址=" + Logger.SanitizeUrlForLog(callbackBase)));
 
             if (!RegisterDirectRequest(requestId, ProxyResourceTypes.Protocol,
                 _processRegistry.GetCurrentSaveDir(routeEpoch.Route.TerminalIndex),
@@ -540,15 +546,16 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 if (!_requestRegistry.TryMarkAccepted(requestId, ProxyResourceTypes.Protocol))
                     return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = "request expired" };
                 _log(Logger.FormatModuleMessage(LogModules.Authorization, "信息",
-                    "授权请求已受理：RequestId=" + JsonHelper.ToLogValue(requestId)));
+                    "授权请求已受理：Operation=Authorize RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + " Result=Accepted"));
                 return new AuthorizeRequestResult { Ok = true, RequestId = requestId, Message = "" };
             }
 
             var detail = ResultParser.FormatErrorDetail(response, "终端授权请求失败");
             _requestRegistry.Fail(requestId, ProxyResourceTypes.Protocol);
             _log(Logger.FormatModuleMessage(LogModules.Authorization, "错误",
-                "授权请求最终失败：RequestId=" + JsonHelper.ToLogValue(requestId) +
-                "，错误=" + detail));
+                "授权请求最终失败：Operation=Authorize RequestId=" +
+                JsonHelper.ToLogValue(requestId) + " Result=Failed，错误=" + detail));
             return new AuthorizeRequestResult { Ok = false, RequestId = requestId, Message = detail };
         }
 

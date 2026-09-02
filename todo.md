@@ -1866,3 +1866,68 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 - 未执行真实 Windows 10/11 硬件、Delphi7 第三方 Demo、真实 EXE/DLL 日志计数、HWND 销毁/零尺寸、MJPEG 断流恢复、Proxy 重启、12029 持续 60 秒、10 分钟正常健康检查和长稳压测；这些均待现场验证。
 - 风险集中在日志级别调整后的现场信息取舍、RequestId 贯通与旧直连入口的回退分支，以及真实终端/回调环境差异；未改变业务协议和接口语义。
 - 回退方式：仅回退 L7 对应提交或逐文件回退本节列出的 L7 文件；使用 `git revert <L7提交>`，不执行宽范围 `reset`，不删除用户已有未跟踪文件、构建产物或方案文档改动。
+
+## 阶段3 Task L8/L8.1：最终日志语义收尾、可读性统一与验收（2026-09-01）
+
+### 完成状态
+
+阶段3：代码优化完成，现场/长稳验收待完成。
+
+- [x] 已知 DLL 导出建立确定性 `Operation -> Module` 映射，覆盖当前 `.def` 的 25 个导出；未知 Operation 仍保留 legacy Message fallback，显示层同步规范为短 Operation。
+- [x] 已统一业务结构化字段：`Operation` 使用短名称，`RequestId`、`TerminalIndex`、`Result`、`ErrorCode`、`DurationMs`、`QueueWaitMs`、`Attempt`、`RouteEpoch`、`RecoveryEpisodeId`、`Resource` 保持稳定；`Result` 使用 `Success/Failed/Accepted/Recovered/Ignored` 等稳定值。
+- [x] 已继续贯通切换、进程、同步抓拍、OCR/NFC/授权、预览和 callback 的业务 RequestId；callback 另保留内部 `DeliveryRequestId` 用于去重，不改变第三方 callback 内容。
+- [x] 可恢复的 MJPEG 流/解码/绘制故障使用限频 WARN，恢复耗尽才 ERROR；稳定恢复才记录成功，RenderTarget 临时失败不重建整个 MJPEG 流，Recovery Episode 不因短生命周期 generation 清零。
+- [x] 正常健康检查 Summary 改为 DEBUG；首次异常 WARN、60 秒持续异常聚合 WARN、恢复 INFO，避免底层异常与状态聚合重复表达。
+- [x] 抓拍、授权、`preview-ready`、callback 和预览日志收敛为中文业务描述 + 短 Operation + 稳定字段；HTTP、队列、Worker、内部 Session/generation、响应长度和保存步骤不再进入生产 INFO/WARN/ERROR。
+- [x] C# / Native 限频汇总统一为中文现场描述，生产输出不再使用 `RateLimitWindowEnd`、`Count=`、`FirstTime=`、`LastTime=`、`LastError=`；URL 日志继续使用现有脱敏函数。
+
+### 根因与修改范围
+
+根因包括：Native 导出边界曾以通用模块名记录，导致已知导出落入 `[未识别接口]`；业务 Operation/Result 文案不统一且内部 HTTP 轨迹混入现场日志；部分同步链路和切换链路未持续携带业务 RequestId；健康检查异常同时由底层请求和状态聚合记录；可恢复 MJPEG 故障、恢复成功和最终失败的语义边界不清。本次只在既有 Logger、限频器、健康检查、MJPEG Recovery、业务调用点和测试范围内做小步调整，没有重新实现 Logger 或大规模重构 PreviewManager。
+
+### 修改文件与函数/类
+
+- Native：`src/logger.h`、`src/logger.cpp`（`CanonicalOperationName`、结果规范化、中文限频类别、结构化日志）；`src/exports.cpp`（导出 RequestId 上下文、边界日志级别、抓拍/授权/预览最终日志）；`src/request_session_manager.h/.cpp`（内部 Session 使用调用方 RequestId）；`src/delphi_proxy.h/.cpp`（内部切换 RequestId 传递）。
+- C# 日志与健康检查：`Infrastructure/Logger.cs`、`Infrastructure/LogRateLimiter.cs`、`Infrastructure/PingLogAggregator.cs`、`Terminal/TerminalClient.cs`、`Terminal/TerminalHealthChecker.cs`。
+- C# 业务与回调：`Core/QueueManager.cs`、`Server/Coordinator/SwitchCoordinator.cs`、`BizOperationHandler.cs`、`ProcessEndCoordinator.cs`、`Server/Scheduler/WorkerExecutionEngine.cs`、`Server/DllCommandHandler.cs`、`Server/DllCallbackSender.cs`、`Server/TerminalCallbackHandler.cs`。
+- C# 预览：`Preview/PreviewManager.cs`、`Preview/MjpegPreviewController.cs`（保留既有 R1 Recovery Episode、绘制就绪和 HWND/客户区处理）。
+- 测试：`Proxy.Tests/Core/SwitchCoordinatorTests.cs`、`Infrastructure/LoggerTests.cs`、`Infrastructure/PingLogAggregatorTests.cs`、`Preview/PreviewRecoveryPolicyTests.cs`。
+
+### 修改前后行为与日志示例
+
+- 已知导出：原为 `[未识别接口][信息] 入口 Operation=HZCYKJTHardWare_CaptureCameraImage ...`；现按表归入 `[人脸抓拍]`，使用 `Operation=CaptureFace RequestId=... Result=Success`，边界入口/出口只保留 DEBUG。
+- 限频：原 `RateLimitWindowEnd key=... Count=... FirstTime=... LastTime=... LastError=...`；现为 `重复故障汇总：类别=MJPEG绘制失败，次数=28，首次=...，最近=...，最近错误=...`，窗口边界不再叠加同一次当前错误。
+- 预览通知：原 `POST完成：Operation=POST /preview-ready`；现为 `预览结果已通知DLL：资源=摄像头，Operation=PreviewReady RequestId=... Result=Success`。
+- 健康检查：正常周期 Summary 进入 DEBUG；异常为 `终端连接异常：Operation=TerminalHealth ... Result=Failed`，恢复为一次 `终端连接已恢复：Operation=TerminalHealth ... Result=Recovered`。
+- MJPEG：可恢复流/解码/绘制故障为限频 WARN，最终 `recovery_exhausted` 才 ERROR；不再因“收到帧但 HWND 绘制失败”立即创建新 generation 并宣称恢复。
+
+### 兼容性说明
+
+- DLL ABI 影响：无。未修改 DLL 导出函数名、参数数量/顺序/类型、`__stdcall`、结构体布局、callback 签名、错误码、接口 `1/0` 语义或 `.def` 导出集合。
+- Delphi7：无影响，无须修改第三方代码；第三方 HWND 仍由第三方所有，Proxy 不 Destroy；callback HTTP 状态码、JSON 字段含义和终端协议不变。
+- 内部通信：仅复用/补齐现有 `request_id` 业务字段和日志字段；新增的切换 RequestId 传递属于 DLL 与 Proxy 的既有 loopback 内部路径，不改变终端协议或第三方 JSON。
+- 位数与框架：Native DLL 按 `Release|Win32/x86`，C# Proxy/Tests 按 `Release|x64`；Proxy 未改为 x86，TargetFramework 未改变；版本号未增加。
+
+### 验证结果
+
+- [x] Native DLL `Release|Win32/x86`：0 警告、0 错误，输出 `Release/HZCYKJTHardWare.dll`。
+- [x] C# Proxy `Release|x64`：0 警告、0 错误。
+- [x] C# Tests `Release|x64`：0 错误；有环境警告 `NU1900`（NuGet 漏洞源不可达）。
+- [x] L8/R1 定向 VSTest：43/43 通过，覆盖 Operation 映射、健康检查 DEBUG/WARN/恢复、中文限频、窗口不重复、Payload Sanitizer、预览恢复/RenderTarget、callback、`preview-ready` 和切换 RequestId。
+- [x] Operation->Module 表驱动脚本：25 个导出通过。
+- [x] 编译后 Native x86 `dumpbin /exports`：25 个导出，序号 1~25；与 `.def` 集合一致；`.def` 未修改。
+- [x] 生产源码静态检查：未发现现场输出字段 `RateLimitWindowEnd`、`Count=`、`FirstTime=`、`LastTime=`、`LastError=`；`POST完成`/HTTP完成/入口/出口仅保留在 DEBUG 或宏参数中；未发现生产日志直接输出完整 Payload/Frame/Buffer。
+- [x] `git diff --check`：无空白错误；仅有 Git LF/CRLF 转换提示。
+- [x] 完整 x64 VSTest：164 项，152 通过，12 失败。10 项因当前 VSTest/.NET 宿主构造 `HttpListener` 抛出 `PlatformNotSupportedException`；另有既有 ProductVersion 断言（期望 `1.3.1.0`、实际 `1.3.5.0`）和既有 `ProcessCallback_AfterSwitchAtoBtoA_IsDeliveredAgain` 路由断言失败；未归因于本次 L8 日志修改。
+
+### 未验证项目、风险与回退
+
+- 未执行真实 Windows 10 x64 + Delphi7 x86 Demo、真实 EXE/DLL 现场日志计数、真实终端、Proxy 重启、HWND 销毁/零客户区、MJPEG 真实断流恢复、12029 持续 60 秒、10 分钟正常健康检查、低磁盘/不可写目录以及 2 小时/24 小时长稳压测；均须现场验证。
+- 风险集中在生产 INFO 收口后的现场信息取舍、真实终端/回调 RequestId 一致性、渲染线程与 HWND 生命周期竞态，以及完整回归中既有环境失败项的独立处理；日志级别和文案变化不改变业务协议。
+- 回退方式：本轮未执行提交或推送；如需回退，只回退本 Task L8/L8.1 的变更文件或其独立提交，使用 `git revert <L8提交>`，不执行宽范围 `reset`，不删除用户已有未跟踪文件、构建产物、方案文档或其他阶段提交。
+
+### 下一步
+
+- [ ] 在 Windows 10 x64 现场完成第三方 Delphi7、真实终端、真实 EXE/DLL 日志与上述异常/恢复场景验证。
+- [ ] 完成 2 小时/24 小时长稳，确认 INFO/WARN/ERROR 数量、Recovery Episode、generation、句柄/线程/队列和磁盘治理结果。
+- [ ] 单独处理 `HttpListener` 测试宿主、ProductVersion 断言和既有路由断言，不混入 Task L8。

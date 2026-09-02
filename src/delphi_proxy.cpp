@@ -189,8 +189,12 @@ bool DelphiProxy::ProcessEnd(const std::string& requestId, int timeoutMs) {
         IsOkResponse(response);
 }
 
-bool DelphiProxy::SwitchTerminal(int terminalIndex) {
-    std::string body = "{" + JsonIntField("terminal_index", terminalIndex) + "}";
+bool DelphiProxy::SwitchTerminal(int terminalIndex,
+                                 const std::string& requestId) {
+    std::string body = "{" + JsonIntField("terminal_index", terminalIndex);
+    if (!requestId.empty())
+        body += "," + JsonStringField("request_id", requestId);
+    body += "}";
     std::string response;
     return PostJson("/terminal/switch", body, response) && IsOkResponse(response);
 }

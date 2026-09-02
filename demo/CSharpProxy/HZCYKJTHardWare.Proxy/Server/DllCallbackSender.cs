@@ -193,7 +193,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                 Logger.Debug(completionMessage);
                 Logger.Info("[预览] 预览结果已通知DLL：资源=" +
                     FormatPreviewResource(resourceType) +
-                    "，RequestId=" + requestTrace + "，Result=成功");
+                    "，Operation=PreviewReady RequestId=" + requestTrace +
+                    " Result=Success");
             }
             else
                 Logger.Debug(completionMessage);
@@ -261,7 +262,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                 }
                 if (attemptResult == CallbackAttemptResult.PermanentFailure)
                 {
-                    Logger.Error("[DLL回调] POST完成：" +
+                    Logger.Error("[DLL回调] 回调永久投递失败：" +
                         Logger.FormatContextMessage("POST " + path, requestId: requestTrace,
                             result: "失败", errorCode: "permanent_failure",
                             durationMs: totalSw.ElapsedMilliseconds,

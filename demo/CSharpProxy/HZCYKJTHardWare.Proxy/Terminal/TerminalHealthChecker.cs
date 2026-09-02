@@ -155,7 +155,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             }
             catch (Exception ex)
             {
-                Logger.Error("[健康检测] 轮询异常", ex);
+                // 状态聚合器会输出一次 WARN；这里仅保留 DEBUG 技术明细，避免同一故障双重告警。
+                Logger.Debug("[健康检测][调试] 轮询异常，交由健康状态聚合：错误=" +
+                    (ex.Message ?? "未知异常"));
                 var failedStatus = CreateFailedStatus("健康检测执行失败");
                 nextDelayMs = ResolveNextDelayAndUpdateRetry(failedStatus);
                 if (!cancellationToken.IsCancellationRequested && (route == null ||
@@ -324,7 +326,8 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             {
                 result.IsHealthy = false;
                 result.ErrorMessage = $"解析响应失败: {ex.Message}";
-                Logger.Error("[健康检测] 响应解析异常", ex);
+                Logger.Debug("[健康检测][调试] 响应解析异常，交由健康状态聚合：错误=" +
+                    (ex.Message ?? "未知异常"));
             }
 
             return result;
@@ -370,7 +373,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         ? 0
                         : Math.Max(0, (long)(nowUtc - _healthFailureFirstUtc).TotalSeconds);
                     _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "信息",
-                        $"终端连接已恢复：终端={GetCurrentTerminalDisplay()}，持续={durationSeconds}秒，累计失败={_healthFailureTotalCount}次"));
+                        $"终端连接已恢复：终端={GetCurrentTerminalDisplay()}，持续={durationSeconds}秒，累计失败={_healthFailureTotalCount}次 " +
+                        Logger.FormatContextMessage("TerminalHealth",
+                            terminalIndex: terminalIndex.ToString(), result: "Recovered")));
                 }
 
                 _lastHealthState = HealthObservationState.Normal;
@@ -390,7 +395,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 _healthFailureTotalCount = 1;
                 _healthFailureWindowCount = 1;
                 _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "警告",
-                    $"终端连接异常：终端={GetCurrentTerminalDisplay()}，错误={error}，准备自动恢复"));
+                    $"终端连接异常：终端={GetCurrentTerminalDisplay()}，错误={error}，准备自动恢复 " +
+                    Logger.FormatContextMessage("TerminalHealth",
+                        terminalIndex: terminalIndex.ToString(), result: "Failed",
+                        errorCode: "health_check_failed")));
                 return;
             }
 
@@ -399,7 +407,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             if (nowUtc - _healthFailureWindowStartUtc >= FailureSummaryWindow)
             {
                 _log(Logger.FormatModuleMessage(LogModules.TerminalCommunication, "警告",
-                    $"终端连接异常持续：60秒内失败{_healthFailureWindowCount}次，最近错误={error}"));
+                    $"终端连接异常持续：60秒内失败{_healthFailureWindowCount}次，最近错误={error} " +
+                    Logger.FormatContextMessage("TerminalHealth",
+                        terminalIndex: terminalIndex.ToString(), result: "Failed",
+                        errorCode: "health_check_failed")));
                 _healthFailureWindowStartUtc = nowUtc;
                 _healthFailureWindowCount = 1;
             }

@@ -71,8 +71,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 var body = "{\"request_id\":\"" +
                     JsonHelper.EscapeString(requestId) + "\"}";
 
-                _log("[流程] 正在通知终端停止推送：终端=" +
-                    route.TerminalIndex + "，request_id=" + requestId);
+                Logger.Debug("[流程] 结束流程通信：Operation=EndProcess RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + "，TerminalIndex=" +
+                    route.TerminalIndex);
 
                 var (httpAccepted, response) = await _terminalClient.PostJsonAsync(
                     route.BaseUrl, "/process/end", body,
@@ -95,8 +96,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     // 此处仅更新当前、默认及 UI 元数据。历史 request_id 绑定继续用于路由已经发出的回调。
                     _processRegistry.RecordEndAcknowledged(route.TerminalIndex);
                     UpdateLocalIndicator(false);
-                    _log("[流程] 终端已确认停止推送：终端=" +
-                        route.TerminalIndex + "，request_id=" + requestId);
+                    _log("[流程] 流程已结束：Operation=EndProcess RequestId=" +
+                        JsonHelper.ToLogValue(requestId) + "，TerminalIndex=" +
+                        route.TerminalIndex + "，Result=Success");
                     return new ProcessEndOutcome(true, "", requestId,
                         route.TerminalIndex);
                 }
@@ -109,9 +111,9 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                         ? "invalid_terminal_response"
                         : "terminal_request_failed";
 
-                _log("[流程] 终端停止推送未确认，可直接重试：终端=" +
-                    route.TerminalIndex + "，request_id=" + requestId +
-                    "，错误码=" + errorCode);
+                Logger.Warn("[流程] 流程结束未确认：Operation=EndProcess RequestId=" +
+                    JsonHelper.ToLogValue(requestId) + "，TerminalIndex=" +
+                    route.TerminalIndex + "，ErrorCode=" + errorCode);
                 return new ProcessEndOutcome(false, errorCode, requestId,
                     route.TerminalIndex);
             }

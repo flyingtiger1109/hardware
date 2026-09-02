@@ -37,6 +37,9 @@ struct LogContext {
 // 统一业务上下文字段；空字段不输出，避免制造无意义的日志噪声。
 std::string FormatLogContext(const LogContext& context);
 
+// 将导出边界中的完整导出名转换为稳定的短 Operation，仅用于日志关联。
+std::string CanonicalOperationName(const std::string& operation);
+
 // 日志侧载荷清理：只保留允许的标量摘要，原始正文永不回写日志。
 std::string SanitizeLargePayloadForLog(const std::string& payload,
                                        const std::string& requestId = "");

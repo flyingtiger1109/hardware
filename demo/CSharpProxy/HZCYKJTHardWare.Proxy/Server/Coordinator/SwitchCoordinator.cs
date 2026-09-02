@@ -87,27 +87,33 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
         /// <summary>
         /// 执行完整终端切换。已有切换正在进行时返回 false。
         /// </summary>
-        public async Task<bool> SwitchToAsync(int terminalIndex)
+        public async Task<bool> SwitchToAsync(int terminalIndex, string requestId = null)
         {
             if (!EnsureTargetTerminalConfigured(terminalIndex))
                 return false;
+
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = "SWITCH_" + Guid.NewGuid().ToString("N").Substring(0, 16);
 
             if (!TryBeginSwitch(terminalIndex, out var generation))
             {
                 _log("[终端切换][警告] 终端切换被拒绝：已有切换正在执行");
                 return false;
             }
-            return await SwitchToCoreAsync(terminalIndex, generation).ConfigureAwait(false);
+            return await SwitchToCoreAsync(terminalIndex, generation, requestId).ConfigureAwait(false);
         }
 
         /// <summary>
         /// 从队列工作线程请求切换，例如 DllCommandHandler。
         /// 此方法设置切换标志并递增代次，实际切换由专用切换工作线程执行。
         /// </summary>
-        public bool RequestSwitch(int terminalIndex)
+        public bool RequestSwitch(int terminalIndex, string requestId = null)
         {
             if (!EnsureTargetTerminalConfigured(terminalIndex))
                 return false;
+
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = "SWITCH_" + Guid.NewGuid().ToString("N").Substring(0, 16);
 
             if (!TryBeginSwitch(terminalIndex, out var generation))
                 return false;
@@ -115,7 +121,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             var request = new SwitchRequest
             {
                 TerminalIndex = terminalIndex,
-                Generation = generation
+                Generation = generation,
+                RequestId = requestId
             };
 
             if (_queueManager.EnqueueSwitch(request))
@@ -150,7 +157,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 FinishSwitch();
                 return;
             }
-            SwitchToCoreAsync(request.TerminalIndex, request.Generation).GetAwaiter().GetResult();
+            SwitchToCoreAsync(request.TerminalIndex, request.Generation, request.RequestId)
+                .GetAwaiter().GetResult();
         }
 
         private bool TryBeginSwitch(int terminalIndex, out int generation)
@@ -191,7 +199,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
             }
         }
 
-        private async Task<bool> SwitchToCoreAsync(int terminalIndex, int generation)
+        private async Task<bool> SwitchToCoreAsync(int terminalIndex, int generation,
+            string requestId)
         {
             var switchFinished = false;
             try
@@ -212,15 +221,21 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                 FinishSwitch();
                 switchFinished = true;
 
-                Logger.Info($"[终端切换] 切换完成：当前={_terminalManager.CurrentName}，" +
-                            $"切换耗时={switchElapsedMs}ms，预览进入后台恢复");
+                var completedMessage = $"[终端切换] 切换完成：当前={_terminalManager.CurrentName}，" +
+                    $"预览进入后台恢复，Operation=SwitchTerminal RequestId={PreviewManager.FormatRequestId(requestId)} " +
+                    $"Result=Success DurationMs={switchElapsedMs}";
+                if (_log != null)
+                    _log(completedMessage);
+                else
+                    Logger.Info(completedMessage);
                 Logger.Debug($"[性能] 终端切换总耗时={switchElapsedMs}ms");
                 StartPreviewRestartInBackground(restartBaseUrl, generation, switchElapsedMs);
                 return true;
             }
             catch (Exception ex)
             {
-                _log("[终端切换][错误] 切换失败：" + ex.Message);
+                _log("[终端切换][错误] 切换失败：Operation=SwitchTerminal RequestId=" +
+                    PreviewManager.FormatRequestId(requestId) + "，错误=" + ex.Message);
                 return false;
             }
             finally

@@ -611,9 +611,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         {
                             Logger.TryLogRateLimited(
                                 "Mjpeg|same_url_failure|" + _description,
-                                LogModules.Preview, "错误",
-                                $"HTTP MJPEG同一地址恢复失败（{SameUrlMaxFailures}次）：" +
-                                $"{JsonHelper.ToLogValue(_description)}，错误={JsonHelper.ToLogValue(failureReason)}");
+                                LogModules.Preview, "警告",
+                                $"HTTP MJPEG同一地址连续故障（{SameUrlMaxFailures}次），等待上层恢复：" +
+                                $"资源={JsonHelper.ToLogValue(_description)}，错误={JsonHelper.ToLogValue(failureReason)}");
                             SignalStreamFault(generation, MjpegFailureKind.StreamFailure, failureReason);
                             break;
                         }
@@ -722,8 +722,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (count <= 0 || count > MaxBufferedBytes || buffer.Count > MaxBufferedBytes - count)
             {
                 buffer.Clear();
-                Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                    $"MJPEG帧缓冲超过限制：{_description}，限制={MaxBufferedBytes}字节，代次={generation}"));
+                Logger.TryLogRateLimited(
+                    "Mjpeg|Decode|buffer_limit|" + _description,
+                    LogModules.Preview, "警告",
+                    $"MJPEG帧缓冲超过限制，等待上层恢复：资源={JsonHelper.ToLogValue(_description)}，" +
+                    $"限制={MaxBufferedBytes}字节，错误类别=DecodeFailure");
                 SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
                     "MJPEG帧缓冲超过限制");
                 return false;
@@ -756,8 +759,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (frameLength > MaxFrameBytes)
                 {
                     buffer.Clear();
-                    Logger.Error(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                        $"MJPEG单帧超过限制：{_description}，帧长度={frameLength}字节，限制={MaxFrameBytes}字节，代次={generation}"));
+                    Logger.TryLogRateLimited(
+                        "Mjpeg|Decode|frame_limit|" + _description,
+                        LogModules.Preview, "警告",
+                        $"MJPEG单帧超过限制，等待上层恢复：资源={JsonHelper.ToLogValue(_description)}，" +
+                        $"帧长度={frameLength}字节，限制={MaxFrameBytes}字节，错误类别=DecodeFailure");
                     SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
                         "MJPEG单帧超过限制");
                     return;

@@ -56,7 +56,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                         LogModules.HealthCheck,
                         "信息",
                         "/ping恢复：故障持续时间=" + durationMs + "毫秒，连续失败次数=" +
-                        _consecutiveFailureCount + "，当前状态=正常"));
+                        _consecutiveFailureCount + "，当前状态=正常 " +
+                        Logger.FormatContextMessage("TerminalHealth", result: "Recovered")));
                     _failureActive = false;
                     _lastFailureReason = null;
                     _consecutiveFailureCount = 0;
@@ -95,14 +96,17 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     (!summaryAdded && now - _lastFailureNoticeUtc >= RepeatedFailureNoticeInterval);
                 if (shouldNotice)
                 {
-                    var level = exception ? "错误" : "警告";
+                    // 单次 /ping 异常仍有后续复查和恢复机会，由聚合器统一以 WARN 表达。
+                    var level = "警告";
                     var kind = exception ? "异常" : "失败";
                     messages.Add(Logger.FormatModuleMessage(
                         LogModules.HealthCheck,
                         level,
                         "/ping" + kind + "：原因=" + normalizedReason +
                         "，耗时=" + Math.Max(0L, elapsedMs) + "毫秒，连续失败次数=" +
-                        _consecutiveFailureCount));
+                        _consecutiveFailureCount + " " +
+                        Logger.FormatContextMessage("TerminalHealth", result: "Failed",
+                            errorCode: exception ? "exception" : "health_check_failed")));
                     _lastFailureNoticeUtc = now;
                     _lastFailureReason = normalizedReason;
                 }
@@ -194,7 +198,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 "，平均耗时=" + average +
                 "毫秒，最大耗时=" + _maxElapsedMs +
                 "毫秒，当前状态=" + status +
-                "，最近原因=" + reason);
+                "，最近原因=" + reason + " " +
+                Logger.FormatContextMessage("TerminalHealth",
+                    result: _failureActive ? "Failed" : "Normal"));
         }
 
         private void ResetWindowLocked(DateTime now)

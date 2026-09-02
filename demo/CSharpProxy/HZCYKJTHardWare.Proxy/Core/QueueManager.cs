@@ -208,5 +208,6 @@ namespace HZCYKJTHardWare.Proxy.Core
     {
         public int TerminalIndex { get; set; }
         public int Generation { get; set; }
+        public string RequestId { get; set; }
     }
 }

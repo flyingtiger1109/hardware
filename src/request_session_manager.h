@@ -39,7 +39,8 @@ public:
     // 创建新的请求会话，返回 request_id
     std::string CreateSession(const std::string& resourceType,
                               const std::string& saveDir,
-                              int timeoutMs);
+                              int timeoutMs,
+                              const std::string& requestId = "");
 
     // 标记请求已被终端受理
     bool MarkAccepted(const std::string& requestId);

@@ -30,6 +30,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         public const string ServiceListener = "服务监听";
         public const string RuntimeMetrics = "运行指标";
         public const string TaskQueue = "任务队列";
+        public const string PlateCapture = "车牌抓帧";
         public const string LogManagement = "日志管理";
         public const string DeviceCapability = "设备能力";
         public const string ConfigManagement = "配置管理";
@@ -186,17 +187,161 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             return $"[{normalizedModule}][{normalizedLevel}] {message ?? string.Empty}";
         }
 
+        /// <summary>
+        /// 将 DLL 导出名、内部 HTTP 路径和历史操作名统一为短 Operation。
+        /// 该方法只用于日志关联，不改变任何对外接口或请求正文。
+        /// </summary>
+        internal static string CanonicalOperationName(string operation)
+        {
+            var value = (operation ?? string.Empty).Trim();
+            if (value.Length == 0)
+                return value;
+
+            if (value.StartsWith("POST ", StringComparison.OrdinalIgnoreCase) ||
+                value.StartsWith("GET ", StringComparison.OrdinalIgnoreCase) ||
+                value.StartsWith("Enqueue ", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(value.IndexOf(' ') + 1).Trim();
+            }
+
+            const string exportPrefix = "HZCYKJTHardWare_";
+            if (value.StartsWith(exportPrefix, StringComparison.Ordinal))
+                value = value.Substring(exportPrefix.Length);
+
+            switch (value)
+            {
+                case "InitSdk": return "InitSdk";
+                case "ReleaseSdk": return "ReleaseSdk";
+                case "SwitchTerminal":
+                case "switch_terminal":
+                case "/terminal/switch": return "SwitchTerminal";
+                case "StartProcess":
+                case "start_process":
+                case "/process/start": return "StartProcess";
+                case "EndProcess":
+                case "end_process":
+                case "/process/end": return "EndProcess";
+                case "StartCameraPreview":
+                case "/preview/camera/start": return "StartCameraPreview";
+                case "StopCameraPreview":
+                case "/preview/camera/stop": return "StopCameraPreview";
+                case "StartFingerprintPreview":
+                case "/preview/fingerprint/start": return "StartFingerprintPreview";
+                case "StopFingerprintPreview":
+                case "/preview/fingerprint/stop": return "StopFingerprintPreview";
+                case "StartIrisPreview":
+                case "/preview/iris/start": return "StartIrisPreview";
+                case "StopIrisPreview":
+                case "/preview/iris/stop": return "StopIrisPreview";
+                case "StartPlatePreviewCJ":
+                case "/preview/plate/cj/start": return "StartPlatePreviewCJ";
+                case "StopPlatePreviewCJ":
+                case "/preview/plate/cj/stop": return "StopPlatePreviewCJ";
+                case "StartPlatePreviewRJ2":
+                case "/preview/plate/rj2/start": return "StartPlatePreviewRJ2";
+                case "StopPlatePreviewRJ2":
+                case "/preview/plate/rj2/stop": return "StopPlatePreviewRJ2";
+                case "StartPlatePreviewRJ3":
+                case "/preview/plate/rj3/start": return "StartPlatePreviewRJ3";
+                case "StopPlatePreviewRJ3":
+                case "/preview/plate/rj3/stop": return "StopPlatePreviewRJ3";
+                case "SaveLatestPlateFrame":
+                case "/preview/plate/latest-frame": return "SaveLatestPlateFrame";
+                case "CaptureCameraImage":
+                case "/capture/face": return "CaptureFace";
+                case "CaptureFingerprintImage":
+                case "/capture/fingerprint": return "CaptureFingerprint";
+                case "CaptureIrisImage":
+                case "/capture/iris": return "CaptureIris";
+                case "RequestOCR":
+                case "/ocr":
+                case "/resources/ocr-document/request": return "RequestOCR";
+                case "RequestNfcCard":
+                case "/nfc":
+                case "/resources/nfc-card/request": return "RequestNfcCard";
+                case "RequestAuthorize":
+                case "/authorize":
+                case "/resources/protocol/request": return "Authorize";
+                case "RegisterEventCallback": return "RegisterEventCallback";
+                case "/preview-ready": return "PreviewReady";
+                default: return operation.Trim();
+            }
+        }
+
+        private static string CanonicalResultName(string result)
+        {
+            switch ((result ?? string.Empty).Trim())
+            {
+                case "成功": return "Success";
+                case "失败": return "Failed";
+                case "已受理": return "Accepted";
+                case "已恢复": return "Recovered";
+                case "已停止": return "Stopped";
+                case "忽略":
+                case "已忽略": return "Ignored";
+                case "已发送": return "Delivered";
+                case "已取消": return "Cancelled";
+                case "重试": return "Retrying";
+                case "收到": return "Received";
+                case "开始": return "Started";
+                default: return result;
+            }
+        }
+
+        private static string CanonicalizeOperationField(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return message;
+
+            var marker = message.IndexOf("Operation=", StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+                return message;
+
+            var valueStart = marker + "Operation=".Length;
+            var valueEnd = valueStart;
+            while (valueEnd < message.Length && message[valueEnd] != ' ' &&
+                   message[valueEnd] != '\t' && message[valueEnd] != ',' &&
+                   message[valueEnd] != '，' && message[valueEnd] != ';')
+                valueEnd++;
+
+            var rawOperation = message.Substring(valueStart, valueEnd - valueStart);
+            var canonicalOperation = CanonicalOperationName(rawOperation);
+            if (string.Equals(rawOperation, canonicalOperation, StringComparison.Ordinal))
+                return message;
+
+            return message.Substring(0, valueStart) + canonicalOperation +
+                   message.Substring(valueEnd);
+        }
+
+        internal static string ResourceDisplayName(string resourceType)
+        {
+            switch ((resourceType ?? string.Empty).Trim())
+            {
+                case "face_image": return "人脸";
+                case "fingerprint_image": return "指纹";
+                case "iris_image": return "虹膜";
+                case "ocr_document": return "证件识别";
+                case "nfc_card": return "IC卡";
+                case "authorization":
+                case "protocol": return "授权";
+                case "Camera_External": return "摄像头/第三方";
+                case "Fingerprint_External": return "指纹/第三方";
+                case "Iris_External": return "虹膜/第三方";
+                default: return string.IsNullOrWhiteSpace(resourceType) ? "未知" : resourceType;
+            }
+        }
+
         internal static string FormatContextMessage(string operation,
             string terminalIndex = null, string device = null, string requestId = null,
             string result = null, string errorCode = null, long? durationMs = null,
             long? queueWaitMs = null, int? attempt = null, long? routeEpoch = null)
         {
             var fields = new List<string>();
-            AppendContextField(fields, "Operation", operation);
+            AppendContextField(fields, "Operation", CanonicalOperationName(operation));
             AppendContextField(fields, "TerminalIndex", terminalIndex);
             AppendContextField(fields, "Device", device);
             AppendContextField(fields, "RequestId", requestId);
-            AppendContextField(fields, "Result", result);
+            AppendContextField(fields, "Result", CanonicalResultName(result));
             AppendContextField(fields, "ErrorCode", errorCode);
             if (durationMs.HasValue)
                 AppendContextField(fields, "DurationMs", durationMs.Value.ToString());
@@ -322,8 +467,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             var parsed = ParseMessage(message, defaultLevel);
             if (string.IsNullOrEmpty(parsed.Module))
-                return $"[{parsed.Level}] {parsed.Body}";
-            return $"[{parsed.Module}][{parsed.Level}] {parsed.Body}";
+                return $"[{parsed.Level}] {CanonicalizeOperationField(parsed.Body)}";
+            return $"[{parsed.Module}][{parsed.Level}] {CanonicalizeOperationField(parsed.Body)}";
         }
 
         /// <summary>
@@ -986,6 +1131,11 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             if (string.IsNullOrEmpty(body))
                 return null;
+
+            var operationModule = InferOperationModule(body);
+            if (!string.IsNullOrEmpty(operationModule))
+                return operationModule;
+
             if (body.StartsWith("HTTP MJPEG", StringComparison.OrdinalIgnoreCase) ||
                 body.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 body.IndexOf("预览", StringComparison.Ordinal) >= 0)
@@ -1047,6 +1197,50 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             if (body.IndexOf("日志", StringComparison.Ordinal) >= 0)
                 return LogModules.LogManagement;
             return null;
+        }
+
+        private static string InferOperationModule(string body)
+        {
+            var marker = body.IndexOf("Operation=", StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+                return null;
+
+            var start = marker + "Operation=".Length;
+            var end = start;
+            while (end < body.Length && body[end] != ' ' && body[end] != '\t' &&
+                   body[end] != ',' && body[end] != '，' && body[end] != ';')
+                end++;
+            var operation = body.Substring(start, end - start).Trim();
+            switch (CanonicalOperationName(operation))
+            {
+                case "SwitchTerminal": return LogModules.TerminalSwitch;
+                case "StartProcess":
+                case "EndProcess": return LogModules.ProcessControl;
+                case "StartCameraPreview":
+                case "StopCameraPreview":
+                case "StartFingerprintPreview":
+                case "StopFingerprintPreview":
+                case "StartIrisPreview":
+                case "StopIrisPreview":
+                case "StartPlatePreviewCJ":
+                case "StopPlatePreviewCJ":
+                case "StartPlatePreviewRJ2":
+                case "StopPlatePreviewRJ2":
+                case "StartPlatePreviewRJ3":
+                case "StopPlatePreviewRJ3":
+                case "PreviewReady": return LogModules.Preview;
+                case "SaveLatestPlateFrame": return LogModules.PlateCapture;
+                case "CaptureFace": return LogModules.FaceCapture;
+                case "CaptureFingerprint": return LogModules.FingerprintCapture;
+                case "CaptureIris": return LogModules.IrisCapture;
+                case "RequestOCR": return LogModules.DocumentRecognition;
+                case "RequestNfcCard": return LogModules.NfcRead;
+                case "Authorize": return LogModules.Authorization;
+                case "InitSdk":
+                case "ReleaseSdk": return LogModules.SdkLifecycle;
+                case "RegisterEventCallback": return LogModules.TerminalCallback;
+                default: return null;
+            }
         }
     }
 }

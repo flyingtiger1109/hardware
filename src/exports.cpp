@@ -280,6 +280,75 @@ static std::string GenerateSyncRequestId(const char* prefix) {
     return std::string(prefix) + "_" + HZCYKJTHardWare::PathHelper::GetTimestampString() + "_" + seqBuf;
 }
 
+// 导出调用的关联 ID 只存在于当前 DLL 调用线程，不改变任何导出 ABI。
+static thread_local std::string g_currentExportRequestId;
+
+static const char* ExportRequestIdPrefix(const char* operation) {
+    if (!operation) return "HZCYKJTHardWare_EXPORT";
+    if (std::strcmp(operation, "HZCYKJTHardWare_SwitchTerminal") == 0)
+        return "HZCYKJTHardWare_SWITCH";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartProcess") == 0)
+        return "HZCYKJTHardWare_PROCESS";
+    if (std::strcmp(operation, "HZCYKJTHardWare_EndProcess") == 0)
+        return "HZCYKJTHardWare_FLOW_END";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartCameraPreview") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopCameraPreview") == 0)
+        return "HZCYKJTHardWare_PREVIEW";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartFingerprintPreview") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopFingerprintPreview") == 0)
+        return "HZCYKJTHardWare_FP_PREVIEW";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartIrisPreview") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopIrisPreview") == 0)
+        return "HZCYKJTHardWare_IRIS_PREVIEW";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartPlatePreviewCJ") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopPlatePreviewCJ") == 0)
+        return "HZCYKJTHardWare_PLATE_PREVIEW_CJ";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartPlatePreviewRJ2") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopPlatePreviewRJ2") == 0)
+        return "HZCYKJTHardWare_PLATE_PREVIEW_RJ2";
+    if (std::strcmp(operation, "HZCYKJTHardWare_StartPlatePreviewRJ3") == 0 ||
+        std::strcmp(operation, "HZCYKJTHardWare_StopPlatePreviewRJ3") == 0)
+        return "HZCYKJTHardWare_PLATE_PREVIEW_RJ3";
+    if (std::strcmp(operation, "HZCYKJTHardWare_SaveLatestPlateFrame") == 0)
+        return "HZCYKJTHardWare_PLATE_FRAME";
+    if (std::strcmp(operation, "HZCYKJTHardWare_CaptureCameraImage") == 0)
+        return "HZCYKJTHardWare_FACE";
+    if (std::strcmp(operation, "HZCYKJTHardWare_CaptureFingerprintImage") == 0)
+        return "HZCYKJTHardWare_FP";
+    if (std::strcmp(operation, "HZCYKJTHardWare_CaptureIrisImage") == 0)
+        return "HZCYKJTHardWare_IRIS";
+    if (std::strcmp(operation, "HZCYKJTHardWare_RequestOCR") == 0)
+        return "HZCYKJTHardWare_OCR";
+    if (std::strcmp(operation, "HZCYKJTHardWare_RequestNfcCard") == 0)
+        return "HZCYKJTHardWare_NFC";
+    if (std::strcmp(operation, "HZCYKJTHardWare_RequestAuthorize") == 0)
+        return "HZCYKJTHardWare_AUTH";
+    return "HZCYKJTHardWare_EXPORT";
+}
+
+static void BeginExportRequestContext(const char* operation) {
+    g_currentExportRequestId = GenerateSyncRequestId(ExportRequestIdPrefix(operation));
+}
+
+static const std::string& CurrentExportRequestId() {
+    return g_currentExportRequestId;
+}
+
+static std::string GetOrCreateExportRequestId(const char* prefix) {
+    if (g_currentExportRequestId.empty())
+        g_currentExportRequestId = GenerateSyncRequestId(prefix);
+    return g_currentExportRequestId;
+}
+
+static void SetExportRequestId(const std::string& requestId) {
+    if (!requestId.empty())
+        g_currentExportRequestId = requestId;
+}
+
+static void ClearExportRequestContext() {
+    g_currentExportRequestId.clear();
+}
+
 static std::string GetThirdPartyInputEncoding() {
     auto& ctx = HZCYKJTHardWare::HzsjkjtContext::Instance();
     auto lock = HZCYKJTHardWare::ReadLock();
@@ -1291,7 +1360,9 @@ static int SetSavePathBody(const char* savePath) {
 
 static int SwitchTerminalBody(int terminalIndex) {
     using namespace HZCYKJTHardWare;
-    LOG_DEBUG("接口", "切换终端：%d", terminalIndex);
+    const std::string requestId = CurrentExportRequestId();
+    LOG_DEBUG("接口", "切换终端：terminal_index=%d，request_id=%s",
+              terminalIndex, requestId.c_str());
     auto& ctx = HzsjkjtContext::Instance();
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
     if (terminalIndex <= 0) return HZCYKJTHardWare_RET_TERMINAL_INDEX_INVALID;
@@ -1326,8 +1397,9 @@ static int SwitchTerminalBody(int terminalIndex) {
     }
 
     DelphiProxy proxy(delphiServerUrl);
-    if (!proxy.SwitchTerminal(terminalIndex)) {
-        LOG_ERROR("接口", "终端切换失败：DLL转发硬件控制程序失败，terminal_index=%d", terminalIndex);
+    if (!proxy.SwitchTerminal(terminalIndex, requestId)) {
+        LOG_ERROR("接口", "终端切换失败：DLL转发硬件控制程序失败，terminal_index=%d，request_id=%s",
+                  terminalIndex, requestId.c_str());
         return HZCYKJTHardWare_RET_HTTP_FAILED;
     }
 
@@ -1342,7 +1414,8 @@ static int SwitchTerminalBody(int terminalIndex) {
         LOG_DEBUG("接口", "终端切换已受理，虹膜预览恢复转入后台队列");
     }
 
-    LOG_INFO("接口", "终端切换已受理");
+    LOG_INFO("接口", "终端切换成功：Operation=SwitchTerminal RequestId=%s TerminalIndex=%d Result=Success",
+             requestId.c_str(), terminalIndex);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1403,7 +1476,7 @@ static int StartProcessBody(const char* saveDir) {
     }
 
     std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PROCESS");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_PROCESS");
 
     // 为异步操作构建回调 JSON
     std::string ocrCallback = BuildCallbackUrl(ctx, "/ocr");
@@ -1422,12 +1495,15 @@ static int StartProcessBody(const char* saveDir) {
 
     DelphiProxy proxy(ctx.delphi_server_url);
     if (!proxy.ProcessStart(requestId, saveRoot, callbacksJson)) {
-        LOG_ERROR("接口", "开始流程失败：DLL转发硬件控制程序失败，服务地址=%s",
+        const int failureCode = ProxyFailureCode(proxy);
+        LOG_ERROR("接口", "业务流程启动失败：Operation=StartProcess RequestId=%s Result=Failed ErrorCode=%d，服务地址=%s",
+                  requestId.c_str(), failureCode,
                   SanitizeUrlForLog(ctx.delphi_server_url).c_str());
-        return ProxyFailureCode(proxy);
+        return failureCode;
     }
 
-    LOG_INFO("接口", "开始流程已受理");
+    LOG_INFO("接口", "流程已受理：Operation=StartProcess RequestId=%s Result=Accepted",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1438,17 +1514,20 @@ static int EndProcessBody() {
     if (!ctx.initialized) return HZCYKJTHardWare_RET_NOT_INITIALIZED;
 
     const std::string requestId =
-        GenerateSyncRequestId("HZCYKJTHardWare_FLOW_END");
+        GetOrCreateExportRequestId("HZCYKJTHardWare_FLOW_END");
     DelphiProxy proxy(ctx.delphi_server_url);
     bool ok = proxy.ProcessEnd(requestId);
 
     if (!ok) {
-        LOG_ERROR("接口", "结束流程失败：DLL转发硬件控制程序失败，request_id=%s，服务地址=%s",
-                  requestId.c_str(), SanitizeUrlForLog(ctx.delphi_server_url).c_str());
-        return ProxyFailureCode(proxy);
+        const int failureCode = ProxyFailureCode(proxy);
+        LOG_ERROR("接口", "业务流程结束失败：Operation=EndProcess RequestId=%s Result=Failed ErrorCode=%d，服务地址=%s",
+                  requestId.c_str(), failureCode,
+                  SanitizeUrlForLog(ctx.delphi_server_url).c_str());
+        return failureCode;
     }
 
-    LOG_INFO("接口", "结束流程已处理：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "业务流程已结束：Operation=EndProcess RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1464,7 +1543,7 @@ static int StartCameraPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_PREVIEW");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_PREVIEW");
     LOG_DEBUG("接口", "摄像头预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string delphiServerUrl;
@@ -1518,7 +1597,7 @@ static int StartCameraPreviewBody(void* hwnd) {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "摄像头预览已启动：request_id=%s，third_party_hwnd=%p",
+    LOG_INFO("接口", "摄像头预览请求已受理：Operation=StartCameraPreview RequestId=%s Result=Accepted，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1539,6 +1618,7 @@ static int StopCameraPreviewBody() {
         requestId = ctx.camera_preview_request_id;
         delphiServerUrl = ctx.delphi_server_url;
     }
+    SetExportRequestId(requestId);
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopCameraPreview(requestId)) {
@@ -1557,7 +1637,8 @@ static int StopCameraPreviewBody() {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "摄像头预览已停止：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "摄像头预览已停止：Operation=StopCameraPreview RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1571,7 +1652,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP_PREVIEW");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_FP_PREVIEW");
     LOG_DEBUG("接口", "指纹预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string delphiServerUrl;
@@ -1624,7 +1705,7 @@ static int StartFingerprintPreviewBody(void* hwnd) {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "指纹预览已启动：request_id=%s，third_party_hwnd=%p",
+    LOG_INFO("接口", "指纹预览请求已受理：Operation=StartFingerprintPreview RequestId=%s Result=Accepted，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1645,6 +1726,7 @@ static int StopFingerprintPreviewBody() {
         requestId = ctx.fingerprint_preview_request_id;
         delphiServerUrl = ctx.delphi_server_url;
     }
+    SetExportRequestId(requestId);
 
     DelphiProxy proxy(delphiServerUrl);
     if (!proxy.StopFingerprintPreview(requestId)) {
@@ -1663,7 +1745,8 @@ static int StopFingerprintPreviewBody() {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "指纹预览已停止");
+    LOG_INFO("接口", "指纹预览已停止：Operation=StopFingerprintPreview RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1677,7 +1760,7 @@ static int StartIrisPreviewBody(void* hwnd) {
         return HZCYKJTHardWare_RET_INVALID_HWND;
     }
 
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_IRIS_PREVIEW");
     LOG_DEBUG("接口", "虹膜预览请求已创建：request_id=%s，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     std::string rtspUrl;
@@ -1744,7 +1827,7 @@ static int StartIrisPreviewBody(void* hwnd) {
     PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_IRIS_IMAGE,
                      HZCYKJTHardWare_EVENT_IRIS_PREVIEW_STARTED,
                      HZCYKJTHardWare_RET_OK, "", "预览已就绪");
-    LOG_INFO("接口", "虹膜预览已启动：request_id=%s，third_party_hwnd=%p",
+    LOG_INFO("接口", "虹膜预览已启动：Operation=StartIrisPreview RequestId=%s Result=Success，third_party_hwnd=%p",
              requestId.c_str(), hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
@@ -1763,6 +1846,7 @@ static int StopIrisPreviewBody() {
         }
         requestId = ctx.iris_preview_request_id;
     }
+    SetExportRequestId(requestId);
 
     PreviewManager::Instance().StopIrisPreviewRenderer();
 
@@ -1775,7 +1859,8 @@ static int StopIrisPreviewBody() {
         }
     }
 
-    LOG_INFO("接口", "虹膜预览已停止");
+    LOG_INFO("接口", "虹膜预览已停止：Operation=StopIrisPreview RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1793,7 +1878,7 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     const char* plateName = PlatePreviewDisplayName(channel);
     const std::string requestPrefix =
         std::string("HZCYKJTHardWare_PLATE_PREVIEW_") + plateName;
-    std::string requestId = GenerateSyncRequestId(requestPrefix.c_str());
+    std::string requestId = GetOrCreateExportRequestId(requestPrefix.c_str());
     LOG_DEBUG("接口", "车牌%s预览请求已创建：request_id=%s，third_party_hwnd=%p",
              plateName, requestId.c_str(), hwnd);
     std::string proxyUrl;
@@ -1842,8 +1927,8 @@ static int StartPlatePreviewBody(PlatePreviewChannel channel, void* hwnd) {
     }
 
     ExternalPreviewLeaseMonitor::Instance().NotifyStateChanged();
-    LOG_INFO("接口", "车牌%s预览请求已由C# Proxy受理：request_id=%s，码流通道=%d，third_party_hwnd=%p",
-             plateName, requestId.c_str(), streamChannel, hwnd);
+    LOG_INFO("接口", "车牌%s预览已受理：Operation=StartPlatePreview%s RequestId=%s Result=Accepted，码流通道=%d，third_party_hwnd=%p",
+             plateName, plateName, requestId.c_str(), streamChannel, hwnd);
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1856,6 +1941,7 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     std::string requestId;
     std::string proxyUrl;
     const char* plateCode = PlatePreviewCode(channel);
+    const char* plateName = PlatePreviewDisplayName(channel);
     {
         auto lock = ReadLock();
         const PlatePreviewState& plateState = GetPlatePreviewState(ctx, channel);
@@ -1865,6 +1951,7 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
         requestId = plateState.request_id;
         proxyUrl = ctx.delphi_server_url;
     }
+    SetExportRequestId(requestId);
 
     DelphiProxy proxy(proxyUrl);
     if (!proxy.StopPlatePreview(plateCode, requestId)) {
@@ -1887,7 +1974,8 @@ static int StopPlatePreviewBody(PlatePreviewChannel channel) {
     PostCaptureEvent(requestId, HZCYKJTHardWare_RESOURCE_PLATE_IMAGE,
         HZCYKJTHardWare_EVENT_PLATE_PREVIEW_STOPPED,
         HZCYKJTHardWare_RET_OK, "", "plate preview stopped");
-    LOG_INFO("接口", "车牌%s预览已停止：request_id=%s", plateCode, requestId.c_str());
+    LOG_INFO("接口", "车牌%s预览已停止：Operation=StopPlatePreview%s RequestId=%s Result=Success",
+             plateName, plateName, requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -1952,6 +2040,7 @@ static int SaveLatestPlateFrameBody(const char* savePath, int cameraType) {
         requestId = plateState.request_id;
         proxyUrl = ctx.delphi_server_url;
     }
+    SetExportRequestId(requestId);
 
     if (proxyUrl.empty()) {
         LOG_ERROR("接口", "保存最新车牌帧失败：C# Proxy地址为空，车牌%s，request_id=%s",
@@ -2005,7 +2094,7 @@ static int CaptureCameraImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_INVALID_PARAM;
     }
 
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FACE");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_FACE");
     std::string saveRoot = ResolveCaptureTargetPath(normalizedSaveDir.c_str(), true);
     std::string savePath;
 
@@ -2027,7 +2116,8 @@ static int CaptureCameraImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_DEBUG("接口", "人脸抓拍成功：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "人脸抓拍成功：Operation=CaptureFace RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2055,7 +2145,7 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
         return HZCYKJTHardWare_RET_INVALID_PARAM;
     }
 
-    std::string requestId = GenerateSyncRequestId("HZCYKJTHardWare_FP");
+    std::string requestId = GetOrCreateExportRequestId("HZCYKJTHardWare_FP");
     std::string saveRoot = ResolveCaptureTargetPath(normalizedSaveDir.c_str(), false);
     std::string savePath;
 
@@ -2084,7 +2174,8 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_DEBUG("接口", "指纹抓拍成功：request_id=%s", requestId.c_str());
+    LOG_INFO("接口", "指纹抓拍成功：Operation=CaptureFingerprint RequestId=%s Result=Success",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2104,7 +2195,8 @@ static int CaptureIrisImageDirect(const char* saveDir) {
     int timeoutMs = ctx.face_capture_timeout_ms;
     std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
-        HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, saveRoot, timeoutMs);
+        HZCYKJTHardWare_RESOURCE_IRIS_IMAGE, saveRoot, timeoutMs,
+        CurrentExportRequestId());
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/iris");
 
@@ -2145,7 +2237,8 @@ static int CaptureIrisImageDirect(const char* saveDir) {
         LOG_WARN("接口", "虹膜抓拍受理结果已过期：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    LOG_INFO("接口", "虹膜抓拍已受理");
+    LOG_INFO("接口", "虹膜抓拍已受理：Operation=CaptureIris RequestId=%s Result=Accepted",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2172,7 +2265,8 @@ static int RequestOCRDirect(const char* saveDir) {
 
     std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
-        HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, saveRoot, ctx.ocr_timeout_ms);
+        HZCYKJTHardWare_RESOURCE_OCR_DOCUMENT, saveRoot, ctx.ocr_timeout_ms,
+        CurrentExportRequestId());
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/ocr");
 
@@ -2213,7 +2307,8 @@ static int RequestOCRDirect(const char* saveDir) {
         LOG_WARN("接口", "OCR请求受理结果已过期：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    LOG_INFO("接口", "OCR请求已受理");
+    LOG_INFO("接口", "OCR请求已受理：Operation=RequestOCR RequestId=%s Result=Accepted",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2241,7 +2336,8 @@ static int RequestNfcCardDirect(const char* saveDir) {
     int timeoutMs = ctx.ocr_timeout_ms;
     std::string saveRoot = ResolveSaveRoot(normalizedSaveDir.c_str());
     std::string requestId = RequestSessionManager::Instance().CreateSession(
-        HZCYKJTHardWare_RESOURCE_NFC_CARD, saveRoot, timeoutMs);
+        HZCYKJTHardWare_RESOURCE_NFC_CARD, saveRoot, timeoutMs,
+        CurrentExportRequestId());
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/nfc-card");
 
@@ -2282,7 +2378,8 @@ static int RequestNfcCardDirect(const char* saveDir) {
         LOG_WARN("NFC", "NFC请求受理结果已过期：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    LOG_INFO("NFC", "IC卡识别已受理");
+    LOG_INFO("NFC", "IC卡识别已受理：Operation=RequestNfcCard RequestId=%s Result=Accepted",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2325,10 +2422,11 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
     int timeoutMs = ctx.authorize_timeout_ms;
     int httpTimeoutMs = 5000;  // Proxy HTTP 请求仅等待快速受理，不覆盖完整签名时长
     std::string requestId = RequestSessionManager::Instance().CreateSession(
-        HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs);
+        HZCYKJTHardWare_RESOURCE_AUTHORIZATION, "", timeoutMs,
+        CurrentExportRequestId());
 
     std::string callbackUrl = BuildCallbackUrl(ctx, "/authorize");
-    LOG_INFO("授权", "第三方调用授权请求：请求ID=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
+    LOG_INFO("授权", "收到授权请求：Operation=Authorize RequestId=%s，证件号码=%s，证件类别=%s，国家地区代码=%s，姓名=%s，性别=%s，出生日期=%s，口岸代码=%s",
              requestId.c_str(),
              LogValue(authZJHM).c_str(), LogValue(authZJLB).c_str(),
              LogValue(authGJDQDM).c_str(), LogValue(authXM).c_str(),
@@ -2387,7 +2485,8 @@ static int RequestAuthorizeDirect(const char* ZJHM, const char* ZJLB,
         LOG_WARN("接口", "授权请求受理结果已过期：request_id=%s", requestId.c_str());
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
-    LOG_INFO("授权", "授权请求已受理：请求ID=%s", requestId.c_str());
+    LOG_INFO("授权", "授权请求已受理：Operation=Authorize RequestId=%s Result=Accepted",
+             requestId.c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2425,18 +2524,21 @@ static void LogActiveCallDrainTimeout(int waitMs) {
 
 static void LogExportBoundary(const char* operation, const char* phase,
                               const char* result, int resultCode,
-                              ULONGLONG durationMs) {
+                              ULONGLONG durationMs,
+                              const char* requestId) {
     try {
         using namespace HZCYKJTHardWare;
         LogContext context;
         context.operation = operation ? operation : "unknown";
+        context.requestId = requestId ? requestId : "";
         context.result = result ? result : "未知";
         if (resultCode != HZCYKJTHardWare_RET_OK)
             context.errorCode = std::to_string(resultCode);
         context.durationMs = static_cast<long long>(durationMs);
         const std::string fields = FormatLogContext(context);
-        Logger::Instance().Info("接口", operation ? operation : "unknown",
-                                "%s %s", phase ? phase : "边界", fields.c_str());
+        Logger::Instance().Debug("接口", operation ? operation : "unknown",
+                                 "导出调用边界：阶段=%s %s",
+                                 phase ? phase : "边界", fields.c_str());
     } catch (...) {
         // 日志属于旁路能力，不能因格式化或落盘异常改变 DLL 导出行为。
     }
@@ -2444,9 +2546,11 @@ static void LogExportBoundary(const char* operation, const char* phase,
 
 #define HZCY_GUARDED_EXPORT(bodyCall)                                      \
     if (!HZCYKJTHardWare::SdkRuntime::Instance().TryEnterCall(__FUNCTION__)) return 0; \
+    BeginExportRequestContext(__FUNCTION__);                               \
     const ULONGLONG guardedStartedAt = GetTickCount64();                   \
     LogExportBoundary(__FUNCTION__, "入口", "开始",                       \
-                      HZCYKJTHardWare_RET_OK, 0);                           \
+                      HZCYKJTHardWare_RET_OK, 0,                             \
+                      CurrentExportRequestId().c_str());                    \
     int guardedCallResult = HZCYKJTHardWare_RET_FAILED;                    \
     int guardedResult = 0;                                                 \
     __try { guardedCallResult = (bodyCall);                                \
@@ -2454,7 +2558,9 @@ static void LogExportBoundary(const char* operation, const char* phase,
     __except(EXCEPTION_EXECUTE_HANDLER) { guardedCallResult = HZCYKJTHardWare_RET_FAILED; guardedResult = 0; } \
     HZCYKJTHardWare::SdkRuntime::Instance().LeaveCall();                   \
     LogExportBoundary(__FUNCTION__, "出口", guardedResult ? "成功" : "失败", \
-                      guardedCallResult, GetTickCount64() - guardedStartedAt); \
+                      guardedCallResult, GetTickCount64() - guardedStartedAt, \
+                      CurrentExportRequestId().c_str());                    \
+    ClearExportRequestContext();                                            \
     return guardedResult
 
 extern "C" __declspec(dllexport) int __stdcall HZCYKJTHardWare_InitSdk(void) {
