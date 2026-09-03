@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -248,33 +249,40 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
 
             var saveDir = route.SaveDir;
+            // 保存 OCR 结果 JSON
+            var ocrResultPath = FileSaver.SaveJsonFile(bodyUtf8, saveDir,
+                result.RequestId, "ocr_result.json");
+
+            // 保存证据图像，包括红外光、紫外光、可见光和证件人像
+            var evidencePaths = SaveEvidenceImages(parsedBody.Root, saveDir,
+                result.RequestId);
+
+            // 保存 MRZ 信息，MRZ.json 包含 MRZ 行及 person_info
+            var mrzPath = SaveMrzJson(parsedBody.Root, saveDir, result.RequestId);
+
+            // 识别详情只保留 DEBUG；生产 INFO 只保留业务结果、RequestId 和实际
+            // 已完成写入的文件路径，避免把证件信息和内部字段带入现场日志。
             if (result.CardType == 30)
             {
-                _log(Logger.FormatModuleMessage(LogModules.DocumentRecognition, "信息",
-                    "证件识别完成：Operation=RequestOCR RequestId=" +
+                Logger.Debug("[证件识别] OCR识别技术结果：Operation=RequestOCR RequestId=" +
                     JsonHelper.ToLogValue(result.RequestId) +
                     "，姓名=" + JsonHelper.ToLogValue(result.Name) +
                     "，性别=" + JsonHelper.ToLogValue(result.Sex) +
                     "，证号=" + JsonHelper.ToLogValue(result.CardId) +
                     "，光学鉴权分数=" + result.AuthenScore +
-                    "，鉴伪结果=" + FormatOpticalCheckResult(result.OpticalCheckResult)));
+                    "，鉴伪结果=" + FormatOpticalCheckResult(result.OpticalCheckResult));
             }
             else
             {
-                _log(Logger.FormatModuleMessage(LogModules.DocumentRecognition, "信息",
-                    "证件识别完成：Operation=RequestOCR RequestId=" +
+                Logger.Debug("[证件识别] OCR识别技术结果：Operation=RequestOCR RequestId=" +
                     JsonHelper.ToLogValue(result.RequestId) +
-                    "，MRZ=" + JsonHelper.ToLogValue(result.Mrz)));
+                    "，MRZ=" + JsonHelper.ToLogValue(result.Mrz));
             }
 
-            // 保存 OCR 结果 JSON
-            FileSaver.SaveJsonFile(bodyUtf8, saveDir, result.RequestId, "ocr_result.json");
-
-            // 保存证据图像，包括红外光、紫外光、可见光和证件人像
-            SaveEvidenceImages(parsedBody.Root, saveDir, result.RequestId);
-
-            // 保存 MRZ 信息，MRZ.json 包含 MRZ 行及 person_info
-            SaveMrzJson(parsedBody.Root, saveDir, result.RequestId);
+            var savedPaths = JoinSavedPaths(ocrResultPath, evidencePaths, mrzPath);
+            _log(Logger.FormatModuleMessage(LogModules.DocumentRecognition, "信息",
+                "证件识别完成：" + Logger.FormatContextMessage("RequestOCR",
+                    requestId: result.RequestId, result: "成功", savePath: savedPaths)));
 
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             if (!CanDeliver(route, "OCR")) return;
@@ -364,10 +372,14 @@ namespace HZCYKJTHardWare.Proxy.Server
                 return;
             }
 
+            var savedPaths = JoinSavedPaths(leftPath, rightPath);
+            Logger.Info(Logger.FormatModuleMessage(LogModules.IrisCapture, "信息",
+                "虹膜图片保存成功：" + Logger.FormatContextMessage("CaptureIris",
+                    requestId: result.RequestId, result: "成功", savePath: savedPaths)));
             var savePath = PathHelper.EnsureRequestFolder(saveDir, result.RequestId);
             Logger.Debug("[虹膜回调] 虹膜图片已保存：Operation=CaptureIris RequestId=" +
                 JsonHelper.ToLogValue(result.RequestId) + "，眼数=" + savedCount +
-                "，路径=" + JsonHelper.ToLogValue(savePath));
+                "，SavePaths=" + JsonHelper.ToLogValue(savedPaths));
             if (!CanDeliver(route, "虹膜")) return;
             var delivery = await _dllCallback.SendIrisResult(route.DeliveryRequestId,
                 savePath, route.CancellationToken).ConfigureAwait(false);
@@ -398,10 +410,25 @@ namespace HZCYKJTHardWare.Proxy.Server
             Logger.Debug("[人脸回调] 异步抓拍结果：Operation=CaptureFace RequestId=" +
                 JsonHelper.ToLogValue(result.RequestId));
 
+            var savePath = result.SavePath;
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
-                FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
+                savePath = FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
                     saveDir, result.RequestId, "face");
+            }
+
+            if (!string.IsNullOrWhiteSpace(savePath))
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FaceCapture, "信息",
+                    "图片保存成功：" + Logger.FormatContextMessage("CaptureFace",
+                        requestId: result.RequestId, result: "成功", savePath: savePath)));
+            }
+            else
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FaceCapture, "警告",
+                    "抓拍失败：" + Logger.FormatContextMessage("CaptureFace",
+                        requestId: result.RequestId, result: "失败",
+                        errorCode: "save_file_failed")));
             }
         }
 
@@ -414,10 +441,25 @@ namespace HZCYKJTHardWare.Proxy.Server
             Logger.Debug("[指纹回调] 异步抓拍结果：Operation=CaptureFingerprint RequestId=" +
                 JsonHelper.ToLogValue(result.RequestId));
 
+            var savePath = result.SavePath;
             if (!string.IsNullOrEmpty(result.ImageBase64))
             {
-                FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
+                savePath = FileSaver.SaveBase64Image(result.ImageBase64, result.ImageMimeType,
                     saveDir, result.RequestId, "fingerprint");
+            }
+
+            if (!string.IsNullOrWhiteSpace(savePath))
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FingerprintCapture, "信息",
+                    "图片保存成功：" + Logger.FormatContextMessage("CaptureFingerprint",
+                        requestId: result.RequestId, result: "成功", savePath: savePath)));
+            }
+            else
+            {
+                _log(Logger.FormatModuleMessage(LogModules.FingerprintCapture, "警告",
+                    "抓拍失败：" + Logger.FormatContextMessage("CaptureFingerprint",
+                        requestId: result.RequestId, result: "失败",
+                        errorCode: "save_file_failed")));
             }
         }
 
@@ -547,18 +589,19 @@ namespace HZCYKJTHardWare.Proxy.Server
             return imageType == 2;
         }
 
-        private void SaveEvidenceImages(JObject root, string saveDir, string requestId)
+        private string SaveEvidenceImages(JObject root, string saveDir, string requestId)
         {
             try
             {
                 var data = root?["data"] as JObject;
                 var imageItems = data?["evidence_images"] as JArray
                     ?? root?["evidence_images"] as JArray;
-                if (imageItems == null || imageItems.Count == 0) return;
+                if (imageItems == null || imageItems.Count == 0) return string.Empty;
 
                 var saveDir2 = PathHelper.EnsureRequestFolder(saveDir, requestId);
                 bool savedVisible = false, savedInfrared = false, savedUltraviolet = false, savedPortrait = false;
-                var savedNames = new System.Collections.Generic.List<string>();
+                var savedNames = new List<string>();
+                var savedPaths = new List<string>();
 
                 foreach (var token in imageItems)
                 {
@@ -585,8 +628,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                         if (shouldSave)
                         {
                             var filePath = System.IO.Path.Combine(saveDir2, lampName + ".jpg");
-                            FileSaver.SaveBase64ImageToFile(base64, filePath);
-                            savedNames.Add(lampName);
+                            var savedPath = FileSaver.SaveBase64ImageToFile(base64, filePath);
+                            if (!string.IsNullOrWhiteSpace(savedPath))
+                            {
+                                savedNames.Add(lampName);
+                                savedPaths.Add(savedPath);
+                            }
                         }
                     }
 
@@ -595,8 +642,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                     {
                         savedPortrait = true;
                         var filePath = System.IO.Path.Combine(saveDir2, "人像.jpg");
-                        FileSaver.SaveBase64ImageToFile(base64, filePath);
-                        savedNames.Add("人像");
+                        var savedPath = FileSaver.SaveBase64ImageToFile(base64, filePath);
+                        if (!string.IsNullOrWhiteSpace(savedPath))
+                        {
+                            savedNames.Add("人像");
+                            savedPaths.Add(savedPath);
+                        }
                     }
                 }
 
@@ -604,13 +655,16 @@ namespace HZCYKJTHardWare.Proxy.Server
                     Logger.Debug("[OCR] 证件照片已保存：Operation=RequestOCR RequestId=" +
                         JsonHelper.ToLogValue(requestId) + "，目录=" +
                         JsonHelper.ToLogValue(saveDir2) + "，类型=" +
-                        string.Join(", ", savedNames));
+                        string.Join(", ", savedNames) + "，SavePaths=" +
+                        JsonHelper.ToLogValue(JoinSavedPaths(savedPaths.ToArray())));
+                return JoinSavedPaths(savedPaths.ToArray());
             }
             catch (Exception ex)
             {
                 Logger.Warn("[OCR] 保存证据图片异常：Operation=RequestOCR RequestId=" +
                     JsonHelper.ToLogValue(requestId) + "，错误=" +
                     JsonHelper.ToLogValue(ex.Message));
+                return string.Empty;
             }
         }
 
@@ -618,12 +672,12 @@ namespace HZCYKJTHardWare.Proxy.Server
         /// 从 OCR 回调正文中提取 MRZ 信息并保存为 MRZ.json。
         /// 按 2.6 协议提取 MRZ1、MRZ2、MRZ3 和 person_info 数组。
         /// </summary>
-        private void SaveMrzJson(JObject root, string saveDir, string requestId)
+        private string SaveMrzJson(JObject root, string saveDir, string requestId)
         {
             try
             {
                 var data = root?["data"] as JObject;
-                if (data == null) return;
+                if (data == null) return string.Empty;
 
                 // 提取 MRZ 行，字段名与 C++ DLL 保持一致
                 var mrz1 = data["MRZ1"]?.ToString() ?? "";
@@ -659,13 +713,29 @@ namespace HZCYKJTHardWare.Proxy.Server
                 Logger.Debug("[OCR] MRZ信息已保存：Operation=RequestOCR RequestId=" +
                     JsonHelper.ToLogValue(requestId) + "，路径=" +
                     JsonHelper.ToLogValue(filePath));
+                return filePath;
             }
             catch (Exception ex)
             {
                 Logger.Warn("[OCR] 保存MRZ信息异常：Operation=RequestOCR RequestId=" +
                     JsonHelper.ToLogValue(requestId) + "，错误=" +
                     JsonHelper.ToLogValue(ex.Message));
+                return string.Empty;
             }
+        }
+
+        private static string JoinSavedPaths(params string[] paths)
+        {
+            var savedPaths = new List<string>();
+            if (paths != null)
+            {
+                foreach (var path in paths)
+                {
+                    if (!string.IsNullOrWhiteSpace(path))
+                        savedPaths.Add(path);
+                }
+            }
+            return string.Join(";", savedPaths.ToArray());
         }
 
         private string GetSaveDir(string requestId)

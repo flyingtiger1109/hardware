@@ -72,6 +72,17 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
+        public void VlcRecoveryRequiresRealVideoSignalBeforeSuccess()
+        {
+            Assert.IsFalse(PreviewManager.ShouldReportVlcRecoverySuccess(
+                playerIsRunning: true, hasVideoRecoverySignal: false));
+            Assert.IsFalse(PreviewManager.ShouldReportVlcRecoverySuccess(
+                playerIsRunning: false, hasVideoRecoverySignal: true));
+            Assert.IsTrue(PreviewManager.ShouldReportVlcRecoverySuccess(
+                playerIsRunning: true, hasVideoRecoverySignal: true));
+        }
+
+        [TestMethod]
         public void RecoverySummaryKeepsOnlyProductionFields()
         {
             var started = PreviewManager.BuildPreviewRecoverySummary(

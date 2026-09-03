@@ -200,6 +200,75 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
+        public void ProductionSuccess_FileOperationKeepsFinalSavePathWithSpaces()
+        {
+            const string savePath = @"D:\抓拍图片\车牌 CJ\Path=2026-09-03 10-20-30.jpg";
+            var message = Logger.NormalizeForDisplay(
+                "[车牌抓帧][信息] 车牌CJ抓拍成功：Operation=SaveLatestPlateFrame " +
+                "RequestId=CAP-001 Result=Success SavePath=" + savePath +
+                " DurationMs=80 Width=1920 Height=1080");
+
+            Assert.AreEqual(
+                "[车牌抓帧][信息] 车牌CJ抓拍成功：RequestId=CAP-001 保存路径=" + savePath,
+                message);
+            Assert.IsFalse(message.Contains("Operation="));
+            Assert.IsFalse(message.Contains("DurationMs="));
+            Assert.IsFalse(message.Contains("Width="));
+            Assert.IsFalse(message.Contains("Height="));
+        }
+
+        [TestMethod]
+        public void ProductionSuccess_FilePathAliasesAreNormalizedToOneField()
+        {
+            var aliases = new[] { "SavedPath", "OutputPath", "FilePath", "Path" };
+            const string savePath = @"D:\Capture\Face Image\face 001.jpg";
+
+            foreach (var alias in aliases)
+            {
+                var message = Logger.NormalizeForDisplay(
+                    "[人脸抓拍][信息] 图片保存成功：Operation=CaptureFace " +
+                    "RequestId=FACE-001 Result=Success " + alias + "=" + savePath +
+                    " Bytes=123");
+
+                Assert.AreEqual(
+                    "[人脸抓拍][信息] 图片保存成功：RequestId=FACE-001 保存路径=" + savePath,
+                    message, alias);
+                Assert.AreEqual(1, CountOccurrences(message, "保存路径="));
+            }
+        }
+
+        [TestMethod]
+        public void ProductionFailure_FilePathIsNotPrinted()
+        {
+            const string savePath = @"D:\Capture\CJ\001.jpg";
+            var message = Logger.NormalizeForDisplay(
+                "[车牌抓帧][错误] 车牌CJ抓拍失败：Operation=SaveLatestPlateFrame " +
+                "RequestId=CAP-001 Result=Failed ErrorCode=frame_not_ready " +
+                "SavePath=" + savePath);
+
+            Assert.AreEqual(
+                "[车牌抓帧][错误] 车牌CJ抓拍失败：RequestId=CAP-001 " +
+                "ErrorCode=frame_not_ready",
+                message);
+            Assert.IsFalse(message.Contains("保存路径="));
+            Assert.IsFalse(message.Contains(savePath));
+        }
+
+        [TestMethod]
+        public void ProductionSuccess_LocalWithoutRequestIdStillKeepsSavePath()
+        {
+            const string savePath = @"D:\抓拍图片\local face.jpg";
+            var message = Logger.NormalizeForDisplay(
+                "[人脸抓拍][信息] 图片保存成功：Operation=CaptureFace " +
+                "RequestId=<无> Result=Success SavePath=" + savePath);
+
+            Assert.AreEqual(
+                "[人脸抓拍][信息] 图片保存成功：保存路径=" + savePath,
+                message);
+            Assert.IsFalse(message.Contains("RequestId=<无>"));
+        }
+
+        [TestMethod]
         public void ProductionFailure_OnlyKeepsRequestIdAndErrorCode()
         {
             var message = Logger.NormalizeForDisplay(

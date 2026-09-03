@@ -318,6 +318,84 @@ std::string ExtractLogField(const std::string& message, const char* fieldName) {
     return message.substr(valueStart, valueEnd - valueStart);
 }
 
+static bool IsLogFieldBoundary(const std::string& message, size_t position) {
+    if (position == 0) return true;
+    const char previous = message[position - 1];
+    if (std::isspace(static_cast<unsigned char>(previous)) ||
+        previous == ',' || previous == ';' || previous == ':') {
+        return true;
+    }
+    return position >= std::strlen("，") &&
+        (message.compare(position - std::strlen("，"), std::strlen("，"), "，") == 0 ||
+         message.compare(position - std::strlen("；"), std::strlen("；"), "；") == 0 ||
+         message.compare(position - std::strlen("："), std::strlen("："), "：") == 0);
+}
+
+size_t FindLogFieldFrom(const std::string& message, const char* fieldName,
+                        size_t offset) {
+    if (!fieldName || !*fieldName) return std::string::npos;
+
+    const std::string marker = std::string(fieldName) + "=";
+    size_t position = message.find(marker, offset);
+    while (position != std::string::npos) {
+        if (IsLogFieldBoundary(message, position)) {
+            return position;
+        }
+        position = message.find(marker, position + marker.size());
+    }
+    return std::string::npos;
+}
+
+// 保存路径是唯一允许在生产成功摘要中保留空格的字段。调用点优先使用
+// SavePath；Path/路径保留用于兼容已有 Native/C# 历史日志。
+std::string ExtractSavedPath(const std::string& message) {
+    static const char* savedPathFields[] = {
+        "SavePath", "SavedPath", "OutputPath", "FilePath",
+        "SavePaths", "SavedPaths", "OutputPaths", "FilePaths",
+        "Path", "保存路径", "路径"
+    };
+    static const char* boundaryFields[] = {
+        "Operation", "RequestId", "CaptureRequestId", "PreviewRequestId",
+        "TerminalIndex", "Device", "Result", "ErrorCode", "ReturnCode",
+        "Stage", "ProxyError", "DurationMs", "QueueWaitMs", "RouteEpoch",
+        "Attempt", "RetryCount", "Count", "RecoveryEpisodeId", "Session",
+        "SessionKey", "Generation", "PlayerState", "SnapshotRet", "DetectedFormat",
+        "FileBytes", "Bytes", "Width", "Height", "FrameAgeMs", "LastGoodFrameAgeMs",
+        "Source", "ProducerStatus", "Reason", "SavePath", "SavedPath",
+        "OutputPath", "FilePath", "SavePaths", "SavedPaths", "OutputPaths",
+        "FilePaths", "Path"
+    };
+
+    size_t markerPosition = std::string::npos;
+    size_t markerLength = 0;
+    for (const char* field : savedPathFields) {
+        const size_t position = FindLogFieldFrom(message, field, 0);
+        if (position != std::string::npos &&
+            (markerPosition == std::string::npos || position < markerPosition)) {
+            markerPosition = position;
+            markerLength = std::strlen(field) + 1;
+        }
+    }
+    if (markerPosition == std::string::npos) return "";
+
+    const size_t valueStart = markerPosition + markerLength;
+    size_t valueEnd = message.size();
+    for (const char* field : boundaryFields) {
+        const size_t position = FindLogFieldFrom(message, field, valueStart + 1);
+        if (position != std::string::npos && position > valueStart &&
+            position < valueEnd) {
+            valueEnd = position;
+        }
+    }
+
+    while (valueEnd > valueStart &&
+           (message[valueEnd - 1] == ' ' || message[valueEnd - 1] == '\t' ||
+            message[valueEnd - 1] == '\r' || message[valueEnd - 1] == '\n')) {
+        --valueEnd;
+    }
+    return message.substr(valueStart, valueEnd - valueStart);
+}
+
 bool IsSuccessfulBusinessResult(const std::string& result) {
     const std::string value = ToLowerAscii(result);
     return value == "success" || value == "accepted" || value == "stopped" ||
@@ -421,6 +499,17 @@ std::string MinimizeProductionMessage(LogLevel level,
     if (hasRequestId) {
         output += "RequestId=" + requestId;
         hasOutputField = true;
+    }
+    if (success) {
+        const std::string savePath = ExtractSavedPath(canonicalMessage);
+        const std::string normalizedPath = ToLowerAscii(savePath);
+        const bool hasSavedPath = !savePath.empty() && normalizedPath != "<无>" &&
+            normalizedPath != "<none>" && normalizedPath != "none";
+        if (hasSavedPath) {
+            if (hasOutputField) output += " ";
+            output += "保存路径=" + SanitizeScalar(savePath, 2048);
+            hasOutputField = true;
+        }
     }
     if (failure) {
         const std::string errorCode = ExtractLogField(canonicalMessage, "ErrorCode");

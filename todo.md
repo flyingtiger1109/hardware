@@ -2204,3 +2204,49 @@ Stage3-A 代码整改与自动化验证完成；现场故障注入、2h 和 24h 
 - 风险集中在真实 RTSP/VLC 断流时序、日志采样和外部 HWND 生命周期，未通过实机验证前整体验收保持 OPEN。
 - R1.2 `Preview Protocol Recovery Separation`：PENDING；本次明确禁止实施，不拆分 RTSP/VLC 与 HTTP/MJPEG Recovery 架构。
 - 回退：仅回退 Stage3-A 相关提交或执行对应 `git revert`；不执行宽范围 reset，不覆盖已有用户未提交文档、生成物和图片。
+
+## Stage3-A Final Logging Closure（2026-09-03）
+
+### 当前阶段
+
+Stage3-A 最终日志收尾代码与自动化验证完成；整体验收保持 OPEN，待现场故障注入及 2h/24h 长稳完成后再关闭。
+
+### 本次完成
+
+- [x] VLC 车牌 CJ/RJ2/RJ3 Local、External Recovery 只有在 `IsRunning` 且 `MediaTimeMs` 实际推进后才记录“已恢复”；播放器创建和未收到实帧继续为 DEBUG，不再把 play accepted 当作恢复成功。
+- [x] 普通成功文件日志统一保留唯一 `保存路径=`，提取最终实际落盘路径，保留中文/空格/长路径；失败 INFO/ERROR 不输出路径。
+- [x] C# 与 Native 统一 `RequestId=`，移除 `request_id=` 及重复父子 RequestId；Local 缺失 RequestId 不输出 `<无>`。
+- [x] 清理 `VlcPreviewController` 剩余过长 INFO；RecoveryEpisode 成功日志按 episode 去重，保留既有告警、Attempt、聚合和最终失败级别。
+- [x] 未修改 DLL ABI、导出函数、调用约定、结构体、回调/HTTP 协议、VLC 参数、MJPEG 重试策略或预览状态机架构。
+
+### 涉及文件
+
+- `src/logger.cpp`、`src/exports.cpp`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/Logger.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewController.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/Coordinator/BizOperationHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Server/TerminalCallbackHandler.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Infrastructure/LoggerTests.cs`
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/PreviewRecoveryPolicyTests.cs`
+
+### 自动化验证
+
+- [x] 定向日志/Recovery 测试：40/40 通过。
+- [x] C# Proxy `Release|x64`：0 错误、0 警告；Tests `Release|x64`：0 错误，保留既有 `NU1900` NuGet 漏洞源网络警告。
+- [x] Native `Release|Win32/x86`：0 错误、0 警告；`dumpbin /exports` 与 `.def` 均为 25 个，导出名集合一致。
+- [x] C# 全量 VSTest：193 项，181 通过、12 失败；失败为既有 ProductVersion 基线、运行环境不支持 `HttpListener` 的 10 项集成用例及既有回调路由时序断言，未归因于本次日志改动。
+- [x] `git diff --check`：无空白错误。
+
+### 现场验证与长稳
+
+- [ ] Case A：CJ External RTSP 断流→VLC 重建→实帧恢复；确认只出现一次生产恢复 INFO、无 MJPEG fallback、无 `<无>`、RequestId 可对账。
+- [ ] Case B：CJ Local RTSP 断流→VLC 重建→实帧恢复；确认与 Case A 相同且 Local INFO 不出现 `<无>`。
+- [ ] Case C：CJ/RJ2/RJ3 并行、抓拍/预览交错及失败重试；确认成功路径唯一、失败无路径、无 Base64/raw JSON/auth URL 泄漏。
+- [ ] 2h：日志队列、RecoveryEpisode、RequestId 对账、线程/句柄/内存和预览恢复长稳。
+- [ ] 24h：全链路日志量、聚合/限频、脱敏、线程/句柄/内存及 `[未识别接口]` 统计。
+
+### 风险与回退
+
+- 风险：当前缺少现场 RTSP/VLC 故障注入；完整测试的 12 项既有失败仍需在 Windows 规范运行环境单独处理。
+- 回退：仅回退本节源码、测试和记录对应的 Stage3-A 提交；使用 `git revert`，不执行宽范围 reset，不覆盖已有用户未提交文件。

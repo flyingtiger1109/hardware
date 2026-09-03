@@ -2234,8 +2234,9 @@ static int CaptureCameraImageDirect(const char* saveDir) {
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("接口", "人脸抓拍成功：Operation=CaptureFace RequestId=%s Result=Success",
-             requestId.c_str());
+    LOG_INFO("接口", "人脸抓拍成功：Operation=CaptureFace RequestId=%s "
+             "Result=Success SavePath=%s",
+             requestId.c_str(), LogValue(savePath, 2048).c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 
@@ -2300,8 +2301,9 @@ static int CaptureFingerprintImageDirect(const char* saveDir, const char* saveDi
         return HZCYKJTHardWare_RET_DEVICE_BUSY;
     }
 
-    LOG_INFO("接口", "指纹抓拍成功：Operation=CaptureFingerprint RequestId=%s Result=Success",
-             requestId.c_str());
+    LOG_INFO("接口", "指纹抓拍成功：Operation=CaptureFingerprint RequestId=%s "
+             "Result=Success SavePath=%s",
+             requestId.c_str(), LogValue(savePath, 2048).c_str());
     return HZCYKJTHardWare_RET_OK;
 }
 

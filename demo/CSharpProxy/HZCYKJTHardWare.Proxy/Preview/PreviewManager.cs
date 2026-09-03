@@ -92,6 +92,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private const int MaxMjpegRecoveryAttempts = 2;
         private const int PreviewRecoveryAggregateWindowMs = 60000;
         private const int VlcRecoveryLowFrequencyDelayMs = 15000;
+        private const int VlcRecoveryVideoSignalTimeoutMs = VlcPlayTimeoutMs;
         private readonly ConcurrentDictionary<string, PreviewSession> _sessions = new ConcurrentDictionary<string, PreviewSession>();
         private readonly ConcurrentDictionary<string, PreviewRestartInfo> _restartInfo = new ConcurrentDictionary<string, PreviewRestartInfo>();
         private readonly ConcurrentDictionary<string, MjpegPreviewController> _mjpegWorkers = new ConcurrentDictionary<string, MjpegPreviewController>();
@@ -142,6 +143,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             internal MjpegFailureKind LastFailureKind;
             internal string LastError;
             internal DateTime LastAggregateWarningUtc;
+            internal bool SuccessLogged;
         }
 
         public PreviewManager(TerminalClient terminalClient,
@@ -332,6 +334,12 @@ namespace HZCYKJTHardWare.Proxy.Preview
                    !IsTerminalMjpegResource(resType);
         }
 
+        internal static bool ShouldReportVlcRecoverySuccess(bool playerIsRunning,
+            bool hasVideoRecoverySignal)
+        {
+            return playerIsRunning && hasVideoRecoverySignal;
+        }
+
         private static string BuildPreviewRecoveryTechnicalMessage(string resourceName,
             string operation, string requestId, string errorCode, long episodeId,
             int attempt, int count, long durationMs, string protocol, string key,
@@ -399,12 +407,30 @@ namespace HZCYKJTHardWare.Proxy.Preview
             string resourceName, string operation, string requestId, string protocol,
             int attempt)
         {
+            if (!TryMarkPreviewRecoverySuccess(key, episodeId))
+                return;
+
             WritePreviewLog("信息", BuildPreviewRecoverySummary(resourceName,
                 "已恢复", requestId, null));
             WritePreviewLog("调试", BuildPreviewRecoveryTechnicalMessage(resourceName,
                 operation, requestId, "none", episodeId, attempt,
                 GetPreviewRecoveryFailureCount(key, episodeId),
                 GetMjpegRecoveryDurationMs(key, episodeId), protocol, key, null));
+        }
+
+        private bool TryMarkPreviewRecoverySuccess(string key, long episodeId)
+        {
+            if (!_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) ||
+                episode == null)
+                return false;
+
+            lock (episode)
+            {
+                if (episode.Id != episodeId || episode.SuccessLogged)
+                    return false;
+                episode.SuccessLogged = true;
+                return true;
+            }
         }
 
         private void LogPreviewRecoveryFinalFailure(string key, long episodeId,
@@ -1494,8 +1520,50 @@ namespace HZCYKJTHardWare.Proxy.Preview
                             isRecoveryAttempt: true,
                             allowVlcPrimaryForNonHttp: IsPrimaryVlcAllowedForNonHttpPreview(
                                 current.ResourceType, current.SessionType)).ConfigureAwait(false);
-                        if (replacement != null && replacement.IsRunning)
+                        if (replacement is VlcPreviewController vlcReplacement &&
+                            replacement.IsRunning)
                         {
+                            var attempt = failedAttempts + 1;
+                            var requestField = OptionalRequestIdField(current.RequestId);
+                            Logger.Debug("VLC播放器已重新创建：" +
+                                (string.IsNullOrEmpty(requestField)
+                                    ? string.Empty : requestField + " ") +
+                                "Attempt=" + attempt + " Session=" +
+                                JsonHelper.ToLogValue(key));
+
+                            var hasVideoSignal = await vlcReplacement
+                                .WaitForVideoRecoverySignalAsync(
+                                    VlcRecoveryVideoSignalTimeoutMs, cancellationToken)
+                                .ConfigureAwait(false);
+                            if (ShouldReportVlcRecoverySuccess(
+                                    vlcReplacement.IsRunning, hasVideoSignal) &&
+                                CanContinueRecovery(current) &&
+                                _sessions.TryGetValue(key, out var latestSession) &&
+                                ReferenceEquals(latestSession, current) &&
+                                ReferenceEquals(latestSession.Player, faultedPlayer))
+                            {
+                                current.Generation = Interlocked.Increment(ref _sessionGeneration);
+                                current.Player = replacement;
+                                _sessions[key] = current;
+                                _restartInfo[key] = PreviewRestartInfo.FromSession(current);
+                                AttachPlayerFaultHandler(key, current, replacement);
+                                LogPreviewRecoverySuccess(key, episodeId,
+                                    ResourceToName(current.ResourceType),
+                                    RecoveryOperationName(current.ResourceType),
+                                    current.RequestId, "VLC", attempt);
+                                return;
+                            }
+
+                            Logger.Debug("VLC播放器已重新创建但尚未收到视频恢复信号：" +
+                                (string.IsNullOrEmpty(requestField)
+                                    ? string.Empty : requestField + " ") +
+                                "Attempt=" + attempt + " Session=" +
+                                JsonHelper.ToLogValue(key));
+                        }
+                        else if (replacement != null && replacement.IsRunning)
+                        {
+                            // 保持既有非 VLC 替代播放器行为；VLC 必须等到真实媒体
+                            // 信号后才能宣布 RecoveryEpisode 已恢复。
                             current.Generation = Interlocked.Increment(ref _sessionGeneration);
                             current.Player = replacement;
                             _sessions[key] = current;
@@ -1851,6 +1919,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 IPreviewController replacement = null;
                 MjpegPreviewController mjpegReplacement = null;
+                VlcPreviewController vlcReplacement = null;
                 PreviewSession current = null;
                 var invalidTarget = false;
                 var committed = false;
@@ -1951,6 +2020,17 @@ namespace HZCYKJTHardWare.Proxy.Preview
                                 _restartInfo[key] = PreviewRestartInfo.FromSession(current);
                                 AttachMjpegFaultHandler(key, current, mjpegReplacement);
                             }
+                            else if (replacement is VlcPreviewController vlcPlayer &&
+                                replacement.IsRunning)
+                            {
+                                var requestField = OptionalRequestIdField(current.RequestId);
+                                Logger.Debug("VLC播放器已重新创建：" +
+                                    (string.IsNullOrEmpty(requestField)
+                                        ? string.Empty : requestField + " ") +
+                                    "Attempt=" + attempt + " Session=" +
+                                    JsonHelper.ToLogValue(key));
+                                vlcReplacement = vlcPlayer;
+                            }
                             else if (replacement != null && replacement.IsRunning)
                             {
                                 current.Generation = Interlocked.Increment(ref _sessionGeneration);
@@ -2003,6 +2083,75 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         recoverySession.RequestId, "MJPEG/VLC", attempt);
                     CompleteMjpegRecoveryEpisode(key, episodeId);
                     return;
+                }
+
+                if (vlcReplacement != null)
+                {
+                    var hasVideoSignal = await vlcReplacement
+                        .WaitForVideoRecoverySignalAsync(
+                            VlcRecoveryVideoSignalTimeoutMs, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (ShouldReportVlcRecoverySuccess(
+                            vlcReplacement.IsRunning, hasVideoSignal))
+                    {
+                        var committedPlayer = false;
+                        var lockTaken = false;
+                        try
+                        {
+                            await _operationLock.WaitAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                            lockTaken = true;
+                            if (!_disposed && _sessions.TryGetValue(key,
+                                    out var readyVlcSession) &&
+                                ReferenceEquals(readyVlcSession, recoverySession) &&
+                                readyVlcSession.Generation == generation &&
+                                readyVlcSession.Player == null &&
+                                CanContinueRecovery(readyVlcSession))
+                            {
+                                readyVlcSession.Generation =
+                                    Interlocked.Increment(ref _sessionGeneration);
+                                readyVlcSession.Player = vlcReplacement;
+                                _sessions[key] = readyVlcSession;
+                                _restartInfo[key] =
+                                    PreviewRestartInfo.FromSession(readyVlcSession);
+                                AttachPlayerFaultHandler(key, readyVlcSession,
+                                    vlcReplacement);
+                                committedPlayer = true;
+                            }
+                        }
+                        finally
+                        {
+                            if (lockTaken)
+                                _operationLock.Release();
+                        }
+
+                        if (committedPlayer)
+                        {
+                            LogPreviewRecoverySuccess(key, episodeId,
+                                ResourceToName(recoverySession.ResourceType),
+                                RecoveryOperationName(recoverySession.ResourceType),
+                                recoverySession.RequestId, "VLC", attempt);
+                            CompleteMjpegRecoveryEpisode(key, episodeId);
+                            return;
+                        }
+
+                        await ReleasePlayerAsync(key, vlcReplacement,
+                            preserveMjpegWorker: true).ConfigureAwait(false);
+                        return;
+                    }
+
+                    var requestField = OptionalRequestIdField(
+                        recoverySession?.RequestId);
+                    Logger.Debug("VLC播放器已重新创建但尚未收到视频恢复信号：" +
+                        (string.IsNullOrEmpty(requestField)
+                            ? string.Empty : requestField + " ") +
+                        "Attempt=" + attempt + " Session=" +
+                        JsonHelper.ToLogValue(key));
+                    lastFailureKind = MjpegFailureKind.StreamFailure;
+                    lastFailureReason = "VLC视频恢复信号未到达";
+                    await ReleasePlayerAsync(key, vlcReplacement,
+                        preserveMjpegWorker: true).ConfigureAwait(false);
+                    replacement = null;
                 }
 
                 if (mjpegReplacement != null)

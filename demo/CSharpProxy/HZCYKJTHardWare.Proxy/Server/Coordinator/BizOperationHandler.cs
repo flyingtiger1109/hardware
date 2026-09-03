@@ -245,8 +245,8 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
                     terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
                     requestId: requestId, result: "成功",
                     durationMs: captureSw.ElapsedMilliseconds,
-                    routeEpoch: routeEpoch.Route.RouteEpoch) +
-                    "，路径=" + JsonHelper.ToLogValue(savePath));
+                    routeEpoch: routeEpoch.Route.RouteEpoch,
+                    savePath: savePath));
             else
                 _log(Logger.FormatModuleMessage(LogModules.FaceCapture, "警告",
                     "抓拍失败：未获取有效图片，" + Logger.FormatContextMessage("/capture/face",
@@ -322,15 +322,16 @@ namespace HZCYKJTHardWare.Proxy.Server.Coordinator
 
             if (!string.IsNullOrEmpty(savePath))
             {
+                var savedPaths = string.IsNullOrEmpty(undistortedPath)
+                    ? savePath
+                    : savePath + ";" + undistortedPath;
                 var message = "[指纹抓拍] 图片保存成功：" +
                     Logger.FormatContextMessage("/capture/fingerprint",
                         terminalIndex: routeEpoch.Route.TerminalIndex.ToString(),
                         requestId: requestId, result: "成功",
                         durationMs: captureSw.ElapsedMilliseconds,
-                        routeEpoch: routeEpoch.Route.RouteEpoch);
-                if (!string.IsNullOrEmpty(undistortedPath))
-                    message += "，无畸变图保存成功：" +
-                        JsonHelper.ToLogValue(undistortedPath);
+                        routeEpoch: routeEpoch.Route.RouteEpoch,
+                        savePath: savedPaths);
                 _log(message);
             }
             else

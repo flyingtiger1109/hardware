@@ -59,6 +59,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private int _streamFaulted;
         private long _lastMediaTimeMs;
         private DateTime _lastMediaUpdateUtc;
+        private int _videoRecoverySignalObserved;
         private int _snapshotFailureCount;
         private string _lastSnapshotFailureCode;
         private int _snapshotRefreshRequested;
@@ -100,6 +101,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         internal bool IsLatestFrameSourceRunning =>
             _running && !_stopRequested && Volatile.Read(ref _streamFaulted) == 0;
+
+        /// <summary>
+        /// 仅在 VLC 处于 Playing 且媒体时间实际推进后置为 true。它区别于
+        /// libvlc_media_player_play() 已接受请求，作为恢复成功的最小真实流信号。
+        /// </summary>
+        internal bool HasVideoRecoverySignal =>
+            Volatile.Read(ref _videoRecoverySignalObserved) != 0;
 
         internal int LatestFrameFailure => Volatile.Read(ref _latestFrameFailure);
 
@@ -175,6 +183,32 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 在后台以有界异步等待观察到真实媒体进度，不阻塞 UI 线程，也不创建新线程。
+        /// </summary>
+        internal async Task<bool> WaitForVideoRecoverySignalAsync(int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var waitMs = Math.Max(0, timeoutMs);
+            while (!HasVideoRecoverySignal && IsLatestFrameSourceRunning &&
+                   stopwatch.ElapsedMilliseconds < waitMs)
+            {
+                var remainingMs = waitMs - (int)stopwatch.ElapsedMilliseconds;
+                try
+                {
+                    await Task.Delay(Math.Min(50, Math.Max(1, remainingMs)),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+            }
+
+            return HasVideoRecoverySignal && IsLatestFrameSourceRunning;
         }
 
         internal void SetStreamFaultHandler(Action<VlcPreviewController, string> handler)
@@ -279,6 +313,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                 _lastMediaTimeMs = _player.MediaTimeMs;
                 _lastMediaUpdateUtc = DateTime.UtcNow;
+                Volatile.Write(ref _videoRecoverySignalObserved, 0);
 
                 var nextLayoutRefreshUtc = DateTime.UtcNow.AddMilliseconds(LayoutRefreshIntervalMs);
                 while (!_stopRequested)
@@ -421,7 +456,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastSnapshotFailureCode = null;
                 if (previousFailures > 0)
                 {
-                    Logger.Info(Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                    Logger.Debug(Logger.FormatModuleMessage(LogModules.Preview, "调试",
                         $"VLC车牌最新帧已恢复：{_description}，尺寸={width}x{height}，" +
                         $"DetectedFormat={detectedFormat}，上次故障={previousFailureCode}"));
                 }
@@ -597,6 +632,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 {
                     _lastMediaTimeMs = mediaTimeMs;
                     _lastMediaUpdateUtc = nowUtc;
+                    if (mediaTimeMs >= 0)
+                        Volatile.Write(ref _videoRecoverySignalObserved, 1);
                 }
                 else if ((nowUtc - _lastMediaUpdateUtc).TotalMilliseconds >= VlcStallThresholdMs)
                 {

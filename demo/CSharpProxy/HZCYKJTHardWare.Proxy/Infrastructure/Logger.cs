@@ -76,6 +76,28 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         private static int _shutdownState;
         private static int _lowDiskMode;
 
+        // 生产成功日志只保留一个统一的保存路径字段；路径可能包含中文、空格
+        // 或较长的长路径前缀，因此不能复用普通的“按空格截断”字段解析。
+        private const int MaxProductionSavePathLength = 2048;
+        private static readonly string[] SavedPathFieldNames =
+        {
+            "SavePath", "SavedPath", "OutputPath", "FilePath",
+            "SavePaths", "SavedPaths", "OutputPaths", "FilePaths",
+            "Path", "保存路径", "路径"
+        };
+        private static readonly string[] LogFieldNamesForPathBoundary =
+        {
+            "Operation", "RequestId", "CaptureRequestId", "PreviewRequestId",
+            "TerminalIndex", "Device", "Result", "ErrorCode", "ReturnCode",
+            "Stage", "ProxyError", "DurationMs", "QueueWaitMs", "RouteEpoch",
+            "Attempt", "RetryCount", "Count", "RecoveryEpisodeId", "Session",
+            "SessionKey", "Generation", "PlayerState", "SnapshotRet", "DetectedFormat",
+            "FileBytes", "Bytes", "Width", "Height", "FrameAgeMs", "LastGoodFrameAgeMs",
+            "Source", "ProducerStatus", "Reason", "SavePath", "SavedPath",
+            "OutputPath", "FilePath", "SavePaths", "SavedPaths", "OutputPaths",
+            "FilePaths", "Path"
+        };
+
         // 日志级别过滤：0=Debug，1=Info，2=Warn，3=Error
         private static int _minLevel = 1; // default Info
 
@@ -432,7 +454,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         internal static string FormatContextMessage(string operation,
             string terminalIndex = null, string device = null, string requestId = null,
             string result = null, string errorCode = null, long? durationMs = null,
-            long? queueWaitMs = null, int? attempt = null, long? routeEpoch = null)
+            long? queueWaitMs = null, int? attempt = null, long? routeEpoch = null,
+            string savePath = null)
         {
             var fields = new List<string>();
             AppendContextField(fields, "Operation", CanonicalOperationName(operation));
@@ -449,6 +472,9 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 AppendContextField(fields, "Attempt", attempt.Value.ToString());
             if (routeEpoch.HasValue)
                 AppendContextField(fields, "RouteEpoch", routeEpoch.Value.ToString());
+            if (!string.IsNullOrWhiteSpace(savePath))
+                fields.Add("SavePath=" + JsonHelper.ToLogValue(savePath,
+                    MaxProductionSavePathLength));
             return string.Join(" ", fields);
         }
 
@@ -1154,6 +1180,18 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                     hasOutputField = true;
                 }
             }
+            if (isSuccess)
+            {
+                var savePath = ExtractSavedPath(body);
+                if (!IsMissingRequestId(savePath))
+                {
+                    if (hasOutputField)
+                        output += " ";
+                    output += "保存路径=" + JsonHelper.ToLogValue(savePath,
+                        MaxProductionSavePathLength);
+                    hasOutputField = true;
+                }
+            }
             return hasOutputField ? output : output.TrimEnd('：', ':');
         }
 
@@ -1252,6 +1290,77 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                    body[end] != '；' && body[end] != '\r' && body[end] != '\n')
                 end++;
             return body.Substring(start, end - start).Trim();
+        }
+
+        /// <summary>
+        /// 提取成功文件操作的最终路径。保存路径允许包含空格，因此值的结束位置
+        /// 由后续已知结构化字段确定，而不是简单遇到第一个空格就截断。
+        /// </summary>
+        internal static string ExtractSavedPath(string body)
+        {
+            if (string.IsNullOrEmpty(body))
+                return string.Empty;
+
+            var markerPosition = -1;
+            var markerLength = 0;
+            foreach (var fieldName in SavedPathFieldNames)
+            {
+                var position = FindStandaloneLogField(body, fieldName, 0);
+                if (position < 0 || (markerPosition >= 0 && position >= markerPosition))
+                    continue;
+
+                markerPosition = position;
+                markerLength = fieldName.Length + 1;
+            }
+
+            if (markerPosition < 0)
+                return string.Empty;
+
+            var valueStart = markerPosition + markerLength;
+            var valueEnd = body.Length;
+            foreach (var fieldName in LogFieldNamesForPathBoundary)
+            {
+                var position = FindStandaloneLogField(body, fieldName, valueStart + 1);
+                if (position > valueStart && position < valueEnd)
+                    valueEnd = position;
+            }
+
+            return body.Substring(valueStart, valueEnd - valueStart).Trim();
+        }
+
+        private static int FindStandaloneLogField(string body, string fieldName,
+            int offset)
+        {
+            if (string.IsNullOrEmpty(body) || string.IsNullOrEmpty(fieldName))
+                return -1;
+
+            var markerText = fieldName + "=";
+            var position = Math.Max(0, offset);
+            while (position < body.Length)
+            {
+                position = body.IndexOf(markerText, position,
+                    StringComparison.OrdinalIgnoreCase);
+                if (position < 0)
+                    return -1;
+
+                if (position == 0 || IsLogFieldBoundary(body, position))
+                    return position;
+
+                position += markerText.Length;
+            }
+
+            return -1;
+        }
+
+        private static bool IsLogFieldBoundary(string body, int position)
+        {
+            if (position <= 0 || position >= body.Length)
+                return position == 0;
+
+            var previous = body[position - 1];
+            return char.IsWhiteSpace(previous) || previous == ',' || previous == '，' ||
+                   previous == ';' || previous == '；' || previous == ':' ||
+                   previous == '：';
         }
 
         private static ParsedLogMessage ParseMessage(string message, string defaultLevel)
