@@ -216,6 +216,76 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
+        public void LegacyRequestIdField_IsCanonicalizedWithoutDuplicateOutput()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[预览][调试] VLC预览恢复尝试：request_id=REQ-LEGACY " +
+                "Attempt=1");
+
+            StringAssert.Contains(message, "RequestId=REQ-LEGACY");
+            Assert.AreEqual(1, CountOccurrences(message, "RequestId=REQ-LEGACY"));
+            Assert.IsFalse(message.Contains("request_id="));
+        }
+
+        [TestMethod]
+        public void DuplicateStandaloneRequestIdFields_KeepOnlyFirstValue()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[预览][调试] VLC预览恢复尝试：RequestId=REQ-1 " +
+                "request_id=REQ-1 Attempt=1");
+
+            Assert.AreEqual(1, CountOccurrences(message, "RequestId="));
+            StringAssert.Contains(message, "RequestId=REQ-1");
+            Assert.IsFalse(message.Contains("request_id="));
+        }
+
+        [TestMethod]
+        public void LocalProductionSuccess_OmitsMissingRequestIdPlaceholder()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "[预览][信息] 本地预览已启动：Operation=StartCameraPreview " +
+                "RequestId=<无> Result=Success DurationMs=12");
+
+            Assert.AreEqual("[预览][信息] 本地预览已启动", message);
+            Assert.IsFalse(message.Contains("RequestId=<无>"));
+            Assert.IsFalse(message.Contains("DurationMs="));
+        }
+
+        [TestMethod]
+        public void LatestFrameDiagnostic_IsDebugOnlyAndBoundaryErrorIsConcise()
+        {
+            var diagnostic = Logger.NormalizeForDisplay(
+                "[车牌抓帧][调试] LatestFrameDiagnostic RouteMatched=true " +
+                "PreviewRequestId=PRE-1 SessionFound=false PlayerState=stopped " +
+                "Generation=7 CacheKey=PlateCJ_External Stage=Lookup " +
+                "Error=frame_not_ready");
+            var boundaryError = Logger.NormalizeForDisplay(
+                "[车牌抓帧][错误] 车牌CJ最新帧获取失败：Operation=SaveLatestPlateFrame " +
+                "RequestId=CAP-1 CaptureRequestId=CAP-1 PreviewRequestId=PRE-1 " +
+                "Result=Failed ErrorCode=frame_not_ready DurationMs=80 " +
+                "Stage=GetLatestFrame PlayerState=stopped");
+
+            StringAssert.Contains(diagnostic, "LatestFrameDiagnostic");
+            StringAssert.Contains(diagnostic, "Generation=7");
+            Assert.AreEqual(
+                "[车牌抓帧][错误] 车牌CJ最新帧获取失败：RequestId=CAP-1 ErrorCode=frame_not_ready",
+                boundaryError);
+            Assert.IsFalse(boundaryError.Contains("LatestFrameDiagnostic"));
+            Assert.IsFalse(boundaryError.Contains("CaptureRequestId="));
+            Assert.IsFalse(boundaryError.Contains("PreviewRequestId="));
+            Assert.IsFalse(boundaryError.Contains("Generation="));
+        }
+
+        [TestMethod]
+        public void VlcPlateFrameRecovery_IsAssignedToPreviewModule()
+        {
+            var message = Logger.NormalizeForDisplay(
+                "VLC车牌最新帧已恢复：尺寸=1920x1080");
+
+            Assert.AreEqual("[预览][信息] VLC车牌最新帧已恢复：尺寸=1920x1080", message);
+        }
+
+        [TestMethod]
         public void DebugRetainsTechnicalFieldsAndCanonicalOperation()
         {
             var message = Logger.NormalizeForDisplay(

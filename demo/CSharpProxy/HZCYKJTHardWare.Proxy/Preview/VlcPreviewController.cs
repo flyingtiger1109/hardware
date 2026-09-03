@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using HZCYKJTHardWare.Proxy.Infrastructure;
+using HZCYKJTHardWare.Proxy.Parsing;
 
 namespace HZCYKJTHardWare.Proxy.Preview
 {
@@ -420,8 +421,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 _lastSnapshotFailureCode = null;
                 if (previousFailures > 0)
                 {
-                    Logger.Info($"VLC车牌最新帧已恢复：{_description}，尺寸={width}x{height}，" +
-                                $"DetectedFormat={detectedFormat}，上次故障={previousFailureCode}");
+                    Logger.Info(Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                        $"VLC车牌最新帧已恢复：{_description}，尺寸={width}x{height}，" +
+                        $"DetectedFormat={detectedFormat}，上次故障={previousFailureCode}"));
                 }
             }
             catch (Exception ex)
@@ -457,7 +459,10 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var message = BuildSnapshotFailureMessage(failureCode, reason, count,
                 playerState, snapshotReturnCode, detectedFormat, fileBytes,
                 width, height);
-            var summary = $"VLC车牌最新帧获取失败：RequestId={_requestId ?? "<无>"}，" +
+            var requestField = string.IsNullOrWhiteSpace(_requestId)
+                ? string.Empty
+                : "RequestId=" + JsonHelper.ToLogValue(_requestId) + "，";
+            var summary = $"VLC车牌最新帧获取失败：{requestField}" +
                           $"ErrorCode={failureCode}，次数={count}";
             if (count == 1)
             {

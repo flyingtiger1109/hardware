@@ -325,6 +325,92 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                    message.Substring(valueEnd);
         }
 
+        /// <summary>
+        /// 将历史日志正文中的 request_id= 统一为 RequestId=。
+        /// 仅处理独立字段；process_request_id=、capture_request_id= 等链路字段
+        /// 不被误改，JSON 请求正文也不会在此处被重写。
+        /// </summary>
+        private static string CanonicalizeRequestIdFields(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return message;
+
+            const string canonicalMarker = "RequestId=";
+            var searchOffset = 0;
+            var copyOffset = 0;
+            var requestIdSeen = false;
+            StringBuilder result = null;
+            while (TryFindRequestIdMarker(message, searchOffset,
+                out var markerPosition, out var markerLength))
+            {
+                var isPartOfCompoundField = markerPosition > 0 &&
+                    (char.IsLetterOrDigit(message[markerPosition - 1]) ||
+                     message[markerPosition - 1] == '_');
+                if (isPartOfCompoundField)
+                {
+                    searchOffset = markerPosition + markerLength;
+                    continue;
+                }
+
+                if (result == null)
+                    result = new StringBuilder(message.Length);
+                result.Append(message, copyOffset, markerPosition - copyOffset);
+
+                var valueStart = markerPosition + markerLength;
+                var valueEnd = valueStart;
+                while (valueEnd < message.Length && message[valueEnd] != ' ' &&
+                       message[valueEnd] != '\t' && message[valueEnd] != ',' &&
+                       message[valueEnd] != '，' && message[valueEnd] != ';' &&
+                       message[valueEnd] != '；' && message[valueEnd] != '\r' &&
+                       message[valueEnd] != '\n')
+                    valueEnd++;
+
+                if (!requestIdSeen)
+                {
+                    result.Append(canonicalMarker);
+                    result.Append(message, valueStart, valueEnd - valueStart);
+                    requestIdSeen = true;
+                }
+
+                copyOffset = valueEnd;
+                searchOffset = valueEnd;
+            }
+
+            if (result == null)
+                return message;
+
+            result.Append(message, copyOffset, message.Length - copyOffset);
+            return result.ToString();
+        }
+
+        private static bool TryFindRequestIdMarker(string message, int offset,
+            out int position, out int markerLength)
+        {
+            position = -1;
+            markerLength = 0;
+            for (var i = Math.Max(0, offset); i < message.Length; i++)
+            {
+                if (message.Length - i >= "request_id=".Length &&
+                    string.Equals(message.Substring(i, "request_id=".Length),
+                        "request_id=", StringComparison.OrdinalIgnoreCase))
+                {
+                    position = i;
+                    markerLength = "request_id=".Length;
+                    return true;
+                }
+
+                if (message.Length - i >= "RequestId=".Length &&
+                    string.Equals(message.Substring(i, "RequestId=".Length),
+                        "RequestId=", StringComparison.OrdinalIgnoreCase))
+                {
+                    position = i;
+                    markerLength = "RequestId=".Length;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         internal static string ResourceDisplayName(string resourceType)
         {
             switch ((resourceType ?? string.Empty).Trim())
@@ -479,7 +565,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         {
             var parsed = ParseMessage(message, defaultLevel);
             var body = MinimizeProductionMessage(
-                CanonicalizeOperationField(parsed.Body), parsed.LevelNumber);
+                CanonicalizeRequestIdFields(CanonicalizeOperationField(parsed.Body)),
+                parsed.LevelNumber);
             if (string.IsNullOrEmpty(parsed.Module))
                 return $"[{parsed.Level}] {body}";
             return $"[{parsed.Module}][{parsed.Level}] {body}";
@@ -498,7 +585,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 var now = DateTime.Now;
                 var date = now.ToString("yyyyMMdd");
                 var parsed = ParseMessage(message, level);
-                var canonicalBody = CanonicalizeOperationField(parsed.Body);
+                var canonicalBody = CanonicalizeRequestIdFields(
+                    CanonicalizeOperationField(parsed.Body));
                 var productionBody = MinimizeProductionMessage(
                     canonicalBody, parsed.LevelNumber);
                 formattedLine = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] " +
@@ -1019,6 +1107,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
         /// </summary>
         internal static string MinimizeProductionMessage(string body, int levelNumber)
         {
+            body = CanonicalizeRequestIdFields(body);
             if (levelNumber <= 0 || string.IsNullOrWhiteSpace(body) ||
                 IsDiagnosticBusinessMessage(body))
                 return body;
@@ -1032,8 +1121,7 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 requestId = ExtractLogField(body, "CaptureRequestId");
             if (string.IsNullOrWhiteSpace(requestId))
                 requestId = ExtractLogField(body, "PreviewRequestId");
-            if (string.IsNullOrWhiteSpace(requestId))
-                return body;
+            var hasRequestId = !IsMissingRequestId(requestId);
 
             var result = ExtractLogField(body, "Result");
             var isSuccess = levelNumber == 1 && IsSuccessfulBusinessResultName(result);
@@ -1047,16 +1135,35 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
             if (string.IsNullOrWhiteSpace(description))
                 description = isFailure ? "业务处理失败：" : "业务处理成功：";
 
-            var output = description + "RequestId=" + requestId;
+            var output = description;
+            var hasOutputField = false;
+            if (hasRequestId)
+            {
+                output += "RequestId=" + requestId;
+                hasOutputField = true;
+            }
             if (isFailure)
             {
                 var errorCode = ExtractLogField(body, "ErrorCode");
-                if (string.IsNullOrWhiteSpace(errorCode) ||
-                    string.Equals(errorCode, "none", StringComparison.OrdinalIgnoreCase))
-                    return body;
-                output += " ErrorCode=" + errorCode;
+                if (!string.IsNullOrWhiteSpace(errorCode) &&
+                    !string.Equals(errorCode, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (hasOutputField)
+                        output += " ";
+                    output += "ErrorCode=" + errorCode;
+                    hasOutputField = true;
+                }
             }
-            return output;
+            return hasOutputField ? output : output.TrimEnd('：', ':');
+        }
+
+        private static bool IsMissingRequestId(string requestId)
+        {
+            var value = (requestId ?? string.Empty).Trim();
+            return value.Length == 0 ||
+                   string.Equals(value, "<无>", StringComparison.Ordinal) ||
+                   string.Equals(value, "<none>", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(value, "none", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsSuccessfulBusinessResultName(string result)
@@ -1307,6 +1414,8 @@ namespace HZCYKJTHardWare.Proxy.Infrastructure
                 return operationModule;
 
             if (body.StartsWith("HTTP MJPEG", StringComparison.OrdinalIgnoreCase) ||
+                body.IndexOf("VLC", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                body.IndexOf("MJPEG", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 body.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 body.IndexOf("预览", StringComparison.Ordinal) >= 0)
                 return LogModules.Preview;

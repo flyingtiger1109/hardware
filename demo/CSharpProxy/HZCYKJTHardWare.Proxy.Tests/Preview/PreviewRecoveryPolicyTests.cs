@@ -52,6 +52,61 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
+        public void NonHttpPreviewUsesVlcPrimaryPolicyForPlateSessions()
+        {
+            Assert.IsFalse(PreviewManager.IsMjpegFallbackApplicable(
+                "rtsp://192.168.20.30/live"));
+            Assert.IsTrue(PreviewManager.IsMjpegFallbackApplicable(
+                "https://terminal/live.mjpg"));
+
+            Assert.IsTrue(PreviewManager.IsPrimaryVlcAllowedForNonHttpPreview(
+                PreviewResourceType.PlateCJ, PreviewSessionType.External));
+            Assert.IsTrue(PreviewManager.IsPrimaryVlcAllowedForNonHttpPreview(
+                PreviewResourceType.PlateRJ2, PreviewSessionType.External));
+            Assert.IsTrue(PreviewManager.IsPrimaryVlcAllowedForNonHttpPreview(
+                PreviewResourceType.PlateRJ3, PreviewSessionType.External));
+            Assert.IsTrue(PreviewManager.IsPrimaryVlcAllowedForNonHttpPreview(
+                PreviewResourceType.PlateCJ, PreviewSessionType.Local));
+            Assert.IsFalse(PreviewManager.IsPrimaryVlcAllowedForNonHttpPreview(
+                PreviewResourceType.Camera, PreviewSessionType.External));
+        }
+
+        [TestMethod]
+        public void RecoverySummaryKeepsOnlyProductionFields()
+        {
+            var started = PreviewManager.BuildPreviewRecoverySummary(
+                "车牌CJ", "出现视频流中断，正在自动恢复", "REQ-1",
+                "vlc_stream_stalled");
+            var aggregate = PreviewManager.BuildPreviewRecoverySummary(
+                "车牌CJ", "持续故障", "REQ-1", "vlc_stream_stalled",
+                count: 10, durationMs: 60000);
+            var localSuccess = PreviewManager.BuildPreviewRecoverySummary(
+                "车牌CJ", "已恢复", null, null);
+
+            StringAssert.Contains(started, "RequestId=REQ-1");
+            StringAssert.Contains(started, "ErrorCode=vlc_stream_stalled");
+            StringAssert.Contains(aggregate, "Count=10");
+            StringAssert.Contains(aggregate, "DurationMs=60000");
+            StringAssert.Contains(aggregate, "ErrorCode=vlc_stream_stalled");
+            Assert.AreEqual("车牌CJ预览已恢复", localSuccess);
+            Assert.IsFalse(localSuccess.Contains("RequestId=<无>"));
+            Assert.IsFalse(started.Contains("Operation="));
+            Assert.IsFalse(started.Contains("RecoveryEpisodeId="));
+        }
+
+        [TestMethod]
+        public void RecoveryRateLimitKeyDoesNotContainAttemptOrGeneration()
+        {
+            var key = PreviewManager.BuildPreviewRecoveryRateLimitKey(
+                "PlateCJ_External", "VLC");
+
+            StringAssert.Contains(key, "PreviewRecovery|VLC|PlateCJ_External");
+            Assert.IsFalse(key.Contains("Attempt"));
+            Assert.IsFalse(key.Contains("Generation"));
+            Assert.IsFalse(key.Contains("WorkerId"));
+        }
+
+        [TestMethod]
         public void SelectRecoveryPreviewUrl_PrefersSavedExplicitUrl()
         {
             const string savedUrl = "http://127.0.0.1:18080/plate-live";

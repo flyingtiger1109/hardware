@@ -215,6 +215,72 @@ std::string ToLowerAscii(std::string value) {
     return value;
 }
 
+std::string CanonicalizeRequestIdFields(const std::string& message) {
+    const std::string legacyMarker = "request_id=";
+    const std::string canonicalMarker = "RequestId=";
+    size_t searchOffset = 0;
+    size_t copyOffset = 0;
+    bool changed = false;
+    bool requestIdSeen = false;
+    std::string result;
+
+    while (searchOffset < message.size()) {
+        size_t position = std::string::npos;
+        size_t markerLength = 0;
+        for (size_t i = searchOffset; i < message.size(); ++i) {
+            const bool isLegacy = i + legacyMarker.size() <= message.size() &&
+                _strnicmp(message.data() + i, legacyMarker.c_str(),
+                          legacyMarker.size()) == 0;
+            const bool isCanonical = i + canonicalMarker.size() <= message.size() &&
+                _strnicmp(message.data() + i, canonicalMarker.c_str(),
+                          canonicalMarker.size()) == 0;
+            if (isLegacy || isCanonical) {
+                position = i;
+                markerLength = isLegacy ? legacyMarker.size() : canonicalMarker.size();
+                break;
+            }
+        }
+        if (position == std::string::npos) break;
+
+        const bool compoundField = position > 0 &&
+            (std::isalnum(static_cast<unsigned char>(message[position - 1])) ||
+            message[position - 1] == '_');
+        searchOffset = position + markerLength;
+        if (compoundField) continue;
+
+        if (!changed) {
+            result.reserve(message.size());
+            changed = true;
+        }
+        result.append(message, copyOffset, position - copyOffset);
+
+        const size_t valueStart = position + markerLength;
+        size_t valueEnd = valueStart;
+        while (valueEnd < message.size()) {
+            const char ch = message[valueEnd];
+            if (ch == ' ' || ch == '\t' || ch == ',' || ch == ';' ||
+                ch == '\r' || ch == '\n' ||
+                message.compare(valueEnd, std::strlen("，"), "，") == 0 ||
+                message.compare(valueEnd, std::strlen("；"), "；") == 0) {
+                break;
+            }
+            ++valueEnd;
+        }
+
+        if (!requestIdSeen) {
+            result += "RequestId=";
+            result.append(message, valueStart, valueEnd - valueStart);
+            requestIdSeen = true;
+        }
+        copyOffset = valueEnd;
+        searchOffset = valueEnd;
+    }
+
+    if (!changed) return message;
+    result.append(message, copyOffset, std::string::npos);
+    return result;
+}
+
 size_t FindLogField(const std::string& message, const char* fieldName) {
     if (!fieldName || !*fieldName) return std::string::npos;
 
@@ -321,35 +387,62 @@ std::string ExtractBusinessDescription(const std::string& message) {
 
 std::string MinimizeProductionMessage(LogLevel level,
                                       const std::string& message) {
-    if (level == LogLevel::Debug || message.empty() ||
-        IsDiagnosticBusinessMessage(message)) {
-        return message;
+    const std::string canonicalMessage = CanonicalizeRequestIdFields(message);
+    if (level == LogLevel::Debug || canonicalMessage.empty() ||
+        IsDiagnosticBusinessMessage(canonicalMessage)) {
+        return canonicalMessage;
     }
 
-    if (ExtractLogField(message, "Operation").empty()) return message;
+    if (ExtractLogField(canonicalMessage, "Operation").empty()) {
+        return canonicalMessage;
+    }
 
-    std::string requestId = ExtractLogField(message, "RequestId");
-    if (requestId.empty()) requestId = ExtractLogField(message, "CaptureRequestId");
-    if (requestId.empty()) requestId = ExtractLogField(message, "PreviewRequestId");
-    if (requestId.empty()) return message;
+    std::string requestId = ExtractLogField(canonicalMessage, "RequestId");
+    if (requestId.empty()) requestId = ExtractLogField(canonicalMessage, "CaptureRequestId");
+    if (requestId.empty()) requestId = ExtractLogField(canonicalMessage, "PreviewRequestId");
 
-    const std::string result = ExtractLogField(message, "Result");
+    const std::string result = ExtractLogField(canonicalMessage, "Result");
     const bool success = level == LogLevel::Info &&
         IsSuccessfulBusinessResult(result);
     const bool failure = (level == LogLevel::Warn || level == LogLevel::Error) &&
         (ToLowerAscii(result) == "failed" || result == "失败");
-    if (!success && !failure) return message;
+    if (!success && !failure) return canonicalMessage;
 
-    std::string description = ExtractBusinessDescription(message);
+    std::string description = ExtractBusinessDescription(canonicalMessage);
     if (description.empty()) {
         description = failure ? "业务处理失败：" : "业务处理成功：";
     }
 
-    std::string output = description + "RequestId=" + requestId;
+    const bool hasRequestId = !requestId.empty() && requestId != "<无>" &&
+        ToLowerAscii(requestId) != "<none>" &&
+        ToLowerAscii(requestId) != "none";
+    std::string output = description;
+    bool hasOutputField = false;
+    if (hasRequestId) {
+        output += "RequestId=" + requestId;
+        hasOutputField = true;
+    }
     if (failure) {
-        const std::string errorCode = ExtractLogField(message, "ErrorCode");
-        if (errorCode.empty() || ToLowerAscii(errorCode) == "none") return message;
-        output += " ErrorCode=" + errorCode;
+        const std::string errorCode = ExtractLogField(canonicalMessage, "ErrorCode");
+        if (!errorCode.empty() && ToLowerAscii(errorCode) != "none") {
+            if (hasOutputField) output += " ";
+            output += "ErrorCode=" + errorCode;
+            hasOutputField = true;
+        }
+    }
+    if (!hasOutputField) {
+        const size_t chineseColonLength = std::strlen("：");
+        while (!output.empty()) {
+            if (output.back() == ':') {
+                output.pop_back();
+            } else if (output.size() >= chineseColonLength &&
+                       output.compare(output.size() - chineseColonLength,
+                                      chineseColonLength, "：") == 0) {
+                output.erase(output.size() - chineseColonLength);
+            } else {
+                break;
+            }
+        }
     }
     return output;
 }
@@ -1260,10 +1353,12 @@ void Logger::Log(LogLevel level, const char* module, const char* function,
     const std::string message = FormatV(fmt, args);
     va_end(args);
 
+    const std::string canonicalMessage = CanonicalizeRequestIdFields(message);
     const std::string timestamp = FormatTimestamp();
     const std::string normalizedModule = NormalizeModule(
-        module, function, message.c_str());
-    const std::string productionMessage = MinimizeProductionMessage(level, message);
+        module, function, canonicalMessage.c_str());
+    const std::string productionMessage = MinimizeProductionMessage(
+        level, canonicalMessage);
     const std::string line = "[" + timestamp + "] [" + normalizedModule +
         "][" + LevelToString(level) + "] " + productionMessage + "\n";
 
@@ -1285,12 +1380,12 @@ void Logger::Log(LogLevel level, const char* module, const char* function,
     // 默认 INFO/WARN/ERROR 只写业务摘要；开启 DEBUG 时补写同一条原始技术记录，
     // 让 Operation、耗时、尺寸和链路字段仍可按 RequestId 追踪。
     if (level != LogLevel::Debug &&
-        productionMessage != message && IsLevelEnabled(LogLevel::Debug)) {
+        productionMessage != canonicalMessage && IsLevelEnabled(LogLevel::Debug)) {
         LogEntry debugEntry;
         debugEntry.level = LogLevel::Debug;
         debugEntry.date = PathHelper::GetDateString();
         debugEntry.line = "[" + timestamp + "] [" + normalizedModule +
-            "][调试] " + message + "\n";
+            "][调试] " + canonicalMessage + "\n";
         if (!Enqueue(std::move(debugEntry))) {
             m_totalDroppedCount.fetch_add(1);
             m_droppedSinceNotice.fetch_add(1);

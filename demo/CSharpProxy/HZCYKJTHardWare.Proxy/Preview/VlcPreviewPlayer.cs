@@ -829,7 +829,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
             if (!File.Exists(pluginPath))
                 return;
 
-            Logger.Warn($"检测到VLC SFTP插件: {pluginPath}。RTSP预览不需要该插件，现场已出现该插件导致的崩溃，正在尝试禁用。");
+            Logger.Warn(Logger.FormatModuleMessage(LogModules.Preview, "警告",
+                $"检测到VLC SFTP插件: {pluginPath}。RTSP预览不需要该插件，现场已出现该插件导致的崩溃，正在尝试禁用。"));
 
             var disabledPath = pluginPath + ".disabled";
             if (File.Exists(disabledPath))
@@ -838,11 +839,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
             try
             {
                 File.Move(pluginPath, disabledPath);
-                Logger.Warn($"已禁用VLC SFTP插件: {disabledPath}");
+                Logger.Warn(Logger.FormatModuleMessage(LogModules.Preview, "警告",
+                    $"已禁用VLC SFTP插件: {disabledPath}"));
             }
             catch (Exception ex)
             {
-                Logger.Warn($"禁用VLC SFTP插件失败: {ex.Message}。请手动将该文件改名为 libsftp_plugin.dll.disabled 后再启动程序。");
+                Logger.Warn(Logger.FormatModuleMessage(LogModules.Preview, "警告",
+                    $"禁用VLC SFTP插件失败: {ex.Message}。请手动将该文件改名为 libsftp_plugin.dll.disabled 后再启动程序。"));
             }
         }
 

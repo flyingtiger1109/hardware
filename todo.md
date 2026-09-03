@@ -2162,3 +2162,45 @@ Task L7 代码完成，阶段3待实机异常场景和长稳验收。
 - [x] 已完成自动化构建/测试和导出表核对，并记录本节验证结果。
 - [ ] 在真实 Delphi7 x86 + Native x86 + Proxy x64 + 终端环境执行业务抽样与 2h/24h 长稳。
 - 回退：仅回退本节日志渲染、日志调用点、测试和本节记录；不执行宽范围 reset，不覆盖已有用户未提交文件。
+
+## Stage3-A RTSP/VLC Logging（2026-09-03）
+
+### 当前阶段
+
+Stage3-A 代码整改与自动化验证完成；现场故障注入、2h 和 24h 长稳验证完成后再关闭验收。
+
+### 已完成内容
+
+- [x] 修正车牌 CJ/RJ2/RJ3 Local、External 的非 HTTP RTSP 恢复判定：RTSP 继续进入 VLC Recovery，不再误记为 MJPEG fallback。
+- [x] 将 Preview Recovery 的首告警、内部 Attempt、60 秒持续故障聚合、成功和最终失败按同一 RecoveryEpisode 收口；保留既有 VLC 无限恢复、MJPEG 两次尝试及退避时序。
+- [x] `LatestFrameDiagnostic` 完整状态下沉 DEBUG；生产车牌抓帧失败保留中文结果、Capture RequestId 和 ErrorCode。
+- [x] 统一预览恢复/回退/绘制目标/播放器重启日志为 `[预览]`，并将历史 `request_id=` 输出归一化为单一 `RequestId=`。
+- [x] 保留 DLL ABI、导出函数、`extern "C"`、`__stdcall`、参数/返回值、回调协议和第三方 HWND 语义不变。
+
+### 涉及文件
+
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/PreviewManager.cs`：RTSP/VLC 主链路判定、RecoveryEpisode 日志分层与稳定聚合键。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewController.cs`：车牌最新帧恢复日志明确归属预览模块并省略本地缺失 RequestId 占位符。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Preview/VlcPreviewPlayer.cs`：VLC 插件现场提示固定为预览模块。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy/Infrastructure/Logger.cs`：RequestId 字段归一化、缺失 ID 生产摘要和 VLC/MJPEG 模块推断。
+- `src/logger.cpp`：Native 日志 RequestId 字段归一化及缺失 ID 生产摘要。
+- `demo/CSharpProxy/HZCYKJTHardWare.Proxy.Tests/Preview/PreviewRecoveryPolicyTests.cs`、`Infrastructure/LoggerTests.cs`：新增协议判定、Recovery 摘要、限频键、LatestFrame 和分类断言。
+
+### 自动化测试与验证状态
+
+- [x] 代码检查：RTSP 不进入 MJPEG fallback NotApplicable WARN；MJPEG HTTP 路径和既有恢复参数未改动。
+- [x] 定向测试：`LoggerTests` + `PreviewRecoveryPolicyTests` 35/35 通过。
+- [x] Proxy `Release|x64`：编译通过，0 错误；Tests 工程 0 错误，保留既有 `NU1900` 网络警告。
+- [x] Native `Release|Win32/x86`、`Release|x64`：编译通过；x86 `dumpbin` 与 `.def` 导出集合 25/25 一致。
+- [x] C# 全量 VSTest：176/188 通过；12 项既有失败（ProductVersion 基线、HttpListener 平台限制、回调时序断言），未归因于本轮日志改动。
+- [ ] 现场验证：CJ External RTSP 断流/恢复及日志计数待执行。
+- [ ] 现场验证：CJ Local RTSP 断流/恢复及日志计数待执行。
+- [ ] 2h：日志队列、RecoveryEpisode、RequestId 对账和预览恢复长稳待执行。
+- [ ] 24h：全链路日志量、句柄/线程/内存、聚合和脱敏长稳待执行。
+
+### 兼容性、风险与回退
+
+- 外部接口、配置、HTTP/回调协议、第三方调用方式和部署架构未改变；Native source 仅修改日志格式化逻辑，因此需要重新执行 x86 Release 和导出检查。
+- 风险集中在真实 RTSP/VLC 断流时序、日志采样和外部 HWND 生命周期，未通过实机验证前整体验收保持 OPEN。
+- R1.2 `Preview Protocol Recovery Separation`：PENDING；本次明确禁止实施，不拆分 RTSP/VLC 与 HTTP/MJPEG Recovery 架构。
+- 回退：仅回退 Stage3-A 相关提交或执行对应 `git revert`；不执行宽范围 reset，不覆盖已有用户未提交文档、生成物和图片。
