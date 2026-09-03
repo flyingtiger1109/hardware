@@ -367,3 +367,65 @@ The previous backbuffer-only anti-flicker change removed flicker but caused part
 - [x] C# Proxy x86 Release temp-output compile check: passed, 0 errors, 0 warnings.
 - [x] C# Proxy x86 Release formal `bin\x86\Release\net46` build: passed, 0 errors, 0 warnings.
 - [ ] Third-party Demo现场铺满与闪屏验证：待验证。
+
+## 2026-09-03 Stage3-A 全预览统一退避恢复机制收尾
+
+### 当前阶段
+
+Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第三方窗口验证保持 OPEN。
+
+### 已完成内容
+
+- [x] Camera、Fingerprint、Iris、PlateCJ、PlateRJ2、PlateRJ3 共用无限重试语义和统一退避。
+- [x] 退避固定为 1000ms、2000ms、5000ms、10000ms、15000ms（第 5 次及以后饱和）。
+- [x] 移除 MJPEG“达到 2 次后删除会话”和 `recovery_exhausted` 终止路径；普通流/解码故障保留逻辑会话并继续恢复。
+- [x] VLC 候选以 Playing 且媒体时间推进作为真实成功信号；HTTP 候选 MJPEG 以真实绘制帧作为成功信号，候选就绪等待上限为约 8 秒。
+- [x] 显式 StopPreview、Shutdown/Dispose、会话替换和终端切换会取消对应后台 recovery token，旧会话/旧 generation 不得提交。
+- [x] 生产日志保持首个 WARN、尝试 DEBUG、约 60 秒聚合 WARN、每 RecoveryEpisode 一次成功 INFO；RequestId 缺失时不输出 `<无>`。
+
+### 涉及文件
+
+- `Preview/PreviewManager.cs`：接入共享策略、无限退避、候选真实就绪校验和恢复取消。
+- `Preview/PreviewRecoveryPolicy.cs`：统一退避、尝试次数饱和、终止故障分类和 generation 提交门槛。
+- `PreviewRecoveryPolicyTests.cs`：补充退避、无限尝试、候选提交、真实就绪和成功去重测试。
+- `LoggerTests.cs`：更新持续故障聚合日志断言，移除旧耗尽语义断言。
+
+### 兼容性说明
+
+- DLL 导出函数、调用约定、C ABI、结构体、错误码：未修改。
+- C# Proxy HTTP/Callback API、请求响应字段：未修改。
+- 抓拍、OCR、IC、授权、闸机及终端切换协议：未修改。
+- RTSP/VLC 传输参数、HWND SetParent/MoveWindow：未修改。
+- Native 本次未改源代码；已重新完成 x86 Release 构建和导出表核对。
+
+### 风险与注意事项
+
+1. 无限恢复依赖网络、SDK 和宿主窗口最终恢复；异常期间只保留低频聚合告警，不会自动判定“永久失败”。
+2. 当前全量测试环境不支持 `System.Net.HttpListener`，相关集成测试需在 Windows 支持环境复测。
+3. VLC/MJPEG 真实就绪信号仍需在第三方外部 HWND 和本地面板上做现场验证。
+
+### 验证状态
+
+- [x] C# Proxy `Release|x64`：0 错误，0 警告。
+- [x] Tests `Release|x64`：0 错误，1 个既有 `NU1900` 源访问警告。
+- [x] 恢复/日志专项测试：42/42 通过。
+- [x] 全量测试：183 通过、12 失败、0 跳过；失败为既有版本断言、当前运行时不支持 `HttpListener` 及一个既有回调时序断言。
+- [x] Native `Release|Win32`：0 错误，0 警告。
+- [x] `dumpbin /exports`：25 个导出，与 `HZCYKJTHardWare.def` 25 项一致。
+- [ ] Case A：PlateCJ 第三方外部 HWND 故障恢复：现场 OPEN。
+- [ ] Case B：PlateCJ 本地面板故障恢复：现场 OPEN。
+- [ ] Case C：Fingerprint 第三方外部 HWND 故障恢复：现场 OPEN。
+- [ ] Camera、Iris、PlateRJ2、PlateRJ3 预览恢复：现场 OPEN。
+- [ ] 恢复期间 StopPreview、终端切换、Proxy/SDK 关闭：现场 OPEN。
+- [ ] 连续 2 小时长稳观察：OPEN。
+- [ ] 连续 24 小时长稳观察：OPEN。
+
+### 下一步计划
+
+- [ ] 在 Windows 第三方 Demo 环境执行 Case A/B/C 及 Camera/Iris/PlateRJ2/PlateRJ3 验证。
+- [ ] 记录实际恢复耗时、恢复次数、聚合 WARN 频率和 HWND/进程复用情况。
+- [ ] 完成 2 小时与 24 小时长稳后，再决定是否关闭现场项。
+
+### 回退方式
+
+回退本次 Stage3-A 提交即可恢复本次统一退避和恢复取消前的实现；不涉及 Native ABI 或对外 API 回退。

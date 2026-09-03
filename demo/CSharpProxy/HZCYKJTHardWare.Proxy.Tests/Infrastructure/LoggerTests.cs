@@ -393,17 +393,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
-        public void RecoveryAggregateRetainsEpisodeCountDurationAndErrorCode()
+        public void RecoveryAggregateRetainsCountDurationAndErrorCode()
         {
             var message = Logger.NormalizeForDisplay(
-                "[预览][错误] 摄像头预览恢复失败：Operation=RecoverCameraPreview " +
-                "RequestId=PRE-1 RecoveryEpisodeId=7 Attempts=5 Result=Failed " +
-                "ErrorCode=recovery_exhausted DurationMs=12000");
+                "[预览][警告] 摄像头预览持续故障：RequestId=PRE-1 " +
+                "Count=10 ErrorCode=vlc_stream_failure DurationMs=60000");
 
-            StringAssert.Contains(message, "RecoveryEpisodeId=7");
-            StringAssert.Contains(message, "Attempts=5");
-            StringAssert.Contains(message, "ErrorCode=recovery_exhausted");
-            StringAssert.Contains(message, "DurationMs=12000");
+            StringAssert.Contains(message, "Count=10");
+            StringAssert.Contains(message, "ErrorCode=vlc_stream_failure");
+            StringAssert.Contains(message, "DurationMs=60000");
+            Assert.IsFalse(message.Contains("exhausted"));
         }
 
         [TestMethod]

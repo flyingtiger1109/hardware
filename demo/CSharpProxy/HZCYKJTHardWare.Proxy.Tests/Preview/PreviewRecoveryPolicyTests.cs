@@ -8,25 +8,66 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
     public class PreviewRecoveryPolicyTests
     {
         [TestMethod]
-        public void GetRecoveryDelayMs_UsesBoundedBackoff()
+        public void GetRecoveryDelayMs_UsesSharedBackoffPolicy()
         {
             Assert.AreEqual(1000, PreviewManager.GetRecoveryDelayMs(1));
             Assert.AreEqual(2000, PreviewManager.GetRecoveryDelayMs(2));
             Assert.AreEqual(5000, PreviewManager.GetRecoveryDelayMs(3));
             Assert.AreEqual(10000, PreviewManager.GetRecoveryDelayMs(4));
-            Assert.AreEqual(10000, PreviewManager.GetRecoveryDelayMs(100));
+            Assert.AreEqual(15000, PreviewManager.GetRecoveryDelayMs(5));
+            Assert.AreEqual(15000, PreviewManager.GetRecoveryDelayMs(int.MaxValue));
+            Assert.AreEqual(8000, PreviewRecoveryPolicy.CandidateReadyTimeoutMs);
         }
 
         [TestMethod]
-        public void RecoverableFailureIsWarning()
+        public void RecoveryAttemptsSaturateWithoutExhaustion()
         {
-            Assert.AreEqual("警告", PreviewManager.GetMjpegRecoveryFailureLevel(1));
+            Assert.AreEqual(1, PreviewRecoveryPolicy.NextAttempt(0));
+            Assert.AreEqual(2, PreviewRecoveryPolicy.NextAttempt(1));
+            Assert.AreEqual(10, PreviewRecoveryPolicy.NextAttempt(9));
+            Assert.AreEqual(int.MaxValue,
+                PreviewRecoveryPolicy.NextAttempt(int.MaxValue));
         }
 
         [TestMethod]
-        public void FinalRecoveryFailureIsError()
+        public void OrdinaryStreamAndDecodeFailuresRemainRetryable()
         {
-            Assert.AreEqual("错误", PreviewManager.GetMjpegRecoveryFailureLevel(5));
+            for (var attempt = 1; attempt <= 10; attempt++)
+            {
+                Assert.IsTrue(PreviewRecoveryPolicy.IsRetryableFailure(
+                    MjpegFailureKind.StreamFailure));
+                Assert.IsTrue(PreviewRecoveryPolicy.IsRetryableFailure(
+                    MjpegFailureKind.DecodeFailure));
+            }
+
+            Assert.IsFalse(PreviewRecoveryPolicy.IsRetryableFailure(
+                MjpegFailureKind.RenderTargetFailure));
+        }
+
+        [TestMethod]
+        public void CandidateCommitRequiresSameSessionGenerationAndReadiness()
+        {
+            Assert.IsTrue(PreviewRecoveryPolicy.ShouldCommitCandidate(
+                sameSession: true, expectedGeneration: 7, actualGeneration: 7,
+                candidateReady: true));
+            Assert.IsFalse(PreviewRecoveryPolicy.ShouldCommitCandidate(
+                sameSession: false, expectedGeneration: 7, actualGeneration: 7,
+                candidateReady: true));
+            Assert.IsFalse(PreviewRecoveryPolicy.ShouldCommitCandidate(
+                sameSession: true, expectedGeneration: 7, actualGeneration: 8,
+                candidateReady: true));
+            Assert.IsFalse(PreviewRecoveryPolicy.ShouldCommitCandidate(
+                sameSession: true, expectedGeneration: 7, actualGeneration: 7,
+                candidateReady: false));
+        }
+
+        [TestMethod]
+        public void RecoverySuccessIsLoggedOncePerEpisode()
+        {
+            Assert.IsTrue(PreviewRecoveryPolicy.ShouldLogRecoverySuccess(
+                successAlreadyLogged: false));
+            Assert.IsFalse(PreviewRecoveryPolicy.ShouldLogRecoverySuccess(
+                successAlreadyLogged: true));
         }
 
         [TestMethod]
