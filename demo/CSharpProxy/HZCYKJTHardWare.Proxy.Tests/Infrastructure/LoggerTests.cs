@@ -406,6 +406,27 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
         }
 
         [TestMethod]
+        public void Stage3RecoveryLog_LeavesOnlyBoundaryWarningsInProductionShape()
+        {
+            var started = Logger.NormalizeForDisplay(
+                "[预览][警告] 摄像头预览出现视频流中断，正在自动恢复：" +
+                "RequestId=PRE-1 ErrorCode=mjpeg_stream_failure");
+            var reconnect = Logger.NormalizeForDisplay(
+                "[预览][调试] HTTP MJPEG连接断开，1秒后使用同一地址重连");
+            var refreshFailure = Logger.NormalizeForDisplay(
+                "[预览][调试] 预览地址请求失败：RequestId=PRE-1 阶段=Recovery");
+            var success = Logger.NormalizeForDisplay(
+                "[预览][信息] 摄像头预览已恢复：RequestId=PRE-1");
+
+            StringAssert.Contains(started, "[预览][警告]");
+            StringAssert.Contains(reconnect, "[预览][调试]");
+            StringAssert.Contains(refreshFailure, "[预览][调试]");
+            StringAssert.Contains(success, "[预览][信息]");
+            Assert.IsFalse(reconnect.Contains("[警告]"));
+            Assert.IsFalse(refreshFailure.Contains("[警告]"));
+        }
+
+        [TestMethod]
         public void TelemetryMessage_RetainsLongRunFields()
         {
             var message = Logger.NormalizeForDisplay(

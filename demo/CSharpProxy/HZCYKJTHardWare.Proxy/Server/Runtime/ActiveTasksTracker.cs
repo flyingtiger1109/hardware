@@ -58,13 +58,23 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         /// </summary>
         public bool TryRun(Func<Task> work, string label)
         {
+            return TryRun(work, label, logRejection: true);
+        }
+
+        /// <summary>
+        /// 启动有界异步后台任务，并允许调用方将容量拒绝作为自己的可重试调度状态处理。
+        /// 预览 Recovery 使用静默模式，避免任务池瞬时满时产生独立生产 WARN。
+        /// </summary>
+        public bool TryRun(Func<Task> work, string label, bool logRejection)
+        {
             if (work == null || Volatile.Read(ref _disposed) != 0)
                 return false;
 
             if (!_slots.Wait(0))
             {
                 Interlocked.Increment(ref _totalRejected);
-                Logger.Warn($"[任务跟踪] 容量已满（{_maxConcurrent}），拒绝启动：{label}（累计拒绝={TotalRejected}）");
+                if (logRejection)
+                    Logger.Warn($"[任务跟踪] 容量已满（{_maxConcurrent}），拒绝启动：{label}（累计拒绝={TotalRejected}）");
                 return false;
             }
 

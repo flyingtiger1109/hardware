@@ -185,24 +185,29 @@ static void LogLatestPlateFrameOperation(
         ? "保存成功" : "保存失败";
     const char* stageValue = (stage && stage[0]) ? stage : "Unknown";
 
-    const char* format =
+    const char* successFormat =
         "车牌%s图片%s：Operation=SaveLatestPlateFrame RequestId=%s "
         "CaptureRequestId=%s PreviewRequestId=%s Plate=%s Result=%s "
         "ErrorCode=%s ReturnCode=%d Stage=%s ProxyError=%s DurationMs=%llu "
-        "Path=%s Bytes=%zu Width=%d Height=%d FrameAgeMs=%lld Source=%s";
+        "SavePath=%s Bytes=%zu Width=%d Height=%d FrameAgeMs=%lld Source=%s";
+    const char* failureFormat =
+        "车牌%s图片%s：Operation=SaveLatestPlateFrame RequestId=%s "
+        "CaptureRequestId=%s PreviewRequestId=%s Plate=%s Result=%s "
+        "ErrorCode=%s ReturnCode=%d Stage=%s ProxyError=%s DurationMs=%llu "
+        "Bytes=%zu Width=%d Height=%d FrameAgeMs=%lld Source=%s";
     if (resultCode == HZCYKJTHardWare_RET_OK) {
-        LOG_INFO("接口", format, plate, description, captureId, captureId,
+        LOG_INFO("接口", successFormat, plate, description, captureId, captureId,
                  previewId, plate, result, errorCode.c_str(), resultCode,
                  stageValue, LogValue(proxyError).c_str(),
                  static_cast<unsigned long long>(durationMs),
                  LogValue(path).c_str(), bytes, metadata.width, metadata.height,
                  metadata.frameAgeMs, LogValue(source).c_str());
     } else {
-        LOG_ERROR("接口", format, plate, description, captureId, captureId,
+        LOG_ERROR("接口", failureFormat, plate, description, captureId, captureId,
                   previewId, plate, result, errorCode.c_str(), resultCode,
                   stageValue, LogValue(proxyError).c_str(),
                   static_cast<unsigned long long>(durationMs),
-                  LogValue(path).c_str(), bytes, metadata.width, metadata.height,
+                  bytes, metadata.width, metadata.height,
                   metadata.frameAgeMs, LogValue(source).c_str());
     }
 }

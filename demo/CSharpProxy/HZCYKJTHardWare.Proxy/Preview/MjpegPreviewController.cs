@@ -609,18 +609,14 @@ namespace HZCYKJTHardWare.Proxy.Preview
                         buffer.Clear();
                         if (failureCount >= SameUrlMaxFailures)
                         {
-                            Logger.TryLogRateLimited(
-                                "Mjpeg|same_url_failure|" + _description,
-                                LogModules.Preview, "警告",
+                            Logger.Debug(
                                 $"HTTP MJPEG同一地址连续故障（{SameUrlMaxFailures}次），等待上层恢复：" +
                                 $"资源={JsonHelper.ToLogValue(_description)}，错误={JsonHelper.ToLogValue(failureReason)}");
                             SignalStreamFault(generation, MjpegFailureKind.StreamFailure, failureReason);
                             break;
                         }
 
-                        Logger.TryLogRateLimited(
-                            "Mjpeg|same_url_reconnect|" + _description,
-                            LogModules.Preview, "警告",
+                        Logger.Debug(
                             $"HTTP MJPEG连接断开，{ReconnectDelayMs / 1000}秒后使用同一地址重连" +
                             $"（{failureCount}/{SameUrlMaxFailures}）：{JsonHelper.ToLogValue(_description)}，" +
                             $"错误={JsonHelper.ToLogValue(failureReason)}");
@@ -724,7 +720,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 buffer.Clear();
                 Logger.TryLogRateLimited(
                     "Mjpeg|Decode|buffer_limit|" + _description,
-                    LogModules.Preview, "警告",
+                    LogModules.Preview, "调试",
                     $"MJPEG帧缓冲超过限制，等待上层恢复：资源={JsonHelper.ToLogValue(_description)}，" +
                     $"限制={MaxBufferedBytes}字节，错误类别=DecodeFailure");
                 SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
@@ -761,7 +757,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     buffer.Clear();
                     Logger.TryLogRateLimited(
                         "Mjpeg|Decode|frame_limit|" + _description,
-                        LogModules.Preview, "警告",
+                        LogModules.Preview, "调试",
                         $"MJPEG单帧超过限制，等待上层恢复：资源={JsonHelper.ToLogValue(_description)}，" +
                         $"帧长度={frameLength}字节，限制={MaxFrameBytes}字节，错误类别=DecodeFailure");
                     SignalStreamFault(generation, MjpegFailureKind.DecodeFailure,
@@ -906,7 +902,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var hresult = ex == null ? "<无>" : "0x" + ex.HResult.ToString("X8");
             Logger.TryLogRateLimited(
                 "Mjpeg|Decode|" + _description,
-                LogModules.Preview, "警告",
+                LogModules.Preview, "调试",
                 $"HTTP MJPEG帧解码失败：{JsonHelper.ToLogValue(_description)}，" +
                 $"帧长度={frameLength}字节，异常类型={JsonHelper.ToLogValue(exceptionType)}，" +
                 $"HResult={hresult}，连续失败次数={failures}，错误消息={JsonHelper.ToLogValue(ex?.Message)}");
@@ -947,7 +943,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var errorMessage = ex == null ? "未知绘制异常" : ex.Message;
             Logger.TryLogRateLimited(
                 "Mjpeg|RenderTarget|" + _description,
-                LogModules.Preview, "警告",
+                LogModules.Preview, "调试",
                 $"HTTP MJPEG绘制目标失败：资源={JsonHelper.ToLogValue(_description)}，" +
                 $"ErrorMessage={JsonHelper.ToLogValue(errorMessage)}，" +
                 $"HWND={PreviewManager.FormatHwnd(hwnd)}，IsWindow={(isWindow ? 1 : 0)}，" +
@@ -1001,7 +997,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (ReleaseDC(_videoHwnd, hdc) == 0)
                     Logger.TryLogRateLimited(
                         "Mjpeg|RenderTarget|ReleaseDC|" + _description,
-                        LogModules.Preview, "警告",
+                        LogModules.Preview, "调试",
                         $"释放预览窗口HDC返回失败：资源={JsonHelper.ToLogValue(_description)}，" +
                         $"ErrorMessage=ReleaseDC返回0，HWND={PreviewManager.FormatHwnd(_videoHwnd)}，" +
                         $"IsWindow={(IsWindow(_videoHwnd) ? 1 : 0)}");

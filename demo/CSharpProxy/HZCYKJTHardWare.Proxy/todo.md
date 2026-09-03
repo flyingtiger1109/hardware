@@ -429,3 +429,49 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 ### 回退方式
 
 回退本次 Stage3-A 提交即可恢复本次统一退避和恢复取消前的实现；不涉及 Native ABI 或对外 API 回退。
+
+## 2026-09-03 Stage3-A Final Closeout
+
+### 已完成
+
+- [x] Existing-running VLC recovery field behavior preserved and regression-covered。
+- [x] Existing-running MJPEG recovery field behavior preserved and regression-covered。
+- [x] Old Recovery cancellation/session replacement race fixed with `Cancel + Await Completion` and strict `RecoveryState` identity。
+- [x] Initial offline `StartPreview` retains `Desired Running` session and continues background recovery。
+- [x] Recovery task rejection converted to retryable scheduling failure；不再产生 `recovery_task_rejected` 终止结果。
+- [x] MJPEG recovery candidate uses the real `CandidateReadyTimeoutMs=8000` render-readiness timeout。
+- [x] MJPEG low-level recovery WARN moved to DEBUG；生产侧保留首个 Recovery WARN、约 60 秒聚合 WARN 和成功 INFO。
+- [x] Native Plate capture success log restores final `SavePath`；failure log omits save path。
+
+### 自动化验证
+
+- [x] Initial offline / terminal invalid HWND / recovery identity / stop during active recovery：`PreviewRecoveryCloseoutTests`。
+- [x] TaskTracker rejection retry boundary：`ActiveTasksTrackerTests`。
+- [x] MJPEG candidate 8 秒真实绘制等待：`MjpegWorkerReuseTests`。
+- [x] Stage3 日志级别、聚合字段和 SavePath 生产收口：`LoggerTests` / `PreviewRecoveryPolicyTests`。
+
+### 兼容性说明
+
+- DLL 导出函数、调用约定、C ABI、结构体、错误码、C# Proxy HTTP/Callback API：未修改。
+- VLC/MJPEG 主恢复链路、RTSP 参数、HWND 迁移、OCR 业务逻辑：未重写/未修改。
+- Native 仅调整抓拍日志格式；不改变抓拍业务和返回值。
+
+### 验证状态
+
+- [x] Proxy `Release|x64`：0 错误，0 警告。
+- [x] Tests `Release|x64`：0 错误；NuGet 漏洞源访问产生既有 `NU1900` 警告。
+- [x] Stage3-A 专项测试：54/54 通过。
+- [x] Native `Release|Win32`：0 错误，0 警告，`MACHINE:X86`。
+- [x] `dumpbin /exports`：25 个导出，与 `HZCYKJTHardWare.def` 25 项一致，缺失/多余均为 0。
+- [x] 全量测试：189 通过、12 失败、0 跳过；失败仍为既有版本断言、当前运行时不支持 `HttpListener` 及一个既有回调时序断言。
+- [ ] 初始离线、Restart-during-recovery、Stop-during-recovery、RJ2/RJ3/Iris：现场验证 OPEN。
+- [ ] 连续 2 小时长稳：OPEN。
+- [ ] 连续 24 小时长稳：OPEN。
+
+### Separate OPEN Issue
+
+- [ ] OCR `RequestSession` 10 秒 timeout 与真实约 20 秒回调时序不匹配；本轮不处理。
+
+### 回退方式
+
+回退本次 Stage3-A Final Closeout 提交即可恢复本轮并发边界、日志收口和 Native SavePath 日志调整；不涉及 Native ABI 或对外 API 回退。

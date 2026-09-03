@@ -68,6 +68,48 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
+        public async Task RecoveryCandidate_UsesEightSecondRenderedFrameTimeout()
+        {
+            var hwnd = CreateWindowEx(0, "STATIC", "mjpeg-candidate-timeout",
+                WS_POPUP, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero,
+                GetModuleHandle(null), IntPtr.Zero);
+            Assert.AreNotEqual(IntPtr.Zero, hwnd);
+
+            try
+            {
+                using (var server = new MjpegTestServer(Color.Gray))
+                {
+                    var controller = await MjpegPreviewController.StartAsync(
+                        "candidate-timeout-test", server.Url, hwnd,
+                        2, 2, false, true, 3000,
+                        directRenderTarget: true).ConfigureAwait(false);
+                    Assert.IsNotNull(controller);
+                    try
+                    {
+                        Assert.IsTrue(controller.IsRunning);
+                        var startedAt = DateTime.UtcNow;
+                        var readiness = await PreviewManager.WaitForMjpegRecoveryCandidateAsync(
+                            controller, CancellationToken.None).ConfigureAwait(false);
+
+                        Assert.IsNotNull(readiness);
+                        Assert.IsFalse(readiness.Succeeded);
+                        StringAssert.Contains(readiness.FailureReason, "8000ms");
+                        Assert.IsTrue((DateTime.UtcNow - startedAt).TotalMilliseconds >= 7000,
+                            "候选绘制等待应覆盖配置的 8 秒上限");
+                    }
+                    finally
+                    {
+                        await controller.DisposeAsync(3000).ConfigureAwait(false);
+                    }
+                }
+            }
+            finally
+            {
+                DestroyWindow(hwnd);
+            }
+        }
+
+        [TestMethod]
         public async Task DestroyedRenderTarget_ReportsTargetFailureWithoutStreamRecovery()
         {
             using (var server = new MjpegTestServer(Color.Green))
