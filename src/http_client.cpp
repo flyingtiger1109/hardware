@@ -124,17 +124,36 @@ bool HttpClient::PostJson(const std::string& url,
                          &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
     responseStatusCode = (int)statusCode;
 
-    // 读取响应体
+    // 读取响应体：任何读取阶段错误都必须按网络失败返回，不能将部分响应视为完整响应。
     DWORD bytesAvailable = 0;
     char buffer[4096];
-    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
+    while (true) {
+        if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) {
+            const DWORD error = GetLastError();
+            LOG_DEBUG_RATE_LIMITED("HTTP|POST|read_available", "HTTP请求",
+                "HTTP响应长度查询失败：Stage=QueryDataAvailable，Error=%lu，"
+                "RequestId=%s，ReceivedBytes=%zu，地址=%s",
+                error, requestIdForLog, responseBody.size(), safeUrl.c_str());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return false;
+        }
+        if (bytesAvailable == 0) break;
+
         DWORD bytesToRead = (bytesAvailable < sizeof(buffer) - 1) ? bytesAvailable : sizeof(buffer) - 1;
         DWORD bytesRead = 0;
-        if (WinHttpReadData(hRequest, buffer, bytesToRead, &bytesRead)) {
-            responseBody.append(buffer, bytesRead);
-        } else {
-            break;
+        if (!WinHttpReadData(hRequest, buffer, bytesToRead, &bytesRead)) {
+            const DWORD error = GetLastError();
+            LOG_DEBUG_RATE_LIMITED("HTTP|POST|read", "HTTP请求",
+                "HTTP响应读取失败：Stage=ReadData，Error=%lu，"
+                "RequestId=%s，ReceivedBytes=%zu，地址=%s",
+                error, requestIdForLog, responseBody.size(), safeUrl.c_str());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return false;
         }
+        if (bytesRead == 0) break;
+        responseBody.append(buffer, bytesRead);
     }
 
     WinHttpCloseHandle(hRequest);
@@ -448,14 +467,35 @@ bool HttpClient::Get(const std::string& url,
 
     DWORD bytesAvailable = 0;
     char buffer[4096];
-    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
+    while (true) {
+        if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) {
+            const DWORD error = GetLastError();
+            if (!quiet)
+                LOG_DEBUG_RATE_LIMITED("HTTP|GET|read_available", "HTTP请求",
+                    "HTTP GET响应长度查询失败：Stage=QueryDataAvailable，Error=%lu，"
+                    "ReceivedBytes=%zu，url=%s",
+                    error, responseBody.size(), safeUrl.c_str());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return false;
+        }
+        if (bytesAvailable == 0) break;
+
         DWORD bytesToRead = (bytesAvailable < sizeof(buffer) - 1) ? bytesAvailable : sizeof(buffer) - 1;
         DWORD bytesRead = 0;
-        if (WinHttpReadData(hRequest, buffer, bytesToRead, &bytesRead)) {
-            responseBody.append(buffer, bytesRead);
-        } else {
-            break;
+        if (!WinHttpReadData(hRequest, buffer, bytesToRead, &bytesRead)) {
+            const DWORD error = GetLastError();
+            if (!quiet)
+                LOG_DEBUG_RATE_LIMITED("HTTP|GET|read", "HTTP请求",
+                    "HTTP GET响应读取失败：Stage=ReadData，Error=%lu，"
+                    "ReceivedBytes=%zu，url=%s",
+                    error, responseBody.size(), safeUrl.c_str());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return false;
         }
+        if (bytesRead == 0) break;
+        responseBody.append(buffer, bytesRead);
     }
 
     WinHttpCloseHandle(hRequest);

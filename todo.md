@@ -2205,6 +2205,26 @@ Stage3-A 代码整改与自动化验证完成；现场故障注入、2h 和 24h 
 - R1.2 `Preview Protocol Recovery Separation`：PENDING；本次明确禁止实施，不拆分 RTSP/VLC 与 HTTP/MJPEG Recovery 架构。
 - 回退：仅回退 Stage3-A 相关提交或执行对应 `git revert`；不执行宽范围 reset，不覆盖已有用户未提交文档、生成物和图片。
 
+## Stage 4.1 / N2 WinHTTP Response Integrity (2026-09-04)
+
+### N2-A
+
+- [x] PostJson QueryDataAvailable failure returns false after capturing the WinHTTP error.
+- [x] PostJson ReadData failure returns false after capturing the WinHTTP error.
+- [x] Get QueryDataAvailable failure returns false after capturing the WinHTTP error.
+- [x] Get ReadData failure returns false after capturing the WinHTTP error.
+- [x] PostBinary reviewed; existing read-failure and response-size handling was not changed.
+- [x] Response Body Limit evaluated; deferred to N2-B because no reliable common JSON/GET limit was established.
+- [x] Native PostJson/Get callers reviewed for existing false propagation.
+- [x] Native Release|Win32/x86 build completed with 0 errors and 0 warnings.
+- [ ] Fault injection for QueryDataAvailable/ReadData failure.
+- [ ] Real-device and field regression validation.
+
+### Compatibility
+
+- DLL ABI, exports, Delphi7 calling convention, HTTP protocol, Proxy API, and Timeout settings unchanged.
+- Modified source scope: `src/http_client.cpp` only.
+
 ## Stage3-A Final Logging Closure（2026-09-03）
 
 ### 当前阶段
