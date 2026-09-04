@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Text;
 using HZCYKJTHardWare.Proxy.Infrastructure;
+using HZCYKJTHardWare.Proxy.Preview;
+using HZCYKJTHardWare.Proxy.Server;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
@@ -80,6 +82,61 @@ namespace HZCYKJTHardWare.Proxy.Tests.Infrastructure
             Assert.AreEqual(
                 "[健康检查][信息] HTTP GET /ping完成",
                 Logger.NormalizeForDisplay("[HTTP请求] HTTP GET /ping完成"));
+        }
+
+        [TestMethod]
+        public void InitialOfflineRecoveringBoundary_IsDebugOnlyAfterRecoveryWarning()
+        {
+            var recoveryWarning = Logger.FormatModuleMessage(LogModules.Preview, "警告",
+                "摄像头预览出现预览故障，正在自动恢复：RequestId=OFF-001 " +
+                "ErrorCode=preview_url_failed");
+            var startupRecovering = Logger.FormatModuleMessage(LogModules.Preview,
+                DllCommandHandler.PreviewStartOutcomeLogLevel(
+                    ExternalPreviewStartupState.Recovering),
+                "摄像头预览启动暂未就绪，Preview Lease已保留并继续自动恢复：" +
+                "Operation=StartCameraPreview RequestId=OFF-001 " +
+                "Result=Recovering ErrorCode=preview_recovering");
+
+            Assert.AreEqual("调试", DllCommandHandler.PreviewStartOutcomeLogLevel(
+                ExternalPreviewStartupState.Recovering));
+            StringAssert.StartsWith(recoveryWarning, "[预览][警告]");
+            StringAssert.StartsWith(startupRecovering, "[预览][调试]");
+            Assert.IsFalse(startupRecovering.StartsWith("[预览][警告]"));
+        }
+
+        [TestMethod]
+        public void FastInitialRecovery_HasOnlyRecoveryProductionSuccess()
+        {
+            var recoverySuccess = Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                "摄像头预览已恢复：RequestId=FAST-001");
+            var startupRunning = Logger.FormatModuleMessage(LogModules.Preview,
+                DllCommandHandler.PreviewStartOutcomeLogLevel(
+                    ExternalPreviewStartupState.Running),
+                "摄像头预览已在恢复期间就绪：Operation=StartCameraPreview " +
+                "RequestId=FAST-001 Result=Success");
+            var combined = recoverySuccess + Environment.NewLine + startupRunning;
+
+            Assert.AreEqual("调试", DllCommandHandler.PreviewStartOutcomeLogLevel(
+                ExternalPreviewStartupState.Running));
+            Assert.AreEqual(1, CountOccurrences(combined, "[预览][信息]"));
+            Assert.IsTrue(startupRunning.StartsWith("[预览][调试]"));
+        }
+
+        [TestMethod]
+        public void NormalInitialStartAndTerminalFailureKeepProductionLevels()
+        {
+            var normalStart = Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                "摄像头画面已开始显示：Operation=StartCameraPreview " +
+                "RequestId=NORMAL-001 Result=Success");
+            var terminalFailure = Logger.FormatModuleMessage(LogModules.Preview, "错误",
+                "摄像头预览启动失败：Operation=StartCameraPreview " +
+                "RequestId=TERM-001 Result=Failed ErrorCode=invalid_target_hwnd");
+
+            Assert.AreEqual("错误", DllCommandHandler.PreviewStartOutcomeLogLevel(
+                ExternalPreviewStartupState.TerminalFailure));
+            StringAssert.StartsWith(normalStart, "[预览][信息]");
+            StringAssert.StartsWith(terminalFailure, "[预览][错误]");
+            Assert.IsFalse(terminalFailure.Contains("preview_recovering"));
         }
 
         [TestMethod]

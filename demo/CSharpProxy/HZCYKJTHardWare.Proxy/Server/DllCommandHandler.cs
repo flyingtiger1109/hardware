@@ -106,6 +106,15 @@ namespace HZCYKJTHardWare.Proxy.Server
             }
         }
 
+        internal static string PreviewStartOutcomeLogLevel(
+            ExternalPreviewStartupState startupState)
+        {
+            return startupState == ExternalPreviewStartupState.Recovering ||
+                   startupState == ExternalPreviewStartupState.Running
+                ? "调试"
+                : "错误";
+        }
+
         private async Task NotifyPreviewStartOutcomeAsync(
             PreviewResourceType resourceType, string resourceName, long hwndValue,
             string callbackUrl, string requestId, string failureCode,
@@ -119,7 +128,8 @@ namespace HZCYKJTHardWare.Proxy.Server
                     await _dllCallback.SendPreviewReady(requestId, resourceName,
                         new IntPtr(hwndValue), IntPtr.Zero).ConfigureAwait(false);
 
-                _log(Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                _log(Logger.FormatModuleMessage(LogModules.Preview,
+                    PreviewStartOutcomeLogLevel(startupState),
                     $"{FormatPreviewResource(resourceType)}预览已在恢复期间就绪：" +
                     $"Operation={PreviewOperation(resourceType, true)} RequestId={FormatRequestId(requestId)} " +
                     $"Result=Success DurationMs={durationMs}，HWND={FormatHwnd(hwndValue)}"));
@@ -137,7 +147,7 @@ namespace HZCYKJTHardWare.Proxy.Server
                         effectiveErrorCode, recovering)).ConfigureAwait(false);
             }
 
-            var level = recovering ? "警告" : "错误";
+            var level = PreviewStartOutcomeLogLevel(startupState);
             var result = recovering ? "Recovering" : "Failed";
             var description = recovering
                 ? $"{FormatPreviewResource(resourceType)}预览启动暂未就绪，已保留Preview Lease并继续自动恢复："

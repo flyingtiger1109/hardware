@@ -529,3 +529,31 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 ### 回退方式
 
 回退本次 RC4 提交即可恢复 RC4 的跨层 Preview Lease、Recovery episode 计数和生命周期测试变更；不涉及 Native ABI 或导出表回退。
+
+## Stage3-A Final Logging Closeout
+
+### 已完成
+
+- [x] Initial Offline Recovery production WARN ownership unified under `RecoveryEpisode`。
+- [x] Startup Recovering boundary log moved to DEBUG。
+- [x] Fast Initial Recovery duplicate production INFO removed（保留已有内部回调语义，不新增 Recovery 成功回调）。
+- [x] `preview_recovering` internal callback semantics preserved。
+- [x] Normal Initial Start success log preserved。
+
+### 本轮范围
+
+- `Server/DllCommandHandler.cs`：仅调整 Initial Recovery 结果边界的日志级别映射。
+- `Tests/Infrastructure/LoggerTests.cs`：补充 Initial Offline WARN 去重、快速恢复 INFO 去重、正常启动和终止失败级别断言。
+- Native source unchanged；Preview Recovery 主逻辑、Lease、Callback、Backoff、ABI 和 exports unchanged。
+
+### 验证状态
+
+- [x] Logger / Preview 专项测试（VSTest）：68/68 通过。
+- [x] Proxy `Release|x64`：编译通过，0 个警告，0 个错误。
+- [x] Tests `Release|x64`：编译通过，1 个 `NU1900` 警告，0 个错误。
+
+### OPEN
+
+- [ ] Initial Offline field log verification。
+- [ ] 2h soak。
+- [ ] 24h soak。
