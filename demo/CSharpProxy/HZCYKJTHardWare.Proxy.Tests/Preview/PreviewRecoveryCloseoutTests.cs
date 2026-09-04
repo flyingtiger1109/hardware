@@ -30,6 +30,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                     "瞬时网络失败不能删除 Desired Running 会话");
                 Assert.IsTrue(await WaitUntilAsync(
                     () => manager.ActiveRecoveryCount > 0, 2000).ConfigureAwait(false));
+                Assert.AreEqual(ExternalPreviewStartupState.Recovering,
+                    manager.GetExternalPreviewStartupState(
+                        PreviewResourceType.Camera, PreviewSessionType.External,
+                        "initial-offline"));
                 Assert.IsFalse(manager.IsPreviewRunning(
                     PreviewResourceType.Camera, PreviewSessionType.External));
 
@@ -38,6 +42,10 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                     .ConfigureAwait(false));
                 Assert.AreEqual(0, manager.ActiveSessionCount);
                 Assert.AreEqual(0, manager.ActiveRecoveryCount);
+                Assert.AreEqual(ExternalPreviewStartupState.TerminalFailure,
+                    manager.GetExternalPreviewStartupState(
+                        PreviewResourceType.Camera, PreviewSessionType.External,
+                        "initial-offline"));
             }
         }
 

@@ -52,6 +52,24 @@ namespace HZCYKJTHardWare.Proxy.Server
             return PreviewManager.FormatHwnd(new IntPtr(hwndValue));
         }
 
+        internal static string BuildPreviewStartFailurePayload(string requestId,
+            string resourceName, long renderHwnd, string errorCode, bool recovering)
+        {
+            var effectiveErrorCode = recovering
+                ? "preview_recovering"
+                : (string.IsNullOrWhiteSpace(errorCode) ? "preview_failed" : errorCode);
+            var payload = "{\"request_id\":\"" +
+                JsonHelper.EscapeString(requestId) +
+                "\",\"resource_type\":\"" +
+                JsonHelper.EscapeString(resourceName) +
+                "\",\"render_hwnd\":" + renderHwnd +
+                ",\"error\":true,\"code\":\"" +
+                JsonHelper.EscapeString(effectiveErrorCode) + "\"";
+            if (recovering)
+                payload += ",\"recovering\":true";
+            return payload + "}";
+        }
+
         private static string FormatPreviewResource(PreviewResourceType resourceType)
         {
             switch (resourceType)
@@ -86,6 +104,52 @@ namespace HZCYKJTHardWare.Proxy.Server
                 default:
                     return start ? "StartPreview" : "StopPreview";
             }
+        }
+
+        private async Task NotifyPreviewStartOutcomeAsync(
+            PreviewResourceType resourceType, string resourceName, long hwndValue,
+            string callbackUrl, string requestId, string failureCode,
+            string failureDetail, long durationMs)
+        {
+            var startupState = _previewManager.GetExternalPreviewStartupState(
+                resourceType, PreviewSessionType.External, requestId);
+            if (startupState == ExternalPreviewStartupState.Running)
+            {
+                if (!string.IsNullOrEmpty(callbackUrl))
+                    await _dllCallback.SendPreviewReady(requestId, resourceName,
+                        new IntPtr(hwndValue), IntPtr.Zero).ConfigureAwait(false);
+
+                _log(Logger.FormatModuleMessage(LogModules.Preview, "信息",
+                    $"{FormatPreviewResource(resourceType)}预览已在恢复期间就绪：" +
+                    $"Operation={PreviewOperation(resourceType, true)} RequestId={FormatRequestId(requestId)} " +
+                    $"Result=Success DurationMs={durationMs}，HWND={FormatHwnd(hwndValue)}"));
+                return;
+            }
+
+            var recovering = startupState == ExternalPreviewStartupState.Recovering;
+            var effectiveErrorCode = recovering
+                ? "preview_recovering"
+                : (string.IsNullOrWhiteSpace(failureCode) ? "preview_failed" : failureCode);
+            if (!string.IsNullOrEmpty(callbackUrl))
+            {
+                await _dllCallback.PostCallbackRaw("/preview-ready",
+                    BuildPreviewStartFailurePayload(requestId, resourceName, hwndValue,
+                        effectiveErrorCode, recovering)).ConfigureAwait(false);
+            }
+
+            var level = recovering ? "警告" : "错误";
+            var result = recovering ? "Recovering" : "Failed";
+            var description = recovering
+                ? $"{FormatPreviewResource(resourceType)}预览启动暂未就绪，已保留Preview Lease并继续自动恢复："
+                : $"{FormatPreviewResource(resourceType)}预览启动失败：";
+            var detail = !recovering && !string.IsNullOrWhiteSpace(failureDetail)
+                ? "，错误=" + JsonHelper.ToLogValue(failureDetail)
+                : "";
+            _log(Logger.FormatModuleMessage(LogModules.Preview, level,
+                description +
+                $"Operation={PreviewOperation(resourceType, true)} RequestId={FormatRequestId(requestId)} " +
+                $"Result={result} ErrorCode={effectiveErrorCode} DurationMs={durationMs}，" +
+                $"HWND={FormatHwnd(hwndValue)}" + detail));
         }
 
         internal DllCommandHandler(
@@ -994,13 +1058,13 @@ namespace HZCYKJTHardWare.Proxy.Server
             var previewSw = Stopwatch.StartNew();
             var taskAccepted = _taskTracker.TryRun(async () =>
             {
+                Func<bool> shouldContinue = () =>
+                    !routeEpoch.IsCancellationRequested &&
+                    !_queueManager.SwitchingTerminal &&
+                    _queueManager.IsGenerationValid(routeEpoch.Generation);
+
                 try
                 {
-                    Func<bool> shouldContinue = () =>
-                        !routeEpoch.IsCancellationRequested &&
-                        !_queueManager.SwitchingTerminal &&
-                        _queueManager.IsGenerationValid(routeEpoch.Generation);
-
                     if (!shouldContinue())
                     {
                         _log($"[预览管理][调试] 外部预览已跳过：资源={FormatPreviewResource(resType)}，request_id={requestTrace}，" +
@@ -1051,35 +1115,26 @@ namespace HZCYKJTHardWare.Proxy.Server
                             return;
                         }
 
-                        if (!string.IsNullOrEmpty(callbackUrl))
-                        {
-                            var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) + "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" + hwndValue + ",\"error\":true,\"code\":\"preview_failed\"}";
-                            await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
-                        }
-                        _log(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                            $"{FormatPreviewResource(resType)}预览启动失败：" +
-                            $"Operation={PreviewOperation(resType, true)} RequestId={requestTrace} " +
-                            $"Result=Failed ErrorCode=preview_failed DurationMs={previewSw.ElapsedMilliseconds}，" +
-                            $"HWND={FormatHwnd(hwndValue)}"));
+                        await NotifyPreviewStartOutcomeAsync(
+                            resType, resourceName, hwndValue, callbackUrl, requestId,
+                            "preview_failed", null,
+                            previewSw.ElapsedMilliseconds).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
                 {
                     await TryCleanupFailedPreviewAsync(
                         resType, requestId).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(callbackUrl))
+                    if (!shouldContinue())
                     {
-                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
-                            "\",\"resource_type\":\"" + resourceName + "\",\"render_hwnd\":" +
-                            hwndValue + ",\"error\":true,\"code\":\"preview_exception\"}";
-                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload)
-                            .ConfigureAwait(false);
+                        _log($"[预览管理][调试] 外部预览启动异常已过期，跳过失败回调：资源={FormatPreviewResource(resType)}，" +
+                             $"request_id={requestTrace}，HWND={FormatHwnd(hwndValue)}，耗时={previewSw.ElapsedMilliseconds}ms");
+                        return;
                     }
-                    _log(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                        $"{FormatPreviewResource(resType)}预览启动异常：" +
-                        $"Operation={PreviewOperation(resType, true)} RequestId={requestTrace} " +
-                        $"Result=Failed ErrorCode=preview_exception DurationMs={previewSw.ElapsedMilliseconds}，" +
-                        $"HWND={FormatHwnd(hwndValue)}，错误={JsonHelper.ToLogValue(ex.Message)}"));
+                    await NotifyPreviewStartOutcomeAsync(
+                        resType, resourceName, hwndValue, callbackUrl, requestId,
+                        "preview_exception", ex.Message,
+                        previewSw.ElapsedMilliseconds).ConfigureAwait(false);
                 }
             }, "preview_start_external");
 
@@ -1168,35 +1223,19 @@ namespace HZCYKJTHardWare.Proxy.Server
                     await TryCleanupFailedPreviewAsync(
                         resourceType, requestId).ConfigureAwait(false);
 
-                    if (!string.IsNullOrEmpty(callbackUrl))
-                    {
-                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
-                            "\",\"resource_type\":\"plate_image\",\"render_hwnd\":" + hwndValue +
-                            ",\"error\":true,\"code\":\"preview_failed\"}";
-                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
-                    }
-                    _log(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                        $"车牌{plateCode.ToUpperInvariant()}预览启动失败：" +
-                        $"Operation={PreviewOperation(resourceType, true)} RequestId={requestTrace} " +
-                        $"Result=Failed ErrorCode=preview_failed DurationMs={previewSw.ElapsedMilliseconds}，" +
-                        $"HWND={FormatHwnd(hwndValue)}"));
+                    await NotifyPreviewStartOutcomeAsync(
+                        resourceType, "plate_image", hwndValue, callbackUrl, requestId,
+                        "preview_failed", null,
+                        previewSw.ElapsedMilliseconds).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     await TryCleanupFailedPreviewAsync(
                         resourceType, requestId).ConfigureAwait(false);
-                    _log(Logger.FormatModuleMessage(LogModules.Preview, "错误",
-                        $"车牌{plateCode.ToUpperInvariant()}预览启动异常：" +
-                        $"Operation={PreviewOperation(resourceType, true)} RequestId={requestTrace} " +
-                        $"Result=Failed ErrorCode=preview_exception DurationMs={previewSw.ElapsedMilliseconds}，" +
-                        $"HWND={FormatHwnd(hwndValue)}，错误={JsonHelper.ToLogValue(ex.Message)}"));
-                    if (!string.IsNullOrEmpty(callbackUrl))
-                    {
-                        var errPayload = "{\"request_id\":\"" + JsonHelper.EscapeString(requestId) +
-                            "\",\"resource_type\":\"plate_image\",\"render_hwnd\":" + hwndValue +
-                            ",\"error\":true,\"code\":\"preview_exception\"}";
-                        await _dllCallback.PostCallbackRaw("/preview-ready", errPayload).ConfigureAwait(false);
-                    }
+                    await NotifyPreviewStartOutcomeAsync(
+                        resourceType, "plate_image", hwndValue, callbackUrl, requestId,
+                        "preview_exception", ex.Message,
+                        previewSw.ElapsedMilliseconds).ConfigureAwait(false);
                 }
             }, "preview_start_plate_" + plateCode + "_external");
 

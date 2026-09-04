@@ -49,6 +49,12 @@ static bool IsDelphiErrorResponse(const std::string& body, std::string& errorCod
     return true;
 }
 
+static bool IsRecoveringPreviewResponse(const std::string& body,
+                                         const std::string& errorCode) {
+    return errorCode == "preview_recovering" ||
+           JsonHelper::GetBool(body, "recovering", false);
+}
+
 static std::string LogValue(const std::string& value, size_t maxLength = 256) {
     std::string result;
     result.reserve(value.size());
@@ -1111,6 +1117,15 @@ void EventDispatcher::ProcessPreviewReadyCallback(const std::string& requestId,
     // 检查异步预览失败回调（适配硬件控制程序 468157e TAsyncStartPreviewThread）
     std::string errorCode, errorMsg;
     if (IsDelphiErrorResponse(body, errorCode, errorMsg)) {
+        if (IsRecoveringPreviewResponse(body, errorCode)) {
+            LOG_DEBUG("事件分发",
+                      "预览仍在自动恢复，保留DLL预览租约：Operation=PreviewReady "
+                      "RequestId=%s Result=Recovering ErrorCode=%s",
+                      requestId.c_str(),
+                      errorCode.empty() ? "preview_recovering" : errorCode.c_str());
+            return;
+        }
+
         int failedEventType = HZCYKJTHardWare_EVENT_CAMERA_PREVIEW_FAILED;
         if (resourceType == HZCYKJTHardWare_RESOURCE_FINGERPRINT_IMAGE) {
             failedEventType = HZCYKJTHardWare_EVENT_FINGERPRINT_PREVIEW_FAILED;

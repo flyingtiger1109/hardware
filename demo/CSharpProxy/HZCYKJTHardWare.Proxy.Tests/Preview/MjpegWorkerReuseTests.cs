@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -196,6 +197,59 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         }
 
         [TestMethod]
+        public async Task PreviewManager_SessionReplacementKeepsNewRecoveryState()
+        {
+            var offlinePort = GetUnusedPort();
+            using (var server = new MjpegTestServer(Color.Pink))
+            using (var client = new TerminalClient())
+            using (var host = new Form())
+            using (var manager = new PreviewManager(client))
+            {
+                host.CreateControl();
+                host.Show();
+                Application.DoEvents();
+
+                var firstStarted = await manager.StartPreview(
+                    PreviewResourceType.Camera, PreviewSessionType.External,
+                    host.Handle, "http://127.0.0.1:" + offlinePort,
+                    requestId: "replacement-A").ConfigureAwait(false);
+                Assert.IsFalse(firstStarted);
+                Assert.AreEqual(1, manager.ActiveSessionCount);
+                Assert.IsTrue(await WaitUntilAsync(
+                    () => manager.ActiveRecoveryCount > 0, 3000).ConfigureAwait(false));
+
+                var replacementStarted = await manager.StartPreview(
+                    PreviewResourceType.Camera, PreviewSessionType.External,
+                    host.Handle, "", explicitPreviewUrl: server.Url,
+                    requestId: "replacement-B").ConfigureAwait(false);
+                Assert.IsTrue(replacementStarted);
+                Assert.AreEqual(1, manager.ActiveSessionCount);
+                Assert.AreEqual(0, manager.ActiveRecoveryCount);
+
+                server.SetStreaming(false);
+                Assert.IsTrue(await WaitUntilAsync(
+                    () => manager.ActiveRecoveryCount > 0, 6000).ConfigureAwait(false));
+                Assert.AreEqual(1, manager.ActiveSessionCount,
+                    "旧 Recovery 的 finally 不能移除替代会话");
+
+                server.SetStreaming(true);
+                Assert.IsTrue(await WaitUntilAsync(
+                    () => manager.IsPreviewRunning(
+                        PreviewResourceType.Camera, PreviewSessionType.External),
+                    15000).ConfigureAwait(false));
+
+                Assert.IsTrue(await manager.StopPreviewAsync(
+                    PreviewResourceType.Camera, PreviewSessionType.External)
+                    .ConfigureAwait(false));
+                Assert.AreEqual(0, manager.ActiveSessionCount);
+                Assert.AreEqual(0, manager.ActiveRecoveryCount);
+                await Task.Delay(250).ConfigureAwait(false);
+                Assert.AreEqual(0, manager.ActiveSessionCount);
+                Assert.AreEqual(0, manager.ActiveRecoveryCount);
+            }
+        }
+
+        [TestMethod]
         public async Task ZeroClientRect_WaitsForRenderRetryWithoutRecreatingStream()
         {
             var hwnd = CreateWindowEx(0, "STATIC", "mjpeg-zero-target",
@@ -260,12 +314,42 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
         private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_NOACTIVATE = 0x0010;
 
+        private static async Task<bool> WaitUntilAsync(Func<bool> condition,
+            int timeoutMs)
+        {
+            var end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < end)
+            {
+                if (condition())
+                    return true;
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+            return condition();
+        }
+
+        private static int GetUnusedPort()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                return ((IPEndPoint)listener.LocalEndpoint).Port;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
         private sealed class MjpegTestServer : IDisposable
         {
             private readonly TcpListener _listener;
             private readonly CancellationTokenSource _cts = new CancellationTokenSource();
             private readonly byte[] _jpeg;
             private readonly Task _acceptTask;
+            private readonly ConcurrentDictionary<TcpClient, byte> _clients =
+                new ConcurrentDictionary<TcpClient, byte>();
+            private int _streaming = 1;
 
             internal MjpegTestServer(Color color)
             {
@@ -287,6 +371,19 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
 
             internal string Url { get; }
 
+            internal void SetStreaming(bool enabled)
+            {
+                Interlocked.Exchange(ref _streaming, enabled ? 1 : 0);
+                if (enabled)
+                    return;
+
+                foreach (var client in _clients.Keys)
+                {
+                    try { client.Close(); }
+                    catch (ObjectDisposedException) { }
+                }
+            }
+
             private async Task AcceptLoopAsync(CancellationToken cancellationToken)
             {
                 while (!cancellationToken.IsCancellationRequested)
@@ -307,6 +404,7 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                         throw;
                     }
 
+                    _clients.TryAdd(client, 0);
                     _ = Task.Run(() => ServeClientAsync(client, cancellationToken));
                 }
             }
@@ -326,9 +424,13 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
 
                     try
                     {
+                        if (Volatile.Read(ref _streaming) == 0)
+                            return;
+
                         await stream.WriteAsync(header, 0, header.Length, cancellationToken)
                             .ConfigureAwait(false);
-                        while (!cancellationToken.IsCancellationRequested)
+                        while (!cancellationToken.IsCancellationRequested &&
+                               Volatile.Read(ref _streaming) != 0)
                         {
                             await stream.WriteAsync(frameHeader, 0, frameHeader.Length, cancellationToken)
                                 .ConfigureAwait(false);
@@ -349,11 +451,16 @@ namespace HZCYKJTHardWare.Proxy.Tests.Preview
                     catch (ObjectDisposedException)
                     {
                     }
+                    finally
+                    {
+                        _clients.TryRemove(client, out _);
+                    }
                 }
             }
 
             public void Dispose()
             {
+                SetStreaming(false);
                 _cts.Cancel();
                 _listener.Stop();
                 try { _acceptTask.GetAwaiter().GetResult(); }

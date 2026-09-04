@@ -31,6 +31,13 @@ namespace HZCYKJTHardWare.Proxy.Preview
         External
     }
 
+    internal enum ExternalPreviewStartupState
+    {
+        TerminalFailure,
+        Recovering,
+        Running
+    }
+
     public class PreviewSession
     {
         public IPreviewController Player { get; set; }
@@ -49,6 +56,7 @@ namespace HZCYKJTHardWare.Proxy.Preview
         internal string ExplicitPreviewUrl { get; set; }
         internal bool TerminalBound { get; set; }
         internal bool DirectRenderTarget { get; set; }
+        internal bool InitialRecoveryScheduled { get; set; }
     }
 
     internal sealed class PreviewRestartInfo
@@ -1413,12 +1421,31 @@ namespace HZCYKJTHardWare.Proxy.Preview
                    IsExternalHostCurrent(session);
         }
 
+        internal ExternalPreviewStartupState GetExternalPreviewStartupState(
+            PreviewResourceType resType, PreviewSessionType sessionType,
+            string requestId)
+        {
+            var key = SessionKey(resType, sessionType);
+            if (sessionType != PreviewSessionType.External ||
+                !_sessions.TryGetValue(key, out var session) || session == null ||
+                !string.Equals(session.RequestId, requestId, StringComparison.Ordinal) ||
+                !session.InitialRecoveryScheduled ||
+                !CanContinueRecovery(session) ||
+                !IsPreviewTargetUsable(session))
+                return ExternalPreviewStartupState.TerminalFailure;
+
+            return session.Player != null && session.IsRunning
+                ? ExternalPreviewStartupState.Running
+                : ExternalPreviewStartupState.Recovering;
+        }
+
         private void ScheduleInitialRecovery(PreviewSession session,
             bool isHttpPreview, MjpegFailureKind failureKind, string reason)
         {
             if (session == null || failureKind == MjpegFailureKind.RenderTargetFailure)
                 return;
 
+            session.InitialRecoveryScheduled = true;
             var key = SessionKey(session.ResourceType, session.SessionType);
             if (isHttpPreview || IsTerminalMjpegResource(session.ResourceType))
             {
@@ -1767,8 +1794,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
         private bool TrySubmitRecoveryWork(RecoveryState recoveryState,
             Func<Task> work, string label)
         {
-            if (recoveryState == null || recoveryState.Token.IsCancellationRequested ||
-                Volatile.Read(ref recoveryState.Completed) != 0)
+            if (!IsRecoveryStateCurrent(recoveryState) ||
+                recoveryState.Token.IsCancellationRequested)
                 return false;
 
             if (_taskTracker != null)
@@ -1821,10 +1848,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
             var schedulerAttempt = 0;
             try
             {
-                while (!recoveryState.Token.IsCancellationRequested &&
+                while (IsRecoveryStateCurrent(recoveryState) &&
+                       !recoveryState.Token.IsCancellationRequested &&
                        Volatile.Read(ref recoveryState.WorkSubmitted) == 0)
                 {
                     schedulerAttempt = PreviewRecoveryPolicy.NextAttempt(schedulerAttempt);
+                    if (!TryRecordMjpegFailureForRecovery(
+                            recoveryState, "task_queue_busy"))
+                        break;
+
                     LogPreviewRecoveryAttempt(recoveryState.SessionKey,
                         recoveryState.EpisodeId, resourceName, operation, requestId,
                         "task_queue_busy", protocol, schedulerAttempt,
@@ -1848,6 +1880,16 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (Volatile.Read(ref recoveryState.WorkSubmitted) == 0)
                     CompleteRecovery(recoveryState);
             }
+        }
+
+        private bool IsRecoveryStateCurrent(RecoveryState recoveryState)
+        {
+            if (recoveryState == null ||
+                Volatile.Read(ref recoveryState.Completed) != 0)
+                return false;
+
+            return _activeRecoveries.TryGetValue(recoveryState.RecoveryKey,
+                out var current) && ReferenceEquals(current, recoveryState);
         }
 
         private void ScheduleVlcRecovery(string key, PreviewSession expectedSession,
@@ -2369,6 +2411,34 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     : reason;
             }
             return episode;
+        }
+
+        private bool TryRecordMjpegFailureForRecovery(
+            RecoveryState recoveryState, string reason)
+        {
+            if (!IsRecoveryStateCurrent(recoveryState) ||
+                !_mjpegRecoveryEpisodes.TryGetValue(recoveryState.SessionKey,
+                    out var episode) || episode == null)
+                return false;
+
+            lock (episode)
+            {
+                if (!IsRecoveryStateCurrent(recoveryState) ||
+                    episode.Id != recoveryState.EpisodeId)
+                    return false;
+
+                var now = DateTime.UtcNow;
+                if (episode.FailureCount == 0)
+                    episode.FirstFailureUtc = now;
+                episode.LastFailureUtc = now;
+                if (episode.FailureCount < int.MaxValue)
+                    episode.FailureCount++;
+                episode.LastFailureKind = MjpegFailureKind.StreamFailure;
+                episode.LastError = string.IsNullOrWhiteSpace(reason)
+                    ? "MJPEG故障"
+                    : reason;
+                return true;
+            }
         }
 
         private bool TryAdvanceMjpegRecoveryAttempt(string key, long episodeId,
@@ -3045,6 +3115,11 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 if (_sessions.TryGetValue(key, out var session))
                 {
                     if (!string.Equals(session.RequestId, requestId, StringComparison.Ordinal))
+                        return false;
+
+                    // 初始 Recovery 已经接管该 Desired Running 会话；即使播放器
+                    // 在外层 StartPreview 返回前完成重建，也不能被失败回调清理掉。
+                    if (session.InitialRecoveryScheduled || IsRecoveryActive(key))
                         return false;
 
                     // 初始网络/设备故障时，Session 代表仍然有效的 Desired Running

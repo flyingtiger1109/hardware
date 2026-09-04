@@ -475,3 +475,57 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 ### 回退方式
 
 回退本次 Stage3-A Final Closeout 提交即可恢复本轮并发边界、日志收口和 Native SavePath 日志调整；不涉及 Native ABI 或对外 API 回退。
+
+## 2026-09-04 Stage3-A Final Closeout RC4
+
+### 收口目标
+
+解决初始离线启动时 Proxy Desired Running 会话与 Native DLL Preview Lease 分裂的问题，补齐 Recovery 任务队列拒绝的 episode 计数，并增加真实 Session Replacement 生命周期回归覆盖。
+
+### 已完成内容
+
+- [x] 初始可恢复启动失败保留 `PreviewSession` 的 `InitialRecoveryScheduled` 状态，并由 Proxy 统一区分 `TerminalFailure`、`Recovering`、`Running`。
+- [x] Camera、Fingerprint、Iris、PlateCJ、PlateRJ2、PlateRJ3 共用 `/preview-ready` 的 `preview_recovering` 回调语义；恢复中不再发送终止失败含义。
+- [x] Native `EventDispatcher` 识别 `preview_recovering` 或 `recovering=true` 后保留 DLL Preview Lease，不清理租约、不发送 Preview Failed 事件。
+- [x] 若初始 Recovery 在失败回调处理前已经成功，则补发一次正常 Preview Ready 回调；终端失败、无效 HWND、无效配置和显式 Stop 仍保持终止语义。
+- [x] `task_queue_busy` 计入当前 `RecoveryEpisode`，保留首个 WARN、尝试 DEBUG、约 60 秒聚合 WARN 和成功 INFO；旧 `RecoveryState` 不得污染替代会话 episode。
+- [x] 新增真实 Session Replacement 回归：A 进入 Recovery，B 替换并成功，B 断流再次 Recovery，恢复后 Stop，最终活动 Session/Recovery 均为 0。
+- [x] 保留抓拍业务和 Native `SavePath` 日志收口，不修改 OCR、接口参数或第三方调用约定。
+
+### 涉及文件
+
+- `Preview/PreviewManager.cs`：初始 Recovery 状态、失败清理保护、RecoveryState 身份校验和 `task_queue_busy` episode 计数。
+- `Server/DllCommandHandler.cs`：统一预览启动失败/恢复中/恢复后就绪回调及日志。
+- `src/event_dispatcher.cpp`：Native 恢复中回调只保留 DLL Preview Lease。
+- `Tests/Preview/PreviewRecoveryCloseoutTests.cs`：初始离线状态断言。
+- `Tests/Preview/MjpegWorkerReuseTests.cs`：真实 Session Replacement 与断流恢复测试夹具。
+- `Tests/Core/DllCallbackSenderTests.cs`：恢复中与终止失败回调载荷断言。
+
+### 兼容性说明
+
+- DLL exports、`.def`、calling convention、C ABI、结构体、导出参数和错误码：未修改。
+- C# Proxy 对外 HTTP 受理格式未修改；仅对异步 `/preview-ready` 的瞬时恢复状态使用已有 `code` 字段表达 `preview_recovering`。
+- Camera/Fingerprint/Plate 共享处理路径收口；Native Iris 独立渲染链路未强行迁移。
+
+### 编译与自动化验证
+
+- [x] Proxy `Release|x64`：0 错误，0 警告。
+- [x] Tests `Release|x64`：0 错误；1 个既有 `NU1900`（NuGet 漏洞源无法访问）警告。
+- [x] RC4 相关专项测试（VSTest）：`65/65` 通过。
+- [x] 全量测试（VSTest）：`192` 通过、`12` 失败、`0` 跳过；失败为 1 个既有产品版本断言（期望 `1.3.1.0`、实际 `1.3.6.0`）、10 个 `HttpListener` 在当前运行时的 `PlatformNotSupportedException` 集成项，以及 1 个既有 `ProcessCallback_AfterSwitchAtoBtoA_IsDeliveredAgain` 回调时序断言。
+- [x] Native `Release|Win32`：0 错误，0 警告，`MACHINE:X86`。
+- [x] `dumpbin /exports`：25 个导出，与 `HZCYKJTHardWare.def` 的 25 项导出一致；缺失/多余均为 0。
+
+### 现场 OPEN 项
+
+- [ ] Initial Offline 真实硬件与第三方 Demo 验证。
+- [ ] Restart-during-recovery 真实验证。
+- [ ] Stop-during-recovery 真实验证。
+- [ ] PlateCJ、PlateRJ2、PlateRJ3 外部 HWND 与本地面板验证。
+- [ ] Iris 预览真实验证（Native 独立 renderer）。
+- [ ] 连续 2 小时长稳观察。
+- [ ] 连续 24 小时长稳观察。
+
+### 回退方式
+
+回退本次 RC4 提交即可恢复 RC4 的跨层 Preview Lease、Recovery episode 计数和生命周期测试变更；不涉及 Native ABI 或导出表回退。

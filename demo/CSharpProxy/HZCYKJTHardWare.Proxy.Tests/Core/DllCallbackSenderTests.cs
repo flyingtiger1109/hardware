@@ -22,6 +22,30 @@ namespace HZCYKJTHardWare.Proxy.Tests.Core
         }
 
         [TestMethod]
+        public void PreviewStartRecoveringFailure_UsesNonTerminalCallbackPayload()
+        {
+            var body = JObject.Parse(DllCommandHandler.BuildPreviewStartFailurePayload(
+                "offline-001", "face_image", 1234, "preview_failed", true));
+
+            Assert.AreEqual("offline-001", (string)body["request_id"]);
+            Assert.AreEqual("face_image", (string)body["resource_type"]);
+            Assert.AreEqual("preview_recovering", (string)body["code"]);
+            Assert.IsTrue((bool)body["error"]);
+            Assert.IsTrue((bool)body["recovering"]);
+        }
+
+        [TestMethod]
+        public void PreviewStartTerminalFailure_DoesNotSetRecoveringFlag()
+        {
+            var body = JObject.Parse(DllCommandHandler.BuildPreviewStartFailurePayload(
+                "invalid-001", "plate_image", 0, "invalid_target_hwnd", false));
+
+            Assert.AreEqual("invalid_target_hwnd", (string)body["code"]);
+            Assert.IsTrue((bool)body["error"]);
+            Assert.IsNull(body["recovering"]);
+        }
+
+        [TestMethod]
         public async Task ServiceUnavailable_IsRetriedWithSameDelivery()
         {
             var handler = new SequenceHandler(call => new HttpResponseMessage(
