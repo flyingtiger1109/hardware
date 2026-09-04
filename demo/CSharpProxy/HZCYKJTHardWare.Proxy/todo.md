@@ -535,6 +535,10 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 ### 已完成
 
 - [x] Initial Offline Recovery production WARN ownership unified under `RecoveryEpisode`。
+- [x] Initial Preview URL failure downgraded to DEBUG when `RecoveryEpisode` owns the failure。
+- [x] Explicit Preview URL request failure retains one production warning at its business boundary。
+- [x] Recovery URL attempts remain DEBUG。
+- [x] Real Initial Offline logging regression tests added for Camera, Fingerprint and Iris。
 - [x] Startup Recovering boundary log moved to DEBUG。
 - [x] Fast Initial Recovery duplicate production INFO removed（保留已有内部回调语义，不新增 Recovery 成功回调）。
 - [x] `preview_recovering` internal callback semantics preserved。
@@ -542,13 +546,15 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 
 ### 本轮范围
 
-- `Server/DllCommandHandler.cs`：仅调整 Initial Recovery 结果边界的日志级别映射。
-- `Tests/Infrastructure/LoggerTests.cs`：补充 Initial Offline WARN 去重、快速恢复 INFO 去重、正常启动和终止失败级别断言。
+- `Preview/PreviewManager.cs`：为 Initial Start、缓存健康校验和 Recovery URL 请求传递日志归属上下文；底层 Fetch 失败在有上层 Owner 时下沉为 DEBUG。
+- `Server/DllCommandHandler.cs`：显式 Preview URL 业务边界保留原有 WARN，并抑制底层 Fetch 的重复 WARN。
+- `Tests/Preview/PreviewRecoveryCloseoutTests.cs`：补充 Camera/Fingerprint/Iris 真实 Initial Start → FetchPreviewUrl failure → Recovery 调用链日志回归，以及显式 URL 请求失败保留 WARN 的测试。
+- `Tests/Infrastructure/LoggerTests.cs`：保留上一轮 Initial Offline WARN 去重、快速恢复 INFO 去重、正常启动和终止失败级别断言。
 - Native source unchanged；Preview Recovery 主逻辑、Lease、Callback、Backoff、ABI 和 exports unchanged。
 
 ### 验证状态
 
-- [x] Logger / Preview 专项测试（VSTest）：68/68 通过。
+- [x] Logger / Preview 专项测试（VSTest）：72/72 通过，包含 Camera/Fingerprint/Iris 真实 Initial Offline 日志链和显式 URL 失败边界。
 - [x] Proxy `Release|x64`：编译通过，0 个警告，0 个错误。
 - [x] Tests `Release|x64`：编译通过，1 个 `NU1900` 警告，0 个错误。
 

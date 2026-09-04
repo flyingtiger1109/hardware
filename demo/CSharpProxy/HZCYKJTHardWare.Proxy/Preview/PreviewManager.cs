@@ -920,7 +920,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
         public async Task<string> RequestPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
             bool forceRefresh = false, string requestId = null,
-            bool isRecoveryAttempt = false)
+            bool isRecoveryAttempt = false,
+            bool suppressProductionFailureLog = false)
         {
             var cacheKey = PreviewUrlCacheKey(resType, terminalBaseUrl);
             if (!forceRefresh &&
@@ -939,14 +940,15 @@ namespace HZCYKJTHardWare.Proxy.Preview
             }
 
             var previewUrl = await FetchPreviewUrl(resType, terminalBaseUrl, requestId,
-                isRecoveryAttempt).ConfigureAwait(false);
+                isRecoveryAttempt, suppressProductionFailureLog).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(previewUrl))
                 UpdatePreviewUrlCache(resType, terminalBaseUrl, previewUrl);
             return previewUrl;
         }
 
         private async Task<string> FetchPreviewUrl(PreviewResourceType resType, string terminalBaseUrl,
-            string requestId = null, bool isRecoveryAttempt = false)
+            string requestId = null, bool isRecoveryAttempt = false,
+            bool suppressProductionFailureLog = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var path = ResourceToTerminalPath(resType);
@@ -964,8 +966,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 var failureMessage =
                     $"预览地址请求失败：资源={ResourceToName(resType)}，" +
                     $"RequestId={FormatRequestId(terminalRequestId)}，耗时={sw.ElapsedMilliseconds}ms";
-                if (isRecoveryAttempt)
-                    Logger.Debug(failureMessage + "，阶段=Recovery");
+                if (isRecoveryAttempt || suppressProductionFailureLog)
+                    Logger.Debug(failureMessage +
+                        (isRecoveryAttempt ? "，阶段=Recovery" : string.Empty));
                 else
                     Logger.TryLogRateLimited(
                         "PreviewUrl|failure|" + resType,
@@ -1042,7 +1045,9 @@ namespace HZCYKJTHardWare.Proxy.Preview
                     if (!ShouldValidatePreviewUrl(cached.Url))
                         continue;
 
-                    var latestUrl = await FetchPreviewUrl(cached.ResourceType, cached.TerminalBaseUrl).ConfigureAwait(false);
+                    var latestUrl = await FetchPreviewUrl(
+                        cached.ResourceType, cached.TerminalBaseUrl,
+                        suppressProductionFailureLog: true).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(latestUrl))
                     {
                         Logger.TryLogRateLimited(
@@ -1194,7 +1199,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
                 rtspUrl = !string.IsNullOrWhiteSpace(explicitPreviewUrl)
                     ? explicitPreviewUrl
                     : await RequestPreviewUrl(resType, terminalBaseUrl,
-                        requestId: requestId).ConfigureAwait(false);
+                        requestId: requestId,
+                        suppressProductionFailureLog: true).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1292,7 +1298,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
                     ClearPreviewUrlCache(resType, terminalBaseUrl);
                     var retryUrl = await RequestPreviewUrl(resType, terminalBaseUrl,
-                        forceRefresh: true, requestId: requestId).ConfigureAwait(false);
+                        forceRefresh: true, requestId: requestId,
+                        suppressProductionFailureLog: true).ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(retryUrl) && (shouldContinue == null || shouldContinue()))
                     {
                         rtspUrl = retryUrl;

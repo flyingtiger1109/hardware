@@ -1290,7 +1290,9 @@ namespace HZCYKJTHardWare.Proxy.Server
             var requestTrace = FormatRequestId(requestId);
             _log($"[预览请求][调试] EXE收到预览地址请求：资源={FormatPreviewResource(resType)}，request_id={requestTrace}");
             var previewUrl = await _previewManager.RequestPreviewUrl(resType, terminalBaseUrl,
-                requestId: requestId);
+                requestId: requestId,
+                // 显式 URL 查询由本方法记录业务边界 WARN，避免与底层 FetchPreviewUrl 重复。
+                suppressProductionFailureLog: true);
             if (routeEpoch.IsCancellationRequested)
                 return TerminalSwitchingResult;
             if (!string.IsNullOrEmpty(previewUrl))
