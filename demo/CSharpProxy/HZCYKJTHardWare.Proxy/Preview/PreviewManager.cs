@@ -959,7 +959,8 @@ namespace HZCYKJTHardWare.Proxy.Preview
 
             var (ok, response) = await _terminalClient.PostJsonAsync(
                 terminalBaseUrl, path, body, PreviewUrlTimeoutMs,
-                isRecoveryAttempt: isRecoveryAttempt).ConfigureAwait(false);
+                isRecoveryAttempt: isRecoveryAttempt,
+                suppressProductionFailureLog: suppressProductionFailureLog).ConfigureAwait(false);
             sw.Stop();
             if (!ok)
             {
