@@ -543,12 +543,18 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 - [x] Fast Initial Recovery duplicate production INFO removed（保留已有内部回调语义，不新增 Recovery 成功回调）。
 - [x] `preview_recovering` internal callback semantics preserved。
 - [x] Normal Initial Start success log preserved。
+- [x] TerminalClient production failure logging respects upper-layer log ownership。
+- [x] Initial Offline Camera/Fingerprint/Iris have exactly one production first-fault log。
+- [x] Explicit Preview URL failure has one business WARN and no TerminalClient production duplicate。
+- [x] Recovery URL request failures remain DEBUG。
+- [x] Non-preview TerminalClient default production failure logging preserved。
 
 ### 本轮范围
 
 - `Preview/PreviewManager.cs`：为 Initial Start、缓存健康校验和 Recovery URL 请求传递日志归属上下文；底层 Fetch 失败在有上层 Owner 时下沉为 DEBUG。
+- `Terminal/TerminalClient.cs`：增加默认值为 `false` 的日志归属抑制参数；仅在上层明确接管时将生产级失败降为 DEBUG。
 - `Server/DllCommandHandler.cs`：显式 Preview URL 业务边界保留原有 WARN，并抑制底层 Fetch 的重复 WARN。
-- `Tests/Preview/PreviewRecoveryCloseoutTests.cs`：补充 Camera/Fingerprint/Iris 真实 Initial Start → FetchPreviewUrl failure → Recovery 调用链日志回归，以及显式 URL 请求失败保留 WARN 的测试。
+- `Tests/Preview/PreviewRecoveryCloseoutTests.cs`：补充 Camera/Fingerprint/Iris 真实 Initial Start → FetchPreviewUrl → TerminalClient 日志归属回归、显式 URL 失败边界及 TerminalClient 默认/Recovery 级别防回归测试。
 - `Tests/Infrastructure/LoggerTests.cs`：保留上一轮 Initial Offline WARN 去重、快速恢复 INFO 去重、正常启动和终止失败级别断言。
 - Native source unchanged；Preview Recovery 主逻辑、Lease、Callback、Backoff、ABI 和 exports unchanged。
 
@@ -557,6 +563,22 @@ Stage3-A 最终收尾：统一预览恢复策略已完成，现场长稳与第�
 - [x] Logger / Preview 专项测试（VSTest）：72/72 通过，包含 Camera/Fingerprint/Iris 真实 Initial Offline 日志链和显式 URL 失败边界。
 - [x] Proxy `Release|x64`：编译通过，0 个警告，0 个错误。
 - [x] Tests `Release|x64`：编译通过，1 个 `NU1900` 警告，0 个错误。
+
+### OPEN
+
+- [ ] Initial Offline field log verification。
+- [ ] 2h soak。
+- [ ] 24h soak。
+
+## Stage3-A Final Logging Closeout — TerminalClient Owner Propagation
+
+### 验证状态
+
+- [x] Proxy `Release|x64`：编译通过，0 个警告，0 个错误。
+- [x] Tests `Release|x64`：编译通过，0 个错误；保留既有 `NU1900` 漏洞源访问警告。
+- [x] VSTest 专项：`65/65` 通过，覆盖 Preview Recovery、Logger、DllCallbackSender 及 TerminalClient 默认/Recovery 日志级别。
+- [x] Initial Offline Camera/Fingerprint/Iris：同一 RequestId 下生产级重复失败日志为 0，业务 Recovery WARN 保持唯一。
+- [x] Explicit Preview URL failure：业务 WARN 保持唯一，未产生 TerminalClient 生产级重复失败日志，Recovery 数量为 0。
 
 ### OPEN
 

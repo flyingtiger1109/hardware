@@ -48,10 +48,12 @@ namespace HZCYKJTHardWare.Proxy.Terminal
         public async Task<(bool ok, string response)> PostJsonAsync(string baseUrl, string path,
             string bodyUtf8, int timeoutMs = 0,
             CancellationToken cancellationToken = default(CancellationToken),
-            int expectedStatusCode = 0, bool isRecoveryAttempt = false)
+            int expectedStatusCode = 0, bool isRecoveryAttempt = false,
+            bool suppressProductionFailureLog = false)
         {
             var url = baseUrl.TrimEnd('/') + path;
             var requestTrace = ExtractRequestIdForLog(bodyUtf8);
+            var useDebugFailureLog = isRecoveryAttempt || suppressProductionFailureLog;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Logger.Debug($"[终端请求] POST开始：路径={path}，request_id={requestTrace}");
             CancellationTokenSource timeoutCancellation = null;
@@ -98,7 +100,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         Logger.TryLogRateLimited(
                             "terminal|POST|" + path + "|unexpected_status_" + statusCode,
                             LogModules.TerminalCommunication,
-                            isRecoveryAttempt ? "调试" : "警告",
+                            useDebugFailureLog ? "调试" : "警告",
                             "POST返回非预期状态码：" +
                             Logger.FormatContextMessage("POST " + path,
                                 requestId: requestTrace, result: "失败",
@@ -113,7 +115,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     Logger.TryLogRateLimited(
                         "terminal|POST|" + path + "|http_" + statusCode,
                         LogModules.TerminalCommunication,
-                        isRecoveryAttempt ? "调试" : "警告",
+                        useDebugFailureLog ? "调试" : "警告",
                         "POST失败：" +
                         Logger.FormatContextMessage("POST " + path,
                             requestId: requestTrace, result: "失败",
@@ -136,7 +138,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 Logger.TryLogRateLimited(
                     "terminal|POST|" + path + "|timeout",
                     LogModules.TerminalCommunication,
-                    isRecoveryAttempt ? "调试" : "错误",
+                    useDebugFailureLog ? "调试" : "错误",
                     "POST超时：" + Logger.FormatContextMessage("POST " + path,
                         requestId: requestTrace, result: "失败", errorCode: "timeout",
                         durationMs: sw.ElapsedMilliseconds) +
@@ -150,7 +152,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 Logger.TryLogRateLimited(
                     "terminal|POST|" + path + "|network_error",
                     LogModules.TerminalCommunication,
-                    isRecoveryAttempt ? "调试" : "错误",
+                    useDebugFailureLog ? "调试" : "错误",
                     "POST网络错误：" + Logger.FormatContextMessage("POST " + path,
                         requestId: requestTrace, result: "失败", errorCode: "network_error",
                         durationMs: sw.ElapsedMilliseconds) +
@@ -163,7 +165,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 Logger.TryLogRateLimited(
                     "terminal|POST|" + path + "|exception",
                     LogModules.TerminalCommunication,
-                    isRecoveryAttempt ? "调试" : "错误",
+                    useDebugFailureLog ? "调试" : "错误",
                     "POST异常：" + Logger.FormatContextMessage("POST " + path,
                         requestId: requestTrace, result: "失败", errorCode: "exception",
                         durationMs: sw.ElapsedMilliseconds) +
