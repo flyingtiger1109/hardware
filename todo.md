@@ -2225,6 +2225,148 @@ Stage3-A 代码整改与自动化验证完成；现场故障注入、2h 和 24h 
 - DLL ABI, exports, Delphi7 calling convention, HTTP protocol, Proxy API, and Timeout settings unchanged.
 - Modified source scope: `src/http_client.cpp` only.
 
+## Stage 4.2 / N1 CallbackServer HTTP Integrity (2026-09-05)
+
+### N1-A
+
+- [x] CallbackServer reads until `\r\n\r\n`, with a 16 KB request-header limit.
+- [x] Content-Length parsing is case-insensitive, decimal-only, overflow-safe, and distinguishes missing, empty, negative, non-numeric, duplicate, oversized, and valid values.
+- [x] Transfer-Encoding requests are rejected; chunked decoding is not introduced.
+- [x] Request bodies are read exactly to Content-Length; incomplete bodies are never posted to EventDispatcher.
+- [x] Extra bytes beyond Content-Length are excluded from the current request; the connection remains close-delimited.
+- [x] HTTP responses use SendAll and fail immediately on `send()==0`.
+- [x] Invalid inet_pton input closes the listening socket, resets callback state, calls WSACleanup, and fails Start.
+- [x] Existing 10 MB body limit, EventDispatcher queue semantics, and 400/503/202 ACK behavior are preserved.
+- [x] Native Release|Win32/x86 build completed with 0 errors and 0 warnings.
+- [ ] Fragmented header/body, delimiter split, incomplete body, timeout, oversized header/body, invalid Content-Length, partial-send, and invalid-IP runtime tests.
+- [ ] 100-500 connection/thread/memory stress and real-device callback regression.
+
+### Compatibility
+
+- DLL ABI, exports, EventDispatcher, Proxy HTTP sender, callback paths, ACK status meanings, and receive timeout remain unchanged.
+- Accepted callbacks still require the existing POST + Content-Length model; no chunked decoding or protocol library was introduced.
+- Modified source scope: `src/callback_server.cpp` and this progress record only.
+- Rollback: revert the Stage 4.2 changes; do not reset or overwrite unrelated dirty files.
+
+## Stage 4.3 / N3-A Proxy HTTP Request Integrity (2026-09-05)
+
+### N3-A
+
+- [x] Audited the actual Proxy chain: `TransportLayer` `TcpListener`/`NetworkStream` → `ProxyServer` → `HttpProtocolHandler` → DLL/terminal business handlers.
+- [x] Request headers continue to use a 4 KB temporary buffer and the existing 64 KB header limit; no HTTP architecture or async model change was introduced.
+- [x] `Content-Length` is validated before conversion/allocation, including missing, empty, negative, non-numeric, duplicate, overflow, oversized, and valid values.
+- [x] Request bodies are read in a loop to the exact validated length; `ReadAsync()==0` raises an incomplete-body failure immediately.
+- [x] UTF-8 decoding occurs only after the exact body length has been received.
+- [x] Read failures are handled before request routing/business dispatch and return the existing simple HTTP 400 style; they cannot become HTTP 200 business success.
+- [x] Existing no-body request behavior is preserved; the existing 16 MB safety boundary is retained unchanged and no new unified business Body Limit was added.
+- [x] Added local TCP runtime coverage for fragmented JSON/UTF-8, one-byte body writes, incomplete body, EOF during headers, empty-body compatibility, invalid/oversized `Content-Length`, and the Proxy ingress 400 path (x86 10/10, x64 10/10).
+- [x] C# Proxy `Release|x86` and `Release|x64` builds completed with 0 errors and 0 warnings.
+- [x] C# test project `Release|x86` and `Release|x64` builds completed with 0 errors; existing `NU1900` vulnerability-source warnings remain because NuGet was unreachable.
+- [ ] Normal business endpoint integration, 500-1000 continuous requests, and real-device regression: NOT TESTED; current environment cannot initialize the existing `HttpListener` mock setup.
+
+### Compatibility and deferral
+
+- DLL ABI, exports, calling conventions, Delphi7 compatibility, HTTP URLs, JSON fields, valid-request business semantics, Timeout settings, Native N2, and CallbackServer N1 remain unchanged.
+- N3-B Request Body Limit: DEFERRED; wait for real payload statistics and endpoint-specific evidence.
+- N3-C Buffer Pool / Allocation Optimization: DEFERRED; no allocation/GC profiling evidence currently justifies `ArrayPool` or a new dependency.
+- Rollback: revert only the Stage 4.3 C# source/test/todo changes; do not reset or overwrite unrelated dirty files.
+
+### Remaining Stage 4 items
+
+- N2 Response Body Limit: DEFERRED.
+- N3-A Proxy HTTP request integrity: COMPLETE; N3-B and N3-C remain DEFERRED.
+- N4 Callback ACK and delivery reliability: OPEN.
+- Stage 3.5 StopPreview follow-up: DEFERRED.
+
+## Stage 4.4 / 2-hour stability baseline and resource-leak acceptance (2026-09-05)
+
+### Current stage
+
+Stage 4.4 core long-stability run completed; overall status is `PASS WITH OBSERVATIONS`.
+
+### Completed validation
+
+- [x] Two-hour formal `FullFlow` baseline completed: 120.12 minutes, 307 cycles, 0 failed cycles.
+- [x] Alternate T1/T2 terminal switching completed against `192.168.20.30:9098` and `192.168.20.31:9098`; both endpoints remained reachable after the run.
+- [x] Core face/fingerprint path completed with 8,559/8,559 success for each path; `FailedCalls=0`.
+- [x] Callback and lifecycle checks completed: 2 successful callbacks, 0 callback errors, 0 process pushes after `EndProcess`.
+- [x] One-minute resource samples collected for Proxy and x86 TestHost from T0 to T120, including private bytes, working set, threads, handles, GDI, and USER objects.
+- [x] Formal-window log review found no N1/N2/N3-A systematic errors, no incomplete-body/Unexpected EOF/socket timeout-reset matches, and no `12002` error code.
+- [x] Test-host SDK/preview cleanup completed; the test-started Proxy was stopped and monitored ports were left unbound.
+
+### Observations and untested scope
+
+- [ ] Foreground UI visual observation: NOT TESTED in the current desktop automation surface; the script recorded 4 successful calls at or above the 500 ms UI-block warning threshold.
+- [ ] OCR/NFC/iris/authorize real-sample business paths: NOT TESTED in the formal curve; the short no-sample qualification run is not counted as an acceptance result.
+- [ ] A second independent 2-hour or 24-hour resource curve: NOT TESTED; T120 private memory remained above T0 and should be compared with another run before a stronger leak-free claim.
+
+### Evidence
+
+- Report: `docs/Stage4.4_2h_stability_baseline_20260905.md`
+- Summary: `scripts/stress_results/stage4_4_core_20260905/full_flow_summary_20260905_113612.csv`
+- Calls/cycles/callbacks/metrics: `scripts/stress_results/stage4_4_core_20260905/`
+- GDI/USER and process resource samples: `scripts/stress_results/stage4_4_core_20260905/resource_samples_20260905.csv`
+- Native and Proxy logs: current `20260905` files under the x86/x64 `Release/net46` log directories
+
+### Compatibility and risk
+
+- No business source, exported ABI, calling convention, structure layout, HTTP field, timeout, or deployment setting was changed for Stage 4.4.
+- The run used the existing x86 Native DLL + x64 Proxy split and the existing T1/T2 terminal endpoints.
+- `PASS WITH OBSERVATIONS` is limited to the tested core path; it is not a full OCR/NFC/iris/authorize or 24-hour leak sign-off.
+
+### Next steps
+
+- [ ] Repeat with real OCR/NFC/iris/authorize samples when available.
+- [ ] Observe the actual foreground UI and review the four >=500 ms capture calls.
+- [ ] If closing leak risk is required, run an independent 2-hour or 24-hour comparison curve.
+- [ ] Do not start N4/Stage 5/Stage 6 work as part of this acceptance run.
+
+### Rollback
+
+No business-code rollback is required. The test evidence can be retained for audit; to revert only the documentation, remove the Stage 4.4 section and the report file without resetting or overwriting unrelated working-tree changes.
+
+## Stage 5.1 / D1：Runtime State Snapshot（2026-09-05）
+
+### 当前阶段
+
+D1 代码已完成，自动化验证已完成，现场双终端/真实 Preview Recovery 验证待执行。D1 完成不代表 Stage 5 全部完成。
+
+### 已完成内容
+
+- [x] 审查 `TerminalManager`、`TerminalClient`、`TerminalHealthChecker`、`PreviewManager` 和现有 Recovery/Desired State；D1 落在 C# Proxy。
+- [x] 增加内部只读 `RuntimeStateSnapshot`，保留 T1/T2 独立历史和当前终端索引。
+- [x] 在统一 `TerminalClient` HTTP 入口记录可达性、成功/失败时间、失败计数、连续失败数、短错误码和延迟。
+- [x] 复用现有 `HealthStatus` 及设备状态，深拷贝后按终端保留；未将 `HealthStatus` 解释为 HTTP Reachable。
+- [x] 直接投影现有 `PreviewManager` 的 Session、RestartInfo、Recovery 和既有 MJPEG Recovery Episode，不建立第二套 Preview 状态机。
+- [x] 每 5 分钟既有长稳指标增加低频状态摘要；不增加每请求成功日志。
+- [x] Snapshot 读取仅复制内存状态，不发 HTTP、不访问硬件/磁盘、不触发健康检查或 Recovery。
+
+### 真实实现字段与语义
+
+- Terminal：`TerminalIndex`、`TerminalName`、`Configured`、`Endpoint`、`Reachable`、`LastSuccessUtc`、`LastFailureUtc`、`FailureCount`、`ConsecutiveFailures`、`LastErrorCode`、`LastLatencyMs`、健康结果及设备状态副本。
+- `Reachable=true` 表示最近一次 HTTP 请求收到响应；`Reachable=false` 表示最近一次请求未收到响应；初始值为 `unknown`。HTTP 2xx 才计入 `LastSuccessUtc` 并清零连续失败；最后一次失败原因和时间在恢复后保留。
+- Preview：现有 Session/RestartInfo 对应的资源类型、会话类型、终端绑定、Desired/Runtime 状态、Recovering、既有 Recovery attempt/failure/last error。
+- 时间字段使用 UTC；现有 `HealthStatus.Timestamp` 的原有时间约定未改变。
+
+### 验证状态
+
+- [x] 初始状态、成功、失败、失败后恢复、T1/T2 隔离、终端切换、健康状态深拷贝、并发 Snapshot 读取：D1 定向测试 5/5 通过（x86 Debug、x64 Release）。
+- [x] 现有 Preview RestartInfo/RecoveryPolicy 定向回归：16/16 通过。
+- [x] C# Proxy `Release|x64`：0 错误、0 警告；测试程序集 `Release|x64` 可构建，保留现有 NuGet `NU1900` 漏洞源网络警告。
+- [ ] 两个真实终端轮换、真实 Preview 运行/Recovery/Stop 期间读取 Snapshot：现场验证待执行。
+- [ ] 30 分钟或 2 小时带 D1 的长稳回归：待执行；Stage 4.4 正式结果不重复冒充 D1 验收。
+
+### 兼容性与边界
+
+- 未修改 DLL ABI、导出函数、调用约定、结构体、HTTP/设备协议、现有 Timeout 或 Preview Recovery 决策。
+- 未新增 Retry、Circuit Breaker、Watchdog、自动切换、自动重启、请求阻断或健康评分。
+- D2 Circuit Breaker：OPEN / NOT STARTED。
+- D3 Proxy Watchdog：OPEN / NOT STARTED。
+
+### 回退方式
+
+仅回退本节对应的 C# Proxy D1 源码、定向测试和记录；不执行宽范围 `reset` 或清理，不覆盖其他未提交修改。生产逻辑回退后现有 HTTP、Preview 和终端流程保持原样。
+
 ## Stage3-A Final Logging Closure（2026-09-03）
 
 ### 当前阶段

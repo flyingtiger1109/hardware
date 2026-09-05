@@ -22,6 +22,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
         private readonly PreviewManager _previewManager;
         private readonly RequestRegistry _requestRegistry;
         private readonly TerminalProcessRegistry _processRegistry;
+        private readonly Func<RuntimeStateSnapshot> _runtimeStateSnapshotProvider;
         private readonly Timer _timer;
         private int _running;
         private int _stopped = 1;
@@ -30,13 +31,15 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
             ActiveTasksTracker taskTracker,
             PreviewManager previewManager,
             RequestRegistry requestRegistry,
-            TerminalProcessRegistry processRegistry)
+            TerminalProcessRegistry processRegistry,
+            Func<RuntimeStateSnapshot> runtimeStateSnapshotProvider = null)
         {
             _queueManager = queueManager;
             _taskTracker = taskTracker;
             _previewManager = previewManager;
             _requestRegistry = requestRegistry;
             _processRegistry = processRegistry;
+            _runtimeStateSnapshotProvider = runtimeStateSnapshotProvider;
             _timer = new Timer(Report, null, Timeout.Infinite, Timeout.Infinite);
         }
 
@@ -85,6 +88,7 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                 var diskFreeMb = GetDiskFreeMb();
                 var gdiHandles = GetGuiResourceCount(process.Handle, 0);
                 var userHandles = GetGuiResourceCount(process.Handle, 1);
+                var runtimeState = BuildRuntimeStateSnapshot();
                 return $"private_mb={ToMb(process.PrivateMemorySize64)}, " +
                        $"working_set_mb={ToMb(process.WorkingSet64)}, " +
                        $"managed_heap_mb={ToMb(GC.GetTotalMemory(false))}, " +
@@ -102,7 +106,25 @@ namespace HZCYKJTHardWare.Proxy.Server.Runtime
                        $"log_last_flush_age_ms={Logger.LastFlushAgeMs}, " +
                        $"log_current_bytes={Logger.CurrentFileLength}, " +
                        $"log_stopping={(Logger.IsStopping ? 1 : 0)}, " +
-                       $"disk_free_mb={diskFreeMb}";
+                       $"disk_free_mb={diskFreeMb}" +
+                       (string.IsNullOrEmpty(runtimeState) ? "" : ", " + runtimeState);
+            }
+        }
+
+        private string BuildRuntimeStateSnapshot()
+        {
+            if (_runtimeStateSnapshotProvider == null)
+                return "";
+
+            try
+            {
+                var snapshot = _runtimeStateSnapshotProvider();
+                return snapshot == null ? "" : snapshot.ToDiagnosticString();
+            }
+            catch
+            {
+                // 诊断快照不得影响既有长稳指标输出。
+                return "runtime_state=unavailable";
             }
         }
 

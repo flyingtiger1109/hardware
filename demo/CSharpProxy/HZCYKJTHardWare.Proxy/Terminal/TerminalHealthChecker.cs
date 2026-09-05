@@ -141,6 +141,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     nextDelayMs = ResolveNextDelayAndUpdateRetry(status);
                 }
 
+                // 记录产生该健康结果的路由终端。该字段只用于 Proxy 内部诊断，
+                // 不参与健康轮询、重试或业务决策。
+                status.TerminalIndex = route.TerminalIndex;
+
                 if (_terminalManager.CurrentRoute.RouteEpoch != route.RouteEpoch)
                 {
                     RequestCheck();
@@ -159,6 +163,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                 Logger.Debug("[健康检测][调试] 轮询异常，交由健康状态聚合：错误=" +
                     (ex.Message ?? "未知异常"));
                 var failedStatus = CreateFailedStatus("健康检测执行失败");
+                failedStatus.TerminalIndex = route == null ? 0 : route.TerminalIndex;
                 nextDelayMs = ResolveNextDelayAndUpdateRetry(failedStatus);
                 if (!cancellationToken.IsCancellationRequested && (route == null ||
                     _terminalManager.CurrentRoute.RouteEpoch == route.RouteEpoch))
@@ -519,6 +524,7 @@ namespace HZCYKJTHardWare.Proxy.Terminal
     public class HealthStatus
     {
         public DateTime Timestamp { get; set; }
+        internal int TerminalIndex { get; set; }
         public string RequestId { get; set; }
         public string ResponseStatus { get; set; }
         public bool IsHealthy { get; set; }

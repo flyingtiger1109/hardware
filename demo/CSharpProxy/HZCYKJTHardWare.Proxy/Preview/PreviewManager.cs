@@ -3193,6 +3193,88 @@ namespace HZCYKJTHardWare.Proxy.Preview
             return _sessions.TryGetValue(key, out var session) && session.IsRunning;
         }
 
+        /// <summary>
+        /// 只读投影现有 Preview Session、RestartInfo 和 Recovery 状态。
+        /// 不等待操作锁，不创建播放器，不发 HTTP，也不触发任何恢复动作。
+        /// </summary>
+        internal IReadOnlyList<PreviewRuntimeStateSnapshot> CaptureRuntimeStateSnapshot(
+            Func<string, int> resolveTerminalIndex)
+        {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var pair in _sessions)
+                keys.Add(pair.Key);
+            foreach (var pair in _restartInfo)
+                keys.Add(pair.Key);
+            foreach (var pair in _activeRecoveries)
+            {
+                if (pair.Value != null && !string.IsNullOrEmpty(pair.Value.SessionKey))
+                    keys.Add(pair.Value.SessionKey);
+            }
+
+            var snapshots = new List<PreviewRuntimeStateSnapshot>(keys.Count);
+            foreach (var key in keys)
+            {
+                _sessions.TryGetValue(key, out var session);
+                _restartInfo.TryGetValue(key, out var restartInfo);
+                if (session == null && restartInfo == null)
+                    continue;
+
+                var resourceType = session != null
+                    ? session.ResourceType
+                    : restartInfo.ResourceType;
+                var sessionType = session != null
+                    ? session.SessionType
+                    : restartInfo.SessionType;
+                var terminalBound = session != null
+                    ? session.TerminalBound
+                    : restartInfo.TerminalBound;
+
+                RecoveryState recoveryState = null;
+                _activeRecoveries.TryGetValue(key + "#mjpeg", out recoveryState);
+                if (recoveryState == null)
+                    _activeRecoveries.TryGetValue(key + "#vlc", out recoveryState);
+
+                var recovering = recoveryState != null;
+                var desiredState = "Running";
+                var runtimeState = recovering
+                    ? "Recovering"
+                    : session == null
+                        ? "Stopped"
+                        : session.IsRunning ? "Running" : "Starting";
+
+                var terminalIndex = 0;
+                if (terminalBound && session != null &&
+                    resolveTerminalIndex != null)
+                {
+                    terminalIndex = resolveTerminalIndex(session.TerminalBaseUrl);
+                }
+
+                var recoveryAttempt = 0;
+                var recoveryFailureCount = 0;
+                DateTime? lastFailureUtc = null;
+                string lastError = "";
+                if (_mjpegRecoveryEpisodes.TryGetValue(key, out var episode) &&
+                    episode != null)
+                {
+                    lock (episode)
+                    {
+                        recoveryAttempt = episode.Attempt;
+                        recoveryFailureCount = episode.FailureCount;
+                        if (episode.LastFailureUtc != DateTime.MinValue)
+                            lastFailureUtc = episode.LastFailureUtc;
+                        lastError = episode.LastError;
+                    }
+                }
+
+                snapshots.Add(new PreviewRuntimeStateSnapshot(
+                    key, resourceType, sessionType, terminalIndex, terminalBound,
+                    desiredState, runtimeState, recovering, recoveryAttempt,
+                    recoveryFailureCount, lastFailureUtc, lastError));
+            }
+
+            return snapshots.AsReadOnly();
+        }
+
         public void StopAll()
         {
             if (_uiContext != null && SynchronizationContext.Current == _uiContext)

@@ -35,6 +35,7 @@ namespace HZCYKJTHardWare.Proxy.Server
 
         // === 辅助模块 ===
         private readonly TerminalManager _terminalManager;
+        private readonly RuntimeStateTracker _runtimeStateTracker;
         private readonly TerminalClient _terminalClient;
         private readonly DllCallbackSender _dllCallback;
         private readonly PreviewManager _previewManager;
@@ -109,7 +110,8 @@ namespace HZCYKJTHardWare.Proxy.Server
 
             // 核心模块
             _terminalManager = new TerminalManager();
-            _terminalClient = new TerminalClient();
+            _runtimeStateTracker = new RuntimeStateTracker(_terminalManager);
+            _terminalClient = new TerminalClient(_runtimeStateTracker.ObserveRequest);
             _dllCallback = new DllCallbackSender();
             _previewManager = new PreviewManager(_terminalClient, _taskTracker);
             _previewManager.SetExternalPreviewFailureHandler(NotifyExternalPreviewFailure);
@@ -119,7 +121,7 @@ namespace HZCYKJTHardWare.Proxy.Server
             _controlGate = new ControlOperationGate();
             _metricsReporter = new RuntimeMetricsReporter(
                 _queueManager, _taskTracker, _previewManager,
-                _requestRegistry, _processRegistry);
+                _requestRegistry, _processRegistry, GetRuntimeStateSnapshot);
 
             // === 四个核心组件 ===
 
@@ -187,7 +189,12 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _requestRegistry, _processRegistry, log);
 
             _healthChecker = new TerminalHealthChecker(
-                _terminalClient, _terminalManager, log, onHealthChanged);
+                _terminalClient, _terminalManager, log,
+                status =>
+                {
+                    _runtimeStateTracker.ObserveHealth(status);
+                    onHealthChanged?.Invoke(status);
+                });
         }
 
         // === 生命周期 ===
@@ -326,6 +333,11 @@ namespace HZCYKJTHardWare.Proxy.Server
                 _healthChecker?.RequestCheck(resetRetryAttempt: false);
         }
 
+        internal RuntimeStateSnapshot GetRuntimeStateSnapshot()
+        {
+            return _runtimeStateTracker.GetSnapshot(_previewManager);
+        }
+
         public void Stop()
         {
             if (Interlocked.Exchange(ref _stopped, 1) != 0)
@@ -383,8 +395,26 @@ namespace HZCYKJTHardWare.Proxy.Server
                 {
                     stream.ReadTimeout = 2000;
                     stream.WriteTimeout = 2000;
-                    var (method, path, body) = await ReadHttpRequestWithDeadlineAsync(
-                        client, stream, 2000).ConfigureAwait(false);
+                    string method;
+                    string path;
+                    string body;
+                    try
+                    {
+                        var request = await ReadHttpRequestWithDeadlineAsync(
+                            client, stream, 2000).ConfigureAwait(false);
+                        method = request.method;
+                        path = request.path;
+                        body = request.body;
+                    }
+                    catch (HttpRequestReadException ex)
+                    {
+                        requestPath = string.IsNullOrEmpty(ex.Path) ? "<未知>" : ex.Path;
+                        LogHttpRequestReadFailure(GetDllRequestLogModule(requestPath), ex);
+                        await WriteHttpResponseWithDeadlineAsync(client, stream, 400,
+                            "{\"error\":true,\"code\":\"invalid_request\"}",
+                            2000).ConfigureAwait(false);
+                        return;
+                    }
                     requestPath = path ?? "<未知>";
                     var rawRequestId = JsonHelper.ExtractString(body, "request_id");
                     if (!string.IsNullOrWhiteSpace(rawRequestId))
@@ -545,8 +575,25 @@ namespace HZCYKJTHardWare.Proxy.Server
                 {
                     stream.ReadTimeout = 30000;
                     stream.WriteTimeout = 30000;
-                    var (_, path, body) = await ReadHttpRequestWithDeadlineAsync(
-                        client, stream, 30000).ConfigureAwait(false);
+                    string path;
+                    string body;
+                    try
+                    {
+                        var request = await ReadHttpRequestWithDeadlineAsync(
+                            client, stream, 30000).ConfigureAwait(false);
+                        path = request.path;
+                        body = request.body;
+                    }
+                    catch (HttpRequestReadException ex)
+                    {
+                        callbackPath = string.IsNullOrEmpty(ex.Path)
+                            ? "<未知>" : ex.Path.Split('?')[0];
+                        LogHttpRequestReadFailure(LogModules.TerminalCallback, ex);
+                        await WriteHttpResponseWithDeadlineAsync(client, stream, 400,
+                            "{\"status\":\"rejected\",\"error_code\":\"invalid_request\"}",
+                            30000).ConfigureAwait(false);
+                        return;
+                    }
                     var rawRequestId = JsonHelper.ExtractString(body, "request_id");
                     if (!string.IsNullOrWhiteSpace(rawRequestId))
                         callbackTrace = rawRequestId;
@@ -648,6 +695,16 @@ namespace HZCYKJTHardWare.Proxy.Server
             Logger.Error(context, ex);
             _log(Logger.FormatModuleMessage(LogModules.Application, "调试",
                 $"{context}：{ex.Message}"));
+        }
+
+        private void LogHttpRequestReadFailure(string module,
+            HttpRequestReadException ex)
+        {
+            var path = string.IsNullOrEmpty(ex.Path) ? "<未知>" : ex.Path;
+            _log(Logger.FormatModuleMessage(module, "警告",
+                $"HTTP请求读取失败：路径={JsonHelper.ToLogValue(path)}，" +
+                $"Received={ex.ReceivedBytes}，Expected={ex.ExpectedBytes}，" +
+                $"原因={ex.FailureCode}"));
         }
 
         private static async Task<(string method, string path, string body)>

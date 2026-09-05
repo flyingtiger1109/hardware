@@ -9,88 +9,207 @@ using System.Threading.Tasks;
 namespace HZCYKJTHardWare.Proxy.Server
 {
     /// <summary>
+    /// HTTP 请求在进入路由或业务层之前读取失败。
+    /// 仅用于传递边界诊断信息，不引入新的业务异常体系。
+    /// </summary>
+    internal sealed class HttpRequestReadException : InvalidOperationException
+    {
+        public HttpRequestReadException(string failureCode, string path,
+            long receivedBytes, long expectedBytes)
+            : base("HTTP请求读取失败：" + failureCode)
+        {
+            FailureCode = failureCode;
+            Path = path;
+            ReceivedBytes = receivedBytes;
+            ExpectedBytes = expectedBytes;
+        }
+
+        public string FailureCode { get; }
+        public string Path { get; }
+        public long ReceivedBytes { get; }
+        public long ExpectedBytes { get; }
+    }
+
+    /// <summary>
     /// 用于 DLL↔Proxy 和 Proxy↔终端内部通信链路的无状态 HTTP/1.1 请求解析器及响应写入器。
     ///
-    /// 从 ProxyServer 原样拆分，不改变既有行为。
+    /// 仅负责完整读取和解析请求，不负责路由或业务处理。
     /// </summary>
     internal static class HttpProtocolHandler
     {
         private const int MaxHeaderBytes = 64 * 1024;
-        // 限制并发回调正文大小，避免大量 Base64 图像突发时在 x86 或 x64 进程中造成过高的托管内存压力
+        // 现有请求正文上限；本阶段不新增或调整业务级 Body Limit。
         private const int MaxBodyBytes = 16 * 1024 * 1024;
+        private static readonly byte[] HeaderMarker = Encoding.ASCII.GetBytes("\r\n\r\n");
+
+        private enum ContentLengthStatus
+        {
+            Missing,
+            Empty,
+            Negative,
+            NonNumeric,
+            Duplicate,
+            TooLarge,
+            Valid,
+        }
+
+        private static ContentLengthStatus ParseContentLength(string value,
+            bool found, bool duplicate, out int contentLength)
+        {
+            contentLength = 0;
+            if (!found) return ContentLengthStatus.Missing;
+            if (duplicate) return ContentLengthStatus.Duplicate;
+            if (string.IsNullOrEmpty(value)) return ContentLengthStatus.Empty;
+            if (value[0] == '-') return ContentLengthStatus.Negative;
+
+            long parsed = 0;
+            foreach (var ch in value)
+            {
+                if (ch < '0' || ch > '9') return ContentLengthStatus.NonNumeric;
+                var digit = ch - '0';
+                if (parsed > (long.MaxValue - digit) / 10)
+                    return ContentLengthStatus.TooLarge;
+                parsed = parsed * 10 + digit;
+            }
+
+            if (parsed > MaxBodyBytes) return ContentLengthStatus.TooLarge;
+            contentLength = (int)parsed;
+            return ContentLengthStatus.Valid;
+        }
+
+        private static bool TryParseRequestLine(string firstLine,
+            out string method, out string path)
+        {
+            method = "";
+            path = "";
+            var parts = firstLine.Split(new[] { ' ' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2) return false;
+            method = parts[0];
+            path = parts[1];
+            return true;
+        }
 
         /// <summary>
         /// 从 NetworkStream 读取 HTTP 请求，返回 (method, path, body)。
-        /// 实现与原 ProxyServer.ReadHttpRequest 保持一致。
+        /// 只有在 Header 完整、Content-Length 合法且 Body 完整读取后才返回。
         /// </summary>
         public static async Task<(string method, string path, string body)> ReadHttpRequestAsync(
             NetworkStream stream,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            // 审查建议：MemoryStream 实现了 IDisposable；建议改用 using，确保后续替换为持有外部资源的流时仍能及时释放。
-            var raw = new MemoryStream();
-            var buf = new byte[4096];
-            var marker = Encoding.ASCII.GetBytes("\r\n\r\n");
-            int headerEnd = -1;
-            int contentLength = 0;
-            string method = "GET";
-            string path = "/";
-
-            while (headerEnd < 0)
+            using (var raw = new MemoryStream())
             {
-                int bytesRead = await stream.ReadAsync(buf, 0, buf.Length,
-                    cancellationToken).ConfigureAwait(false);
-                if (bytesRead == 0) break;
-                raw.Write(buf, 0, bytesRead);
-                headerEnd = IndexOf(raw.GetBuffer(), (int)raw.Length, marker);
-                if (raw.Length > MaxHeaderBytes && headerEnd < 0)
-                    throw new InvalidOperationException("HTTP请求头过大");
-            }
+                var buf = new byte[4096];
+                int headerEnd = -1;
 
-            if (headerEnd < 0)
-                return (method, path, "");
-
-            var rawBytes = raw.ToArray();
-            var headerSize = headerEnd + marker.Length;
-            var headerStr = Encoding.ASCII.GetString(rawBytes, 0, headerSize);
-            var lines = headerStr.Split(new[] { "\r\n" }, StringSplitOptions.None);
-            foreach (var line in lines)
-            {
-                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
-                    int.TryParse(line.Substring("Content-Length:".Length).Trim(), out contentLength);
-            }
-
-            var firstLine = lines.Length > 0 ? lines[0] : "";
-            var parts = firstLine.Split(' ');
-            if (parts.Length >= 2)
-            {
-                method = parts[0];
-                path = parts[1];
-            }
-
-            if (contentLength < 0 || contentLength > MaxBodyBytes)
-                throw new InvalidOperationException("HTTP请求体大小异常");
-
-            string body = "";
-            if (contentLength > 0)
-            {
-                var bodyBuf = new byte[contentLength];
-                var alreadyRead = Math.Min(contentLength, rawBytes.Length - headerSize);
-                if (alreadyRead > 0)
-                    Buffer.BlockCopy(rawBytes, headerSize, bodyBuf, 0, alreadyRead);
-
-                int totalRead = alreadyRead;
-                while (totalRead < contentLength)
+                while (headerEnd < 0)
                 {
-                    int read = await stream.ReadAsync(bodyBuf, totalRead,
-                        contentLength - totalRead, cancellationToken).ConfigureAwait(false);
-                    if (read == 0) break;
-                    totalRead += read;
-                }
-                body = Encoding.UTF8.GetString(bodyBuf, 0, totalRead);
-            }
+                    int bytesRead = await stream.ReadAsync(buf, 0, buf.Length,
+                        cancellationToken).ConfigureAwait(false);
+                    if (bytesRead == 0)
+                        throw new HttpRequestReadException("header_incomplete", null,
+                            raw.Length, -1);
 
-            return (method, path, body);
+                    raw.Write(buf, 0, bytesRead);
+                    headerEnd = IndexOf(raw.GetBuffer(), (int)raw.Length, HeaderMarker);
+                    if (headerEnd >= 0 && headerEnd + HeaderMarker.Length > MaxHeaderBytes)
+                        throw new HttpRequestReadException("header_too_large", null,
+                            headerEnd + HeaderMarker.Length, MaxHeaderBytes);
+                    if (headerEnd < 0 && raw.Length > MaxHeaderBytes)
+                        throw new HttpRequestReadException("header_too_large", null,
+                            raw.Length, MaxHeaderBytes);
+                }
+
+                var rawBytes = raw.ToArray();
+                var headerSize = headerEnd + HeaderMarker.Length;
+                var headerStr = Encoding.ASCII.GetString(rawBytes, 0, headerSize);
+                var lines = headerStr.Split(new[] { "\r\n" }, StringSplitOptions.None);
+
+                var firstLine = lines.Length > 0 ? lines[0] : "";
+                if (!TryParseRequestLine(firstLine, out var method, out var path))
+                    throw new HttpRequestReadException("request_line_invalid", null,
+                        rawBytes.Length, -1);
+
+                string contentLengthValue = null;
+                bool contentLengthFound = false;
+                bool contentLengthDuplicate = false;
+                bool transferEncodingFound = false;
+                foreach (var line in lines)
+                {
+                    var colon = line.IndexOf(':');
+                    if (colon <= 0) continue;
+                    var headerName = line.Substring(0, colon).Trim();
+                    var headerValue = line.Substring(colon + 1).Trim();
+                    if (string.Equals(headerName, "Content-Length",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (contentLengthFound)
+                        {
+                            contentLengthDuplicate = true;
+                        }
+                        else
+                        {
+                            contentLengthFound = true;
+                            contentLengthValue = headerValue;
+                        }
+                    }
+                    else if (string.Equals(headerName, "Transfer-Encoding",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        transferEncodingFound = true;
+                    }
+                }
+
+                if (transferEncodingFound)
+                    throw new HttpRequestReadException("unsupported_transfer_encoding",
+                        path, rawBytes.Length - headerSize, -1);
+
+                int contentLength;
+                var contentLengthStatus = ParseContentLength(contentLengthValue,
+                    contentLengthFound, contentLengthDuplicate, out contentLength);
+                if (contentLengthStatus == ContentLengthStatus.Missing)
+                {
+                    // 保留现有无 Body 请求语义；若缺少长度却带有正文，则拒绝，避免吞掉未知长度数据。
+                    if (rawBytes.Length > headerSize)
+                        throw new HttpRequestReadException("content_length_missing",
+                            path, rawBytes.Length - headerSize, -1);
+                    return (method, path, "");
+                }
+
+                if (contentLengthStatus != ContentLengthStatus.Valid)
+                {
+                    var failureCode = contentLengthStatus == ContentLengthStatus.TooLarge
+                        ? "content_length_too_large"
+                        : "content_length_invalid";
+                    throw new HttpRequestReadException(failureCode, path,
+                        rawBytes.Length - headerSize, -1);
+                }
+
+                string body = "";
+                if (contentLength > 0)
+                {
+                    // 仅在长度经过上限和整数范围校验后分配目标数组。
+                    var bodyBuf = new byte[contentLength];
+                    var alreadyRead = Math.Min(contentLength, rawBytes.Length - headerSize);
+                    if (alreadyRead > 0)
+                        Buffer.BlockCopy(rawBytes, headerSize, bodyBuf, 0, alreadyRead);
+
+                    int totalRead = alreadyRead;
+                    while (totalRead < contentLength)
+                    {
+                        int read = await stream.ReadAsync(bodyBuf, totalRead,
+                            contentLength - totalRead, cancellationToken).ConfigureAwait(false);
+                        if (read == 0)
+                            throw new HttpRequestReadException("body_incomplete",
+                                path, totalRead, contentLength);
+                        totalRead += read;
+                    }
+                    body = Encoding.UTF8.GetString(bodyBuf, 0, totalRead);
+                }
+
+                return (method, path, body);
+            }
         }
 
         /// <summary>

@@ -4,7 +4,178 @@
 #include "json_helper.h"
 #include "logger.h"
 
+#include <limits>
+
 namespace HZCYKJTHardWare {
+
+namespace {
+
+constexpr size_t kMaxHeaderSize = 16 * 1024;
+constexpr size_t kMaxBodySize = 10 * 1024 * 1024;
+constexpr int kReceiveTimeoutMs = 5000;
+
+enum class ContentLengthStatus {
+    Missing,
+    Empty,
+    Negative,
+    NonNumeric,
+    Duplicate,
+    TooLarge,
+    Valid,
+};
+
+bool HeaderNameEquals(const std::string& name, const char* expected) {
+    size_t expectedLength = strlen(expected);
+    if (name.size() != expectedLength) return false;
+
+    for (size_t i = 0; i < name.size(); ++i) {
+        char actual = name[i];
+        char expectedChar = expected[i];
+        if (actual >= 'A' && actual <= 'Z') actual = static_cast<char>(actual - 'A' + 'a');
+        if (expectedChar >= 'A' && expectedChar <= 'Z') {
+            expectedChar = static_cast<char>(expectedChar - 'A' + 'a');
+        }
+        if (actual != expectedChar) return false;
+    }
+    return true;
+}
+
+std::string TrimHeaderValue(const std::string& value) {
+    size_t first = value.find_first_not_of(" \t");
+    if (first == std::string::npos) return std::string();
+    size_t last = value.find_last_not_of(" \t");
+    return value.substr(first, last - first + 1);
+}
+
+bool GetHeaderValue(const std::string& header,
+                    const char* headerName,
+                    std::string& value,
+                    bool& found,
+                    bool& duplicate) {
+    value.clear();
+    found = false;
+    duplicate = false;
+
+    size_t lineStart = 0;
+    while (lineStart <= header.size()) {
+        size_t lineEnd = header.find("\r\n", lineStart);
+        if (lineEnd == std::string::npos) lineEnd = header.size();
+
+        size_t colon = header.find(':', lineStart);
+        if (colon != std::string::npos && colon < lineEnd) {
+            size_t nameStart = lineStart;
+            while (nameStart < colon && (header[nameStart] == ' ' || header[nameStart] == '\t')) {
+                ++nameStart;
+            }
+            size_t nameEnd = colon;
+            while (nameEnd > nameStart && (header[nameEnd - 1] == ' ' || header[nameEnd - 1] == '\t')) {
+                --nameEnd;
+            }
+
+            const std::string name = header.substr(nameStart, nameEnd - nameStart);
+            if (HeaderNameEquals(name, headerName)) {
+                if (found) {
+                    duplicate = true;
+                } else {
+                    found = true;
+                    value = TrimHeaderValue(header.substr(colon + 1, lineEnd - colon - 1));
+                }
+            }
+        }
+
+        if (lineEnd == header.size()) break;
+        lineStart = lineEnd + 2;
+    }
+
+    return found;
+}
+
+ContentLengthStatus ParseContentLength(const std::string& header, size_t& contentLength) {
+    std::string value;
+    bool found = false;
+    bool duplicate = false;
+    GetHeaderValue(header, "Content-Length", value, found, duplicate);
+    if (!found) return ContentLengthStatus::Missing;
+    if (duplicate) return ContentLengthStatus::Duplicate;
+    if (value.empty()) return ContentLengthStatus::Empty;
+    if (value[0] == '-') return ContentLengthStatus::Negative;
+
+    size_t parsed = 0;
+    for (char ch : value) {
+        if (ch < '0' || ch > '9') return ContentLengthStatus::NonNumeric;
+        const size_t digit = static_cast<size_t>(ch - '0');
+        if (parsed > ((std::numeric_limits<size_t>::max)() - digit) / 10) {
+            contentLength = kMaxBodySize + 1;
+            return ContentLengthStatus::TooLarge;
+        }
+        parsed = parsed * 10 + digit;
+    }
+
+    contentLength = parsed;
+    if (contentLength > kMaxBodySize) return ContentLengthStatus::TooLarge;
+    return ContentLengthStatus::Valid;
+}
+
+bool HasTransferEncoding(const std::string& header, std::string& value) {
+    bool found = false;
+    bool duplicate = false;
+    GetHeaderValue(header, "Transfer-Encoding", value, found, duplicate);
+    return found;
+}
+
+const char* SocketErrorKind(int errorCode) {
+    if (errorCode == WSAETIMEDOUT) return "timeout";
+    if (errorCode == WSAECONNRESET) return "connection_reset";
+    if (errorCode == 0) return "send_zero";
+    return "socket_error";
+}
+
+bool SendAll(SOCKET socket,
+             const char* data,
+             size_t length,
+             size_t& sent,
+             int& errorCode) {
+    sent = 0;
+    errorCode = 0;
+
+    while (sent < length) {
+        const size_t remaining = length - sent;
+        const int sendLength = remaining > static_cast<size_t>((std::numeric_limits<int>::max)())
+            ? (std::numeric_limits<int>::max)()
+            : static_cast<int>(remaining);
+        const int result = send(socket, data + sent, sendLength, 0);
+        if (result == SOCKET_ERROR) {
+            errorCode = WSAGetLastError();
+            return false;
+        }
+        if (result == 0) return false;
+        sent += static_cast<size_t>(result);
+    }
+
+    return true;
+}
+
+void SendHttpResponse(SOCKET socket, const char* statusLine, const char* responseBody) {
+    char response[320] = {0};
+    const int responseLength = _snprintf_s(
+        response, sizeof(response), _TRUNCATE,
+        "HTTP/1.1 %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n\r\n%s",
+        statusLine, strlen(responseBody), responseBody);
+    if (responseLength <= 0) return;
+
+    size_t sent = 0;
+    int errorCode = 0;
+    if (!SendAll(socket, response, static_cast<size_t>(responseLength), sent, errorCode)) {
+        LOG_WARN("回调服务",
+                 "HTTP响应发送失败：Sent=%zu Total=%d Error=%d Type=%s",
+                 sent, responseLength, errorCode, SocketErrorKind(errorCode));
+    }
+}
+
+} // anonymous namespace
 
 CallbackServer& CallbackServer::Instance() {
     static CallbackServer* instance = new CallbackServer();
@@ -48,9 +219,20 @@ int CallbackServer::Start(const std::string& host, int port) {
     if (host == "0.0.0.0" || host.empty()) {
         addr.sin_addr.s_addr = INADDR_ANY;
     } else {
-        // 审查风险：未检查 inet_pton 返回值，非法地址可能使 addr 保持为 0.0.0.0 并扩大监听范围。
-        // 建议解析失败时关闭 Socket、调用 WSACleanup，并返回配置错误。
-        inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+        const int inetPtonResult = inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+        int errorCode = 0;
+        if (inetPtonResult == -1) errorCode = WSAGetLastError();
+        if (inetPtonResult != 1) {
+            LOG_ERROR("回调服务",
+                      "硬件控制程序回调接收服务启动失败：监听地址无效，host=%s，inet_pton_result=%d，错误码=%d",
+                      host.c_str(), inetPtonResult, errorCode);
+            SOCKET listenSocket = m_listenSocket.exchange(INVALID_SOCKET);
+            if (listenSocket != INVALID_SOCKET) closesocket(listenSocket);
+            m_host.clear();
+            m_port = 0;
+            WSACleanup();
+            return HZCYKJTHardWare_RET_CALLBACK_SERVER_FAILED;
+        }
     }
 
     if (bind(m_listenSocket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
@@ -155,7 +337,7 @@ bool CallbackServer::ParseHttpRequest(const std::string& raw,
 }
 
 void CallbackServer::ServerThread() {
-LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
+    LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
     while (m_running) {
         sockaddr_in clientAddr;
@@ -164,7 +346,8 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
 
         if (clientSocket == INVALID_SOCKET) {
             if (m_running) {
-                LOG_ERROR("回调服务", "硬件控制程序回调接收失败：accept 错误码=%d", WSAGetLastError());
+                const int errorCode = WSAGetLastError();
+                LOG_ERROR("回调服务", "硬件控制程序回调接收失败：accept 错误码=%d", errorCode);
             }
             continue;
         }
@@ -172,84 +355,167 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
         m_clientSocket.store(clientSocket);
 
         // 设置接收超时
-        int timeout = 5000;
-        setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+        int timeout = kReceiveTimeoutMs;
+        if (setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO,
+                       (const char*)&timeout, sizeof(timeout)) == SOCKET_ERROR) {
+            const int errorCode = WSAGetLastError();
+            LOG_WARN("回调服务", "设置回调请求接收超时失败：错误码=%d", errorCode);
+        }
 
-        // 第一步：读取 HTTP 头部 + 初始 body（最多 16KB）
-        char buf[16384];
-        // 审查风险：TCP 不保证一次 recv 收到完整 HTTP 头；分片到达时会误判为无效请求。
-        // 建议循环读取到 \r\n\r\n，并设置明确的请求头大小上限。
-        int recvLen = recv(clientSocket, buf, sizeof(buf) - 1, 0);
+        std::string rawRequest;
+        rawRequest.reserve(kMaxHeaderSize);
+        size_t headerEnd = std::string::npos;
+        bool headerComplete = false;
+        bool requestBodyComplete = false;
+        const char* rejectionStatusLine = nullptr;
+        const char* rejectionBody = nullptr;
 
-        if (recvLen > 0) {
-            buf[recvLen] = '\0';
-            std::string rawRequest(buf, recvLen);
-
-            // 第二步：提取 Content-Length，按需补读 body
-            size_t headerEnd = rawRequest.find("\r\n\r\n");
-            bool requestBodyComplete = (headerEnd != std::string::npos);
-            if (headerEnd != std::string::npos) {
-                std::string header = rawRequest.substr(0, headerEnd);
-                size_t headerSize = headerEnd + 4;
-                size_t currentBodySize = (rawRequest.size() > headerSize)
-                    ? (rawRequest.size() - headerSize) : 0;
-
-                int contentLength = -1;
-                size_t clPos = header.find("Content-Length:");
-                if (clPos == std::string::npos)
-                    clPos = header.find("content-length:");
-                if (clPos != std::string::npos) {
-                    size_t valStart = header.find_first_not_of(" \t", clPos + 15);
-                    if (valStart != std::string::npos) {
-                        size_t valEnd = header.find("\r\n", valStart);
-                        contentLength = atoi(header.substr(valStart,
-                            (valEnd == std::string::npos) ? std::string::npos
-                                                          : valEnd - valStart).c_str());
+        // 先循环读取到完整的 HTTP 头，避免 TCP 分片导致提前解析。
+        while (m_running && !headerComplete) {
+            char buf[4096];
+            const int recvLen = recv(clientSocket, buf, sizeof(buf), 0);
+            if (recvLen > 0) {
+                rawRequest.append(buf, static_cast<size_t>(recvLen));
+                headerEnd = rawRequest.find("\r\n\r\n");
+                if (headerEnd != std::string::npos) {
+                    const size_t headerSize = headerEnd + 4;
+                    if (headerSize > kMaxHeaderSize) {
+                        LOG_WARN("回调服务",
+                                 "HTTP请求头过大，已拒绝：Received=%zu Limit=%zu",
+                                 headerSize, kMaxHeaderSize);
+                        rejectionStatusLine = "400 Bad Request";
+                        rejectionBody = "{\"status\":\"invalid\"}";
+                    } else {
+                        headerComplete = true;
                     }
+                    break;
                 }
 
-                if (contentLength > 0 && static_cast<int>(currentBodySize) < contentLength) {
-                    static const int MAX_BODY = 10 * 1024 * 1024; // 10MB
-                    if (contentLength > MAX_BODY) {
-                        LOG_ERROR("回调服务",
-                                  "硬件控制程序回调请求体过大，已拒绝：Content-Length=%d", contentLength);
-                        const char* tooLarge =
-                            "HTTP/1.1 413 Payload Too Large\r\n"
-                            "Content-Length: 0\r\n"
-                            "Connection: close\r\n\r\n";
-                        send(clientSocket, tooLarge, (int)strlen(tooLarge), 0);
-                        SOCKET ownedClient = m_clientSocket.exchange(INVALID_SOCKET);
-                        if (ownedClient != INVALID_SOCKET) closesocket(ownedClient);
-                        continue;
-                    }
-
-                    rawRequest.resize(headerSize + contentLength);
-                    char* dest = &rawRequest[0] + headerSize + currentBodySize;
-                    size_t remaining = contentLength - currentBodySize;
-
-                    LOG_DEBUG("回调服务",
-                              "继续读取HTTP请求体：remaining=%zu，total=%d",
-                              remaining, contentLength);
-
-                    while (remaining > 0) {
-                        int chunk = recv(clientSocket, dest, (int)remaining, 0);
-                        if (chunk <= 0) {
-                            LOG_WARN("回调服务",
-                                     "HTTP请求体接收不完整：got=%zu，total=%d",
-                                     contentLength - remaining, contentLength);
-                            break;
-                        }
-                        dest += chunk;
-                        remaining -= chunk;
-                    }
-                    requestBodyComplete = (remaining == 0);
+                if (rawRequest.size() > kMaxHeaderSize) {
+                    LOG_WARN("回调服务",
+                             "HTTP请求头过大，已拒绝：Received=%zu Limit=%zu",
+                             rawRequest.size(), kMaxHeaderSize);
+                    rejectionStatusLine = "400 Bad Request";
+                    rejectionBody = "{\"status\":\"invalid\"}";
+                    break;
                 }
+                continue;
             }
 
+            if (!m_running) break;
+            if (recvLen == 0) {
+                LOG_WARN("回调服务",
+                         "HTTP请求头接收不完整：Received=%zu Expected=header Error=peer_closed",
+                         rawRequest.size());
+            } else {
+                const int errorCode = WSAGetLastError();
+                LOG_WARN("回调服务",
+                         "HTTP请求头接收失败：Received=%zu Expected=header Error=%d Type=%s",
+                         rawRequest.size(), errorCode, SocketErrorKind(errorCode));
+            }
+            break;
+        }
+
+        if (m_running && headerComplete && rejectionStatusLine == nullptr) {
+            const size_t headerSize = headerEnd + 4;
+            const std::string header = rawRequest.substr(0, headerEnd);
+
+            std::string transferEncoding;
+            if (HasTransferEncoding(header, transferEncoding)) {
+                LOG_WARN("回调服务",
+                         "HTTP请求Transfer-Encoding不受支持，已拒绝：value=%s",
+                         transferEncoding.empty() ? "<empty>" : transferEncoding.c_str());
+                rejectionStatusLine = "400 Bad Request";
+                rejectionBody = "{\"status\":\"invalid\"}";
+            } else {
+                size_t contentLength = 0;
+                const ContentLengthStatus contentLengthStatus =
+                    ParseContentLength(header, contentLength);
+                if (contentLengthStatus == ContentLengthStatus::Missing) {
+                    LOG_WARN("回调服务", "HTTP请求Content-Length缺失，已拒绝");
+                    rejectionStatusLine = "400 Bad Request";
+                    rejectionBody = "{\"status\":\"invalid\"}";
+                } else if (contentLengthStatus != ContentLengthStatus::Valid &&
+                           contentLengthStatus != ContentLengthStatus::TooLarge) {
+                    const char* reason = "invalid";
+                    if (contentLengthStatus == ContentLengthStatus::Empty) {
+                        reason = "empty";
+                    } else if (contentLengthStatus == ContentLengthStatus::Negative) {
+                        reason = "negative";
+                    } else if (contentLengthStatus == ContentLengthStatus::NonNumeric) {
+                        reason = "non_numeric";
+                    } else if (contentLengthStatus == ContentLengthStatus::Duplicate) {
+                        reason = "duplicate";
+                    }
+                    LOG_WARN("回调服务",
+                             "HTTP请求Content-Length无效，已拒绝：reason=%s",
+                             reason);
+                    rejectionStatusLine = "400 Bad Request";
+                    rejectionBody = "{\"status\":\"invalid\"}";
+                } else if (contentLengthStatus == ContentLengthStatus::TooLarge) {
+                    LOG_ERROR("回调服务",
+                              "硬件控制程序回调请求体过大，已拒绝：Content-Length>=%zu Limit=%zu",
+                              contentLength, kMaxBodySize);
+                    rejectionStatusLine = "413 Payload Too Large";
+                    rejectionBody = "";
+                } else {
+                    size_t currentBodySize = rawRequest.size() > headerSize
+                        ? rawRequest.size() - headerSize : 0;
+                    if (currentBodySize > contentLength) {
+                        // 当前模式为单请求、Connection: close；多余字节不进入本次 body。
+                        rawRequest.resize(headerSize + contentLength);
+                        currentBodySize = contentLength;
+                    }
+
+                    if (currentBodySize < contentLength) {
+                        rawRequest.resize(headerSize + contentLength);
+                        size_t receivedBody = currentBodySize;
+                        char* dest = &rawRequest[0] + headerSize + currentBodySize;
+
+                        LOG_DEBUG("回调服务",
+                                  "继续读取HTTP请求体：remaining=%zu，total=%zu",
+                                  contentLength - currentBodySize, contentLength);
+
+                        while (receivedBody < contentLength) {
+                            const size_t remaining = contentLength - receivedBody;
+                            const int recvSize = remaining > static_cast<size_t>((std::numeric_limits<int>::max)())
+                                ? (std::numeric_limits<int>::max)()
+                                : static_cast<int>(remaining);
+                            const int chunk = recv(clientSocket, dest, recvSize, 0);
+                            if (chunk > 0) {
+                                dest += chunk;
+                                receivedBody += static_cast<size_t>(chunk);
+                                continue;
+                            }
+
+                            if (!m_running) break;
+                            if (chunk == 0) {
+                                LOG_WARN("回调服务",
+                                         "HTTP请求体接收不完整：Received=%zu Expected=%zu Error=peer_closed",
+                                         receivedBody, contentLength);
+                            } else {
+                                const int errorCode = WSAGetLastError();
+                                LOG_WARN("回调服务",
+                                         "HTTP请求体接收失败：Received=%zu Expected=%zu Error=%d Type=%s",
+                                         receivedBody, contentLength, errorCode,
+                                         SocketErrorKind(errorCode));
+                            }
+                            break;
+                        }
+                        requestBodyComplete = receivedBody == contentLength;
+                    } else {
+                        requestBodyComplete = true;
+                    }
+                }
+            }
+        }
+
+        if (m_running) {
             std::string method, path, body;
             bool parsed = false;
             bool accepted = false;
-            if (requestBodyComplete && ParseHttpRequest(rawRequest, method, path, body)) {
+            if (rejectionStatusLine == nullptr && requestBodyComplete &&
+                ParseHttpRequest(rawRequest, method, path, body)) {
                 parsed = true;
                 char remoteIp[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &clientAddr.sin_addr, remoteIp, sizeof(remoteIp));
@@ -273,37 +539,29 @@ LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已启动");
                     "硬件控制程序回调请求解析失败：bytes=%zu", rawRequest.size());
             }
 
-            const char* statusLine = nullptr;
-            const char* responseBody = nullptr;
-            if (!parsed) {
-                statusLine = "400 Bad Request";
-                responseBody = "{\"status\":\"invalid\"}";
-            } else if (!accepted) {
-                statusLine = "503 Service Unavailable";
-                responseBody = "{\"status\":\"busy\"}";
-            } else {
-                statusLine = "202 Accepted";
-                responseBody = "{\"status\":\"ok\"}";
+            const char* statusLine = rejectionStatusLine;
+            const char* responseBody = rejectionBody;
+            if (statusLine == nullptr) {
+                if (!parsed) {
+                    statusLine = "400 Bad Request";
+                    responseBody = "{\"status\":\"invalid\"}";
+                } else if (!accepted) {
+                    statusLine = "503 Service Unavailable";
+                    responseBody = "{\"status\":\"busy\"}";
+                } else {
+                    statusLine = "202 Accepted";
+                    responseBody = "{\"status\":\"ok\"}";
+                }
             }
 
-            char response[320] = {0};
-            const int responseLength = _snprintf_s(
-                response, sizeof(response), _TRUNCATE,
-                "HTTP/1.1 %s\r\n"
-                "Content-Type: application/json\r\n"
-                "Content-Length: %zu\r\n"
-                "Connection: close\r\n\r\n%s",
-                statusLine, strlen(responseBody), responseBody);
-            if (responseLength > 0) {
-                send(clientSocket, response, responseLength, 0);
-            }
+            SendHttpResponse(clientSocket, statusLine, responseBody);
         }
 
         SOCKET ownedClient = m_clientSocket.exchange(INVALID_SOCKET);
         if (ownedClient != INVALID_SOCKET) closesocket(ownedClient);
     }
 
-LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已退出");
+    LOG_DEBUG("回调服务", "硬件控制程序回调接收线程已退出");
 }
 
 } // HZCYKJTHardWare 命名空间结束

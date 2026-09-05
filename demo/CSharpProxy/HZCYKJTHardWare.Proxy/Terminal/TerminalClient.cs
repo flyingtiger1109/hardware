@@ -9,9 +9,31 @@ using HZCYKJTHardWare.Proxy.Parsing;
 
 namespace HZCYKJTHardWare.Proxy.Terminal
 {
+    internal struct TerminalRequestObservation
+    {
+        internal TerminalRequestObservation(string baseUrl, bool responseReceived,
+            bool requestSucceeded, string errorCode, long elapsedMs, bool ignored)
+        {
+            BaseUrl = baseUrl ?? "";
+            ResponseReceived = responseReceived;
+            RequestSucceeded = requestSucceeded;
+            ErrorCode = errorCode ?? "";
+            ElapsedMs = elapsedMs;
+            Ignored = ignored;
+        }
+
+        internal string BaseUrl { get; }
+        internal bool ResponseReceived { get; }
+        internal bool RequestSucceeded { get; }
+        internal string ErrorCode { get; }
+        internal long ElapsedMs { get; }
+        internal bool Ignored { get; }
+    }
+
     public class TerminalClient : IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly Action<TerminalRequestObservation> _onRequestObserved;
 
         private static string FormatRequestId(string requestId)
         {
@@ -30,8 +52,13 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             }
         }
 
-        public TerminalClient()
+        public TerminalClient() : this(null)
         {
+        }
+
+        internal TerminalClient(Action<TerminalRequestObservation> onRequestObserved)
+        {
+            _onRequestObserved = onRequestObserved;
             // 提高全局连接数上限，避免高频请求耗尽可用 Socket 连接
             var handler = new HttpClientHandler
             {
@@ -43,6 +70,23 @@ namespace HZCYKJTHardWare.Proxy.Terminal
             _httpClient.Timeout = TimeSpan.FromSeconds(10);  // 终端 HTTP 超时时间
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "HZCYKJTHardWare-Proxy/2.0");
             _httpClient.DefaultRequestHeaders.ConnectionClose = false;  // 启用长连接
+        }
+
+        private void ObserveRequest(string baseUrl, bool responseReceived,
+            bool requestSucceeded, string errorCode, long elapsedMs, bool ignored)
+        {
+            if (_onRequestObserved == null)
+                return;
+
+            try
+            {
+                _onRequestObserved(new TerminalRequestObservation(baseUrl,
+                    responseReceived, requestSucceeded, errorCode, elapsedMs, ignored));
+            }
+            catch
+            {
+                // 诊断观察不得影响原有 HTTP 请求结果。
+            }
         }
 
         public async Task<(bool ok, string response)> PostJsonAsync(string baseUrl, string path,
@@ -92,6 +136,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         else
                             Logger.Debug($"[终端请求] POST完成：路径={path}，request_id={requestTrace}，" +
                                          $"状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms，结果=成功");
+                        ObserveRequest(baseUrl, responseReceived: true,
+                            requestSucceeded: true, errorCode: "",
+                            elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                         return (true, responseBody);
                     }
 
@@ -108,7 +155,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                                 durationMs: sw.ElapsedMilliseconds) +
                             " ExpectedStatus=" + expectedStatusCode +
                             " Response=" + Logger.SanitizeLargePayloadForLog(
-                                responseBody, requestTrace));
+                                 responseBody, requestTrace));
+                        ObserveRequest(baseUrl, responseReceived: true,
+                            requestSucceeded: false,
+                            errorCode: "unexpected_status_" + statusCode,
+                            elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                         return (false, responseBody);
                     }
 
@@ -122,7 +173,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                             errorCode: "http_" + statusCode,
                             durationMs: sw.ElapsedMilliseconds) +
                         " Response=" + Logger.SanitizeLargePayloadForLog(
-                            responseBody, requestTrace));
+                             responseBody, requestTrace));
+                    ObserveRequest(baseUrl, responseReceived: true,
+                        requestSucceeded: false, errorCode: "http_" + statusCode,
+                        elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                     return (false, responseBody);
                 }
             }
@@ -144,6 +198,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         durationMs: sw.ElapsedMilliseconds) +
                     " Timeout=" + timeoutText);
                 }
+                var ignored = cancellationToken.IsCancellationRequested;
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false,
+                    errorCode: ignored ? "cancelled" : "timeout",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: ignored);
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
@@ -157,6 +216,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         requestId: requestTrace, result: "失败", errorCode: "network_error",
                         durationMs: sw.ElapsedMilliseconds) +
                     " Error=" + JsonHelper.ToLogValue(ex.Message));
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false, errorCode: "network_error",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             catch (Exception ex)
@@ -170,6 +232,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         requestId: requestTrace, result: "失败", errorCode: "exception",
                         durationMs: sw.ElapsedMilliseconds) +
                     " Error=" + JsonHelper.ToLogValue(ex.Message));
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false, errorCode: "exception",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                 return (false, "{\"error\":true,\"code\":\"network_error\",\"message\":\"" + JsonHelper.EscapeString(ex.Message) + "\"}");
             }
             finally
@@ -214,6 +279,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                     {
                         if (sw.ElapsedMilliseconds > 500)
                             Logger.Warn($"[终端请求] GET {path} 响应较慢：状态={(int)response.StatusCode}，耗时={sw.ElapsedMilliseconds}ms");
+                        ObserveRequest(baseUrl, responseReceived: true,
+                            requestSucceeded: true, errorCode: "",
+                            elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                         return (true, responseBody);
                     }
 
@@ -224,6 +292,10 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                             result: "失败", errorCode: "http_" + (int)response.StatusCode,
                             durationMs: sw.ElapsedMilliseconds) +
                         " Response=" + Logger.SanitizeLargePayloadForLog(responseBody));
+                    ObserveRequest(baseUrl, responseReceived: true,
+                        requestSucceeded: false,
+                        errorCode: "http_" + (int)response.StatusCode,
+                        elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                     return (false, responseBody);
                 }
             }
@@ -239,6 +311,11 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         "GET超时：" + Logger.FormatContextMessage("GET " + path,
                             result: "失败", errorCode: "timeout",
                             durationMs: sw.ElapsedMilliseconds));
+                var ignored = cancellationToken.IsCancellationRequested;
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false,
+                    errorCode: ignored ? "cancelled" : "timeout",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: ignored);
                 return (false, "{\"error\":true,\"code\":\"timeout\"}");
             }
             catch (HttpRequestException ex)
@@ -251,6 +328,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         result: "失败", errorCode: "network_error",
                         durationMs: sw.ElapsedMilliseconds) +
                     " Error=" + JsonHelper.ToLogValue(ex.Message));
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false, errorCode: "network_error",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             catch (Exception ex)
@@ -263,6 +343,9 @@ namespace HZCYKJTHardWare.Proxy.Terminal
                         result: "失败", errorCode: "exception",
                         durationMs: sw.ElapsedMilliseconds) +
                     " Error=" + JsonHelper.ToLogValue(ex.Message));
+                ObserveRequest(baseUrl, responseReceived: false,
+                    requestSucceeded: false, errorCode: "exception",
+                    elapsedMs: sw.ElapsedMilliseconds, ignored: false);
                 return (false, "{\"error\":true,\"code\":\"network_error\"}");
             }
             finally
